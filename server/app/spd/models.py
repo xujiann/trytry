@@ -224,6 +224,7 @@ class SpdScale(Base):
     category: Mapped[str] = mapped_column(String(16), default="risk", index=True)
     program_code: Mapped[str] = mapped_column(String(32), default="", index=True)
     version: Mapped[str] = mapped_column(String(16), default="v1")
+    # draft=草稿, published=已发布（进评估下拉、生成扫码令牌）, disabled=已停用（从下拉消失，历史评估照常可查）
     status: Mapped[str] = mapped_column(String(16), default="draft", index=True)
     # [{"key":"q1","title":"...","type":"single","options":[{"label":"是","score":2}]}]
     items: Mapped[list] = mapped_column(JSON, default=list)
@@ -903,6 +904,7 @@ class SpdRevisit(Base):
     source: Mapped[str] = mapped_column(String(16), default="manual", index=True)
     # planned=已计划, done=已复诊, overdue=逾期未复诊, removed=已移除
     status: Mapped[str] = mapped_column(String(16), default="planned", index=True)
+    # none=未提醒, sent=已提醒, contacted=已联系（改档接口的 pattern 同一套）
     remind_status: Mapped[str] = mapped_column(String(16), default="none")
     actual_date: Mapped[str] = mapped_column(String(10), default="")
     log: Mapped[list] = mapped_column(JSON, default=list)
@@ -987,6 +989,7 @@ class SpdConsult(Base):
     patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
     program_code: Mapped[str] = mapped_column(String(32), default="", index=True)
     doctor_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    # open=进行中（同一患者同一病种只许一条，见上方部分唯一索引）, closed=已结束
     status: Mapped[str] = mapped_column(String(16), default="open", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

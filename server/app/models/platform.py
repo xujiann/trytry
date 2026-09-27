@@ -230,6 +230,7 @@ class ScheduledJob(Base):
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # 下次到期时刻：调度器据此判断是否该跑，重启后不会因内存计时器丢失而漏跑
     next_run_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    # 最近一次执行结果，与 JobRun.status 同一套：""=从未执行, succeeded=成功, failed=异常
     last_status: Mapped[str] = mapped_column(String(16), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 

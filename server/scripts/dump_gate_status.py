@@ -72,6 +72,7 @@ def _rows() -> list[tuple[str, str, str, str]]:
     import test_status_text_from_backend as statustext
     import test_datestr_single_source as datestr
     import test_endpoint_params_used as unusedparams
+    import test_status_vocabulary as statusvocab
     import test_frontend_destructive_confirm_guard as destructive
     import test_frontend_fetch_error_detail as fetcherr
     import test_frontend_api_calls_resolve as apicalls
@@ -135,6 +136,8 @@ def _rows() -> list[tuple[str, str, str, str]]:
          len(unusedparams.unused_params() - set(unusedparams.ALLOWED_UNUSED)), "tests/test_endpoint_params_used.py"),
         ("接口契约", "按设计先收着不用的参数（等口径裁定，逐条写明理由）", len(unusedparams.ALLOWED_UNUSED),
          "tests/test_endpoint_params_used.py"),
+        ("数据模型", "状态列没写取值注释、代码读写的状态取值不在注释里（写岔即比较恒假、筛选恒空；判据上线即 0）",
+         len(statusvocab.offenders()), "tests/test_status_vocabulary.py"),
         ("列表分页", "仍会静默截断的 GET 端点", pagination.BASELINE_SILENT_TRUNCATION,
          "tests/test_list_pagination_ratchet.py"),
         ("列表分页", "已切 paginate 的端点（反方向棘轮）", len(pagination.PAGINATED_ENDPOINTS),
