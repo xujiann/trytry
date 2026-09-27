@@ -2311,12 +2311,20 @@ async function renderRbac() {
   await drawPerms();
 }
 
+/** 正在看哪起公卫事件的处置记录（P2-477）：只留在内存里、不进存储。 */
+const PH_EVENT_VIEW = { id: 0 };
+
 async function renderPublicHealth() {
   $("#page-desc").textContent = "应急事件指挥（I-IV级）、诊间医防提醒、五域卫生监测";
   // 处置中的事件单独取一遍、排在最前（P2-457，同 P2-456）：清单只回最新 100 起，挤出窗口的就没有「处置记录 / 结案」
   const [recent, active, monitors] = await Promise.all([api("/api/publichealth/events"),
     api("/api/publichealth/events?status=active"), api("/api/publichealth/monitors")]);
   const events = actionableFirst(recent, active);
+  // 处置记录（P2-477）：原先记得进、页面上看不到——哪起事件做过什么、谁做的，结案之后更是无从查起
+  const viewing = events.find((ev) => ev.id === PH_EVENT_VIEW.id);
+  const actions = viewing
+    ? await api(`/api/publichealth/events/${viewing.id}/actions`).catch((err) => ({ error: err.message }))
+    : [];
   const DM = { nutrition: "营养", environment: "环境", occupational: "职业", radiation: "放射", school: "学校" };
   $("#page-body").innerHTML = `
     ${panel("事件立案", `
@@ -2330,7 +2338,11 @@ async function renderPublicHealth() {
     ${panel("事件列表", table(["ID", "事件", "级别", "病种", "状态", "操作"], events, (ev) =>
       `<tr><td>${ev.id}</td><td>${esc(ev.title)}</td><td><span class="tag ${ev.level === "I" || ev.level === "II" ? "red" : "orange"}">${ev.level}级</span></td>
        <td>${esc(ev.disease_name)}</td><td><span class="tag ${ev.status === "active" ? "red" : "green"}">${ev.status === "active" ? "处置中" : "已结案"}</span></td>
-       <td>${ev.status === "active" ? `<button class="btn secondary" data-act="${ev.id}">处置记录</button><button class="btn secondary" data-close="${ev.id}">结案</button>` : "—"}</td></tr>`))}
+       <td><button class="btn secondary" data-view="${ev.id}">查看处置</button>${ev.status === "active" ? `<button class="btn secondary" data-act="${ev.id}">登记处置</button><button class="btn secondary" data-close="${ev.id}">结案</button>` : ""}</td></tr>`)
+      + (viewing ? `
+      <h3 style="margin-top:12px">处置记录：${esc(viewing.title)} <button class="btn secondary" data-view="0">收起</button></h3>
+      ${actions.error ? `<p class="msg err">${esc(actions.error)}</p>` : table(["时间", "处置动作", "执行人"], actions, (a) =>
+        `<tr><td>${esc(a.at.slice(0, 16).replace("T", " "))}</td><td>${esc(a.action)}</td><td>${esc(a.actor || "—")}</td></tr>`)}` : ""))}
     ${panel("卫生监测（营养/环境/职业/放射/学校）", `
       <form class="inline" id="mon-form">
         <select name="domain">${Object.entries(DM).map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>
@@ -2358,7 +2370,11 @@ async function renderPublicHealth() {
       : '<p class="msg ok">无待办提醒</p>';
   };
   $("#page-body").onclick = async (e) => {
-    const { act, close } = e.target.dataset;
+    const { act, close, view } = e.target.dataset;
+    if (view) {
+      PH_EVENT_VIEW.id = Number(view);
+      return route();
+    }
     if (act) {
       // P2-38：原先两连问，第二问「执行人」点取消照样提交（执行人记空）。合成一个表单，取消就是不记。
       // 执行人是自填的（后端不取登录账号，同 P2-41 的口径问题），这里只换形态、不改口径。
@@ -2367,6 +2383,7 @@ async function renderPublicHealth() {
         { name: "actor", label: "执行人" },
       ]);
       if (!form) return;
+      PH_EVENT_VIEW.id = Number(act);   // 记完展开这一起的处置记录：刚记的那条就在眼前
       return postAction(`/api/publichealth/events/${act}/actions`, { action: form.action, actor: form.actor }, "#ph-msg");
     }
     if (close) {

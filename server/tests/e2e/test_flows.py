@@ -594,6 +594,32 @@ def test_公卫事件处置记录在页内表单里填_取消即不记(page, bas
     assert [(a["action"], a["actor"]) for a in actions()] == [("现场流调", "E2E疾控张三")]
 
 
+def test_公卫事件的处置记录看得见_结案之后照样能查(page, base_url, admin_call):
+    """P2-477：处置记录原先只记得进——事件列表只有登记与结案两个按钮，记了什么、谁做的页面上看不到，
+    结案之后连按钮都没有。"""
+    ev = admin_call("POST", "/api/publichealth/events",
+                    {"title": "E2E处置可查事件", "level": "III", "disease_name": "诺如病毒"})
+    admin_call("POST", f"/api/publichealth/events/{ev['id']}/actions", {"action": "E2E 采样送检", "actor": "E2E疾控李四"})
+
+    _login(page, base_url)
+    _open_page(page, "publichealth", "公卫协同")
+    _redrawn(page, lambda: page.click(f'button[data-view="{ev["id"]}"]'))
+    expect(page.locator("tr", has_text="E2E 采样送检")).to_contain_text("E2E疾控李四")   # 修前页面上没有处置记录
+
+    # 页内登记一条：记完这一起的处置记录就展开着，刚记的那条在眼前
+    page.click(f'button[data-act="{ev["id"]}"]')
+    _redrawn(page, lambda: _spd_modal(page, {"action": "E2E 环境消杀", "actor": "E2E疾控王五"}))
+    expect(page.locator("tr", has_text="E2E 环境消杀")).to_contain_text("E2E疾控王五")
+
+    # 结案之后照样能查（修前已结案的事件操作栏只有一个「—」）
+    admin_call("POST", f"/api/publichealth/events/{ev['id']}/close")
+    _redrawn(page, lambda: page.click(f'button[data-view="{ev["id"]}"]'))   # 重画一遍，读到已结案
+    expect(page.locator(f'button[data-act="{ev["id"]}"]')).to_have_count(0)
+    expect(page.locator(f'button[data-view="{ev["id"]}"]')).to_have_count(1)
+    expect(page.locator("tr", has_text="E2E 采样送检")).to_have_count(1)
+    expect(page.locator("tr", has_text="E2E 环境消杀")).to_have_count(1)
+
+
 @pytest.fixture(scope="session")
 def labqc_seed(base_url, seed):
     """室内质控失控处理的前置：一个质控批号，录一个 z=+5 的点（1-3s 失控）。"""
