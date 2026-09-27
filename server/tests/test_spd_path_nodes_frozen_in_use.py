@@ -73,3 +73,33 @@ def test_没人在走的草稿照旧能改节点(client, admin):
     assert node.status_code == 201, node.text
     assert client.patch(f"{B}/path-nodes/{node.json()['id']}", headers=admin, json={"name": "乙"}).status_code == 200
     assert client.delete(f"{B}/path-nodes/{node.json()['id']}", headers=admin).status_code == 204
+
+
+def test_走完了的路径也不许改节点_执行明细不被改写(client, admin):
+    """P2-569（第十一批「落库快照 vs 现查配置」扫描 Y3-4）：P2-97 只挡执行中 / 暂停的实例。已走完的实例，执行明细照样按
+    模板当前的节点渲染——删掉一个节点，它连同已办结的任务从明细里消失，改名的显示新名字。与删模板同口径：被实例引用即冻结。"""
+    from app.database import SessionLocal
+    from app.spd.models import SpdPathInstance, SpdPathNode, SpdPathTemplate, SpdProgram
+
+    org = client.post("/api/organizations", headers=admin, json={
+        "name": "P2569 路径卫生院", "org_type": "township", "level": "township"}).json()["id"]
+    patient = client.post("/api/patients", headers=admin, json={
+        "name": "P2569 患者", "id_card": "330127196703032569"}).json()["id"]
+    enrollment = client.post(f"{B}/enrollments", headers=admin, json={
+        "patient_id": patient, "program_code": "hypertension", "org_id": org}).json()["id"]
+    with SessionLocal() as db:
+        program = db.query(SpdProgram).filter_by(code="hypertension").one()
+        template = SpdPathTemplate(program_id=program.id, code="P2569_PATH", name="P2569 两节点路径", status="draft")
+        db.add(template)
+        db.flush()
+        nodes = [SpdPathNode(template_id=template.id, key=f"n{i}", name=f"第{i}步", seq=i) for i in (1, 2)]
+        db.add_all(nodes)
+        db.flush()
+        db.add(SpdPathInstance(enrollment_id=enrollment, template_id=template.id, status="completed",
+                               current_node_key="", progress=100))
+        db.commit()
+        template_id, n1, n2 = template.id, nodes[0].id, nodes[1].id
+    assert client.delete(f"{B}/path-nodes/{n1}", headers=admin).status_code == 409   # 修前 204：已走完的明细里 n1 消失
+    assert client.patch(f"{B}/path-nodes/{n2}", headers=admin, json={"name": "改名"}).status_code == 409
+    added = client.post(f"{B}/path-templates/{template_id}/nodes", headers=admin, json={"key": "n9", "name": "临时加的"})
+    assert added.status_code == 409 and "复制新版本" in added.json()["detail"]

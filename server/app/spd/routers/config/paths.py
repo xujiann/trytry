@@ -21,7 +21,6 @@ from ...models import (
     SpdPathTemplate,
     SpdProgram,
 )
-from ...service import PATH_OPEN_STATUSES
 from ....numtypes import INT4_MAX, INT4_MIN
 from ....texttypes import NON_BLANK
 from ....visibility import assert_org_writable
@@ -230,20 +229,24 @@ def get_path_template(template_id: int, db: Session = Depends(get_db)):
 
 
 def _refuse_if_in_use(db: Session, template: SpdPathTemplate | None) -> None:
-    """有患者正在走（执行中 / 暂停）的路径，节点不许增改删——不论模板此刻是什么状态（P2-97）。
+    """有患者走过或正在走的路径，节点不许增改删——不论模板此刻是什么状态（P2-97、P2-569）。
 
     原先只挡「已发布」：改状态的接口不看来路，已发布的改回草稿（或停用）200，节点随便动。在跑的实例每推进一步都按
     **当前**的节点表取下一节点——删掉它正停着的节点，推进时找不到当前节点，路径直接记成「已完成」、进度 100%。
+
+    P2-97 只挡了执行中 / 暂停的实例。已走完的实例，执行明细同样按模板**当前**的节点渲染：删掉一个节点，这个节点连同
+    已办结的任务从明细里消失，改名的显示新名字——历史被改写（P2-569）。与删模板同一个口径（被实例引用即只能停用、
+    不能删）：有任何实例引用就不许改节点，要改就复制新版本。
     """
     if template is None:
         return
     in_use = (
         db.query(SpdPathInstance.id)
-        .filter(SpdPathInstance.template_id == template.id, SpdPathInstance.status.in_(PATH_OPEN_STATUSES))
+        .filter(SpdPathInstance.template_id == template.id)
         .first()
     )
     if in_use is not None:
-        raise HTTPException(status_code=409, detail="有患者正在走这条路径（执行中或暂停），不可直接改节点，请复制新版本后修改")
+        raise HTTPException(status_code=409, detail="已有患者走过或正在走这条路径，不可直接改节点，请复制新版本后修改")
 
 
 @router.post("/path-templates/{template_id}/nodes", response_model=PathNodeOut,

@@ -1946,7 +1946,7 @@ async function renderSpdPath() {
       ["今日到期", summary.due_today], ["已升级", summary.escalated, summary.escalated > 0],
     ])}
     ${panel("路径模板", `
-      <p class="desc">已发布的模板不能直接改节点——要改就复制新版本，避免在跑的患者任务突然变形</p>
+      <p class="desc">已发布的、或已有患者走过的模板不能直接改节点——要改就复制新版本，避免在跑的患者任务突然变形、走完的执行明细被改写</p>
       <form class="inline" id="spd-tpl-form">
         <select name="program_id">
           ${catalog.programs.map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join("")}
