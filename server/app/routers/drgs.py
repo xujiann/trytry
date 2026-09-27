@@ -14,6 +14,7 @@ from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
 from ..data.drg_groups_seed import FALLBACK_DRG_GROUP, SEED_DRG_GROUPS
+from .. import clock
 from ..concurrency import insert_or_conflict
 from ..visibility import scope_org_list
 from ..database import get_db
@@ -505,7 +506,9 @@ def in_stay_alerts(
             # 尚未填病案首页、或落入兜底组（未正式入组）的在院病例：没有同组均值可比，计数报出
             ungrouped += 1
             continue
-        stayed = max((end - adm.admitted_at.date()).days, 1)
+        # 入院日换成本地日期再减（第十五批 S2-2）：`end` 是本地业务日，落库的入院时刻是 naive UTC——原先直接 `.date()`，
+        # 一个减法两把尺子，东八区 0–8 点入院的多算 1 天、提前报警。基线两头是同一把尺子，日界按哪个时区随 P1-105 定
+        stayed = max((end - clock.to_local(adm.admitted_at).date()).days, 1)
         samples = baseline.get(drg_code, [])
         if len(samples) < MIN_BASELINE_CASES:
             insufficient.append({
