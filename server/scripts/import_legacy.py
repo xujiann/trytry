@@ -82,6 +82,7 @@ from app.models import (  # noqa: E402
     User,
     Ward,
 )
+from app.routers.patients import id_card_variants  # noqa: E402
 from app.schemas import OrganizationCreate  # noqa: E402
 
 
@@ -225,6 +226,18 @@ def _patients_by_id_card(db) -> dict[str, int]:
     return {ic: pid for pid, ic in db.query(Patient.id, Patient.id_card).all()}
 
 
+def _find_by_id_card(by_id_card: dict[str, int], id_card: str) -> int | None:
+    """按证件号找患者：末位校验码 X 的大小写两种写法都认（P1-114，与平台建档 / 入站同一个 `id_card_variants`）。
+
+    修之前两种写法各建过一份的，取编号最早那份——与平台 `patients._find_by_id_card` 同口径（P1-197）。
+    """
+    return min((by_id_card[v] for v in id_card_variants(id_card) if v in by_id_card), default=None)
+
+
+def _has_id_card(known: set[str], id_card: str) -> bool:
+    return any(v in known for v in id_card_variants(id_card))
+
+
 def _patients_by_ehc(db) -> dict[str, int]:
     return {ehc: pid for pid, ehc in db.query(Patient.id, Patient.ehc_no).all()}
 
@@ -235,7 +248,7 @@ def _resolve_patient(row: dict, line_no: int, report: ImportReport,
     id_card = (row.get("id_card") or "").strip()
     ehc_no = (row.get("ehc_no") or "").strip()
     if id_card:
-        pid = by_id_card.get(id_card)
+        pid = _find_by_id_card(by_id_card, id_card)
         if pid is None:
             report.error(line_no, f"患者不存在: 身份证号 {id_card}（请先导入患者）", row)
         return pid
@@ -333,13 +346,14 @@ def import_patients(db, rows, report: ImportReport, ctx: ImportContext) -> None:
         if birth_date and not _valid_date(birth_date):
             report.error(line_no, f"birth_date 格式非法: {birth_date}（须 YYYY-MM-DD）", row)
             continue
-        # 同批内重复单独报错（与库内已存在的"幂等跳过"语义区分，便于清洗源文件）
-        if id_card in seen_batch:
+        # 同批内重复单独报错（与库内已存在的"幂等跳过"语义区分，便于清洗源文件）；
+        # 末位 x / X 两种写法是同一个人（P1-197：原先按原样比对，同一人导成两本档案）
+        if _has_id_card(seen_batch, id_card):
             report.error(line_no, f"同批内身份证号重复: {id_card}", row)
             continue
         seen_batch.add(id_card)
         # EMPI 幂等：同身份证号视为同一人，不重复建档（集合预载，行内零 SELECT）
-        if id_card in existing_id_cards:
+        if _has_id_card(existing_id_cards, id_card):
             report.skipped += 1
             continue
         db.add(
@@ -371,7 +385,7 @@ def import_chronic(db, rows, report: ImportReport, ctx: ImportContext) -> None:
         if disease not in DISEASES:
             report.error(line_no, f"disease 非法: {disease}（须为 {'/'.join(sorted(DISEASES))}）", row)
             continue
-        patient_id = patients.get(row["id_card"].strip())
+        patient_id = _find_by_id_card(patients, row["id_card"].strip())
         if patient_id is None:
             report.error(line_no, f"患者不存在: {row['id_card'].strip()}（请先导入患者）", row)
             continue
