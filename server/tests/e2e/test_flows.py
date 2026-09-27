@@ -2474,6 +2474,38 @@ def test_clinical_documents_flow(page, base_url, seed):
     expect(row.first).to_contain_text("61.5")
 
 
+def test_交接班交得进也看得见_按病区筛(page, base_url, admin_call):
+    """P2-476：交接班原先只记得进——清单接口一直在，页面一个调用都没有，接班的人无从读起；病区还要手填编号。"""
+    org = admin_call("POST", "/api/organizations",
+                     {"name": "E2E交接班县医院", "org_type": "lead_hospital", "level": "county"})
+    ward = admin_call("POST", "/api/inpatient/wards", {"org_id": org["id"], "name": "E2E交接班病区"})
+    other = admin_call("POST", "/api/inpatient/wards", {"org_id": org["id"], "name": "E2E交接班另一病区"})
+    admin_call("POST", "/api/inpatient/handovers", {"ward_id": other["id"], "shift": "day",
+                                                    "handover_date": "2026-09-26", "content": "E2E 另一病区的交班"})
+
+    _login(page, base_url)
+    _open_page(page, "clinicaldocs", "住院临床文书")
+    form = page.locator("#handover-form")
+    form.locator('[name="ward_id"]').select_option(str(ward["id"]))   # 修前手填病区编号
+    form.locator('[name="shift"]').select_option("night")
+    form.locator('[name="handover_date"]').fill("2026-09-27")
+    form.locator('[name="from_staff"]').fill("E2E白班护士")
+    form.locator('[name="to_staff"]').fill("E2E夜班护士")
+    form.locator('[name="content"]').fill("E2E 3床术后第一天，注意引流")
+    _submit(page, "#handover-form button")
+    row = page.locator("tr", has_text="E2E 3床术后第一天")
+    expect(row).to_contain_text("大夜")            # 修前页面上没有交接班清单
+    expect(row).to_contain_text("E2E交接班病区")
+    expect(row).to_contain_text("E2E白班护士 → E2E夜班护士")
+
+    filt = page.locator("#handover-filter")
+    filt.locator('[name="ward_id"]').select_option(str(ward["id"]))
+    _submit(page, "#handover-filter button")
+    expect(page.locator("tr", has_text="E2E 3床术后第一天")).to_have_count(1)
+    expect(page.locator("tr", has_text="E2E 另一病区的交班")).to_have_count(0)
+    expect(page.locator('#handover-filter [name="ward_id"]')).to_have_value(str(ward["id"]))
+
+
 def test_体温单缺测的不画成0_在那儿断开(page, base_url, admin_read, admin_call):
     """P2-158：体温单曲线原先用 `v.temperature || 0`——一次只测了血压的记录把体温、脉搏两条曲线都拽到 0，
     与接口注释、用户手册「未测项留空不要填 0（填 0 会污染体温单趋势曲线）」相反。"""

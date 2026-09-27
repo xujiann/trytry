@@ -17,6 +17,9 @@ const UNIFIED_STATUS = { pending: ["待处理", "orange"], processing: ["处理�
 
 /* ---------------- 住院临床文书 ---------------- */
 
+/** 交接班清单的筛选（P2-476）：只留在内存里、不进存储——病区 / 日期是这一次查看的条件。 */
+const HANDOVER_FILTER = { ward_id: "", handover_date: "" };
+
 async function renderClinicalDocs() {
   $("#page-desc").textContent = "病程记录 / 护理记录 / 体温单 / 交接班；出院前可做文书完整性自查";
   // 只取在院的（P2-154）：原先不带条件取「最新 200 条住院」再在页面上挑在院的——住得久的患者被新入院的挤出前 200 条，
@@ -36,6 +39,25 @@ async function renderClinicalDocs() {
         api(`/api/inpatient/admissions/${current}/document-completeness`),
       ])
     : [[], [], [], null];
+  // 交接班清单（P2-476）：原先只记得进、没有一个页面看得见——接班的人无从读起。交接班按病区、不挂某次住院，
+  // 所以不跟着上面的住院记录走，没有在院患者时照样能看、能交
+  const handoverQuery = new URLSearchParams(Object.entries(HANDOVER_FILTER).filter(([, v]) => v !== ""));
+  const [wards, handoverResult] = await Promise.all([
+    api("/api/inpatient/wards"),
+    api(`/api/inpatient/handovers${handoverQuery.toString() ? `?${handoverQuery}` : ""}`)
+      .catch((err) => ({ error: err.message })),
+  ]);
+  // 条件被拒（如换了账号、那个病区不再可见）：说清楚、回到全部病区，不把整页掀掉——条件留在内存里，掀掉就一直是这一行错
+  let handovers = handoverResult;
+  let handoverError = "";
+  if (handovers.error) {
+    handoverError = handovers.error;
+    Object.keys(HANDOVER_FILTER).forEach((k) => { HANDOVER_FILTER[k] = ""; });
+    handovers = await api("/api/inpatient/handovers");
+  }
+  const wardName = Object.fromEntries(wards.map((w) => [w.id, w.name]));
+  // 交班表单默认选正在看的病区，其次是当前住院记录所在的病区
+  const handoverWard = String(HANDOVER_FILTER.ward_id || (inHospital.find((a) => a.id === current) || {}).ward_id || "");
 
   $("#page-body").innerHTML = `
     ${panel("选择住院记录", `
@@ -80,22 +102,43 @@ async function renderClinicalDocs() {
       ${table(["测量时刻", "体温", "脉搏", "呼吸", "血压", "入量 ml", "出量 ml", "体重 kg", "记录人"], vitals, (v) =>
         `<tr><td>${esc(v.measured_at)}</td><td>${v.temperature ?? "—"}</td><td>${v.pulse ?? "—"}</td>
          <td>${v.respiration ?? "—"}</td><td>${v.sbp ?? "—"}/${v.dbp ?? "—"}</td>
-         <td>${v.intake_ml ?? "—"}</td><td>${v.output_ml ?? "—"}</td><td>${v.weight_kg ?? "—"}</td><td>${esc(v.recorder)}</td></tr>`)}`)}
-    ${panel("交接班", `
+         <td>${v.intake_ml ?? "—"}</td><td>${v.output_ml ?? "—"}</td><td>${v.weight_kg ?? "—"}</td><td>${esc(v.recorder)}</td></tr>`)}`)}` : ""}
+    ${panel(`交接班（${handovers.length}）`, `
       <form class="inline" id="handover-form">
-        <input name="ward_id" type="number" placeholder="病区ID" required>
+        <select name="ward_id" required>${wards.map((w) =>
+          `<option value="${w.id}"${String(w.id) === handoverWard ? " selected" : ""}>${esc(w.name)}</option>`).join("")}</select>
         <select name="shift"><option value="day">白班</option><option value="evening">小夜</option><option value="night">大夜</option></select>
         <input name="handover_date" placeholder="YYYY-MM-DD" required>
         <input name="from_staff" placeholder="交班"><input name="to_staff" placeholder="接班">
         <input name="critical_count" type="number" placeholder="危重数">
         <input name="content" placeholder="交班内容" style="min-width:240px"><button>交班</button></form>
-      <p class="desc">在院人数由系统按当前住院数据快照，不接受人工填写。</p>`)}` : ""}`;
+      <p class="desc">在院人数由系统按当前住院数据快照，不接受人工填写。</p>
+      <form class="inline" id="handover-filter">
+        <select name="ward_id"><option value="">全部病区</option>${wards.map((w) =>
+          `<option value="${w.id}"${String(w.id) === HANDOVER_FILTER.ward_id ? " selected" : ""}>${esc(w.name)}</option>`).join("")}</select>
+        <input name="handover_date" type="date" value="${esc(HANDOVER_FILTER.handover_date)}">
+        <button>查看交接班</button></form>
+      <p class="msg" id="handover-msg"></p>
+      ${table(["日期", "班次", "病区", "交班 → 接班", "在院", "危重", "交班内容"], handovers, (h) =>
+        `<tr><td>${esc(h.handover_date)}</td><td>${esc(h.shift_name)}</td><td>${esc(wardName[h.ward_id] || `#${h.ward_id}`)}</td>
+         <td>${esc(h.from_staff || "—")} → ${esc(h.to_staff || "—")}</td><td>${esc(h.patient_count)}</td>
+         <td>${esc(h.critical_count)}</td><td>${esc(h.content)}</td></tr>`)}
+      ${handovers.length >= 50 ? '<p class="desc"><b>只列最新 50 条</b>，按病区 / 日期筛看更早的。</p>' : ""}`)}`;
 
   $("#doc-pick").onsubmit = (e) => {
     e.preventDefault();
     localStorage.setItem("medplat_doc_adm", new FormData(e.target).get("admission_id"));
     route();
   };
+  $("#handover-form").onsubmit = (e) => { e.preventDefault();
+    postAction("/api/inpatient/handovers", formJson(e.target, ["ward_id", "critical_count"]), "#handover-msg"); };
+  $("#handover-filter").onsubmit = (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    Object.keys(HANDOVER_FILTER).forEach((k) => { HANDOVER_FILTER[k] = String(f.get(k) ?? "").trim(); });
+    route();
+  };
+  if (handoverError) setMsg("#handover-msg", `${handoverError}（已回到全部病区）`, false);
   if (!current) return;
   $("#note-form").onsubmit = (e) => { e.preventDefault();
     postAction(`/api/inpatient/admissions/${current}/progress-notes`, formJson(e.target), "#doc-msg"); };
@@ -106,8 +149,6 @@ async function renderClinicalDocs() {
       // 出入量、体重（P2-473）：接口与体温单模型一直有这三项，页面原先录不进、也看不见
       formJson(e.target, ["temperature", "pulse", "respiration", "sbp", "dbp", "intake_ml", "output_ml", "weight_kg"]),
       "#doc-msg"); };
-  $("#handover-form").onsubmit = (e) => { e.preventDefault();
-    postAction("/api/inpatient/handovers", formJson(e.target, ["ward_id", "critical_count"]), "#doc-msg"); };
 }
 
 /* ---------------- 手术麻醉 ---------------- */

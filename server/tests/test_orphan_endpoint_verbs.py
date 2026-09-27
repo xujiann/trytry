@@ -143,7 +143,6 @@ READ_EXEMPT: dict[str, str] = {}
 #: 读动词欠账：路径有入口（同一路径的写动词有调用）、这个 GET 没有。只许变少。
 READ_KNOWN: set[str] = {
     # 临床与护理
-    "GET /api/inpatient/handovers",                                     # 交接班只记得进，接班的人看不到
     "GET /api/inpatient/admissions/{admission_id}/case-summary",
     "GET /api/emergency/cases/{case_id}/vitals",
     "GET /api/maternal/records/{record_id}/delivery",
@@ -202,7 +201,7 @@ def test_读动词登记的仍然没有入口_接上了就划掉():
     assert not sorted(set(READ_EXEMPT) - found), "豁免的 GET 已有前端入口或端点已不存在，划掉"
     assert not READ_KNOWN & set(READ_EXEMPT), "既豁免又欠账"
     assert all(why.strip() for why in READ_EXEMPT.values())
-    assert len(READ_KNOWN) <= 19, "读动词欠账只许变少"
+    assert len(READ_KNOWN) <= 18, "读动词欠账只许变少（19 → 18：P2-476 交接班清单接上）"
 
 
 def test_判据自证_只写不读的点名_读过的放过():

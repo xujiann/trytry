@@ -123,6 +123,7 @@ class HandoverOut(BaseModel):
     id: int
     ward_id: int
     shift: str
+    shift_name: str
     handover_date: str
     from_staff: str
     to_staff: str
@@ -492,6 +493,9 @@ def list_vitals(
 
 # ---------------------------------------------------------------- 交接班
 
+#: 班次文案（状态文案取自后端）：交接班清单显示它（P2-476），与新建表单的选项同一套措辞。表外的值原样回显。
+SHIFT_NAMES = {"day": "白班", "evening": "小夜", "night": "大夜"}
+
 
 class HandoverIn(BaseModel):
     ward_id: int
@@ -570,6 +574,7 @@ def list_handovers(
             "id": h.id,
             "ward_id": h.ward_id,
             "shift": h.shift,
+            "shift_name": SHIFT_NAMES.get(h.shift, h.shift),
             "handover_date": h.handover_date,
             "from_staff": h.from_staff,
             "to_staff": h.to_staff,
