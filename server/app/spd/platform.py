@@ -50,6 +50,7 @@ from ..models import (
     utcnow,
 )
 from ..notify import notify_patient as _notify_patient
+from ..notify import patient_recipients as _patient_recipients
 from ..notify import BODY_MAX as _NOTIFY_BODY_MAX, TITLE_MAX as _NOTIFY_TITLE_MAX
 # PII 加密态等值检索（P1-25）：开态下证件号密文列 contains 恒空，spd 的证件号
 # 筛选必须与平台 patients.py 走同一条索引列等值路径。只再导出 pii_filter 这一个
@@ -200,19 +201,22 @@ def send_wechat_edu(db: Session, patient_id: int, *, title: str, body: str) -> t
     param = db.query(SystemParam).filter(SystemParam.key == WECHAT_EDU_TEMPLATE_KEY).first()
     if param is None or not param.value:
         return 0, f"未配置微信宣教模板（系统参数 {WECHAT_EDU_TEMPLATE_KEY}）"
+    # 发给谁与站内信同一个口径（P2-502）：本人账户 + 代管家属账户。原先只认本人绑定的——儿童、失能老人的宣教由代管的
+    # 家属收，本人名下往往根本没有账户，推送记「尚无绑定微信」失败，家属那头一条也收不到
     openids = [
         a.wechat_openid
         for a in db.query(ResidentAccount)
         .filter(
-            ResidentAccount.patient_id == patient_id,
+            ResidentAccount.id.in_(_patient_recipients(db, patient_id)),
             ResidentAccount.status == "active",
             ResidentAccount.wechat_openid.isnot(None),
         )
+        .order_by(ResidentAccount.id)
         .all()
         if a.wechat_openid
     ]
     if not openids:
-        return 0, "该患者尚无绑定微信的居民账号"
+        return 0, "该患者及代管家属尚无绑定微信的居民账号"
     send = getattr(_get_wechat_provider(), "send_template_message", None)
     if send is None:  # 测试注入的旧桩件可能没实现模板消息
         return 0, "当前微信通道不支持模板消息"

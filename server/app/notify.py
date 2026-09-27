@@ -142,6 +142,27 @@ def notify_staff(
     return len(recipients)
 
 
+def patient_recipients(db: Session, patient_id: int) -> set[int]:
+    """某位患者的消息该投给哪些居民账户：本人绑定的在用账户 + 代管该档案的家属账户（口径见 `notify_patient`）。
+
+    站内信与慢专病微信宣教（`spd.platform.send_wechat_edu`，P2-502）共用这一处——原先宣教只认本人账户，
+    代管的家属一条都收不到。
+    """
+    account_ids = {
+        a.id
+        for a in db.query(ResidentAccount)
+        .filter(ResidentAccount.patient_id == patient_id, ResidentAccount.status == "active")
+        .all()
+    }
+    account_ids |= {
+        m.account_id
+        for m in db.query(ResidentFamilyMember)
+        .filter(ResidentFamilyMember.patient_id == patient_id)
+        .all()
+    }
+    return account_ids
+
+
 def notify_patient(
     db: Session,
     patient_id: int,
@@ -158,18 +179,7 @@ def notify_patient(
     消息本来就该发给代管人，只发给"本人账户"等于发进黑洞。
     """
     title, body = title[:TITLE_MAX], body[:BODY_MAX]   # 拼出来的标题超列宽截断，不让业务事务 500（P1-164）
-    account_ids = {
-        a.id
-        for a in db.query(ResidentAccount)
-        .filter(ResidentAccount.patient_id == patient_id, ResidentAccount.status == "active")
-        .all()
-    }
-    account_ids |= {
-        m.account_id
-        for m in db.query(ResidentFamilyMember)
-        .filter(ResidentFamilyMember.patient_id == patient_id)
-        .all()
-    }
+    account_ids = patient_recipients(db, patient_id)
     recipients = sorted(account_ids)[:MAX_RECIPIENTS]
     for account_id in recipients:
         db.add(
