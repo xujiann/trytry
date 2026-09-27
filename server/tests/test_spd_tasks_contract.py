@@ -438,7 +438,8 @@ def test_导出行是int与str混型单元格(client, auth, world):
     export = client.get(f"{B}/tasks-export", headers=auth)
     assert export.status_code == 200
     body = export.json()
-    assert list(body.keys()) == ["columns", "rows", "total"]
+    # matched（P2-526 新增）：同一筛选下命中的总数，页面据此判断截断
+    assert list(body.keys()) == ["columns", "rows", "total", "matched"]
     expected_rows = [
         [r["id"], r["patient_name"], r["program_code"], r["task_type"], r["title"],
          r["status"], r["priority"], r["due_date"],
@@ -452,6 +453,7 @@ def test_导出行是int与str混型单元格(client, auth, world):
                     "截止日期", "责任人ID", "催办次数", "创建时间"],
         "rows": expected_rows,
         "total": len(rows),
+        "matched": len(rows),
     }
     # 责任人列里 int 与空串并存：混型单元格是既有字节，声明单一类型会改掉它
     assignee_cells = {type(row[8]) for row in body["rows"]}

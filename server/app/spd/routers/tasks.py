@@ -244,6 +244,8 @@ class TasksExportOut(BaseModel):
     # 声明单一类型会改字节（smart union 原样透传）
     rows: list[list[int | str]]
     total: int
+    # 同一筛选条件下命中的总数（P2-526）：`total` 是实际导出的行数、截在 limit 上，两者不等就是截断了——页面据此明说
+    matched: int
 
 
 # ============================================================ 路径实例
@@ -1293,6 +1295,7 @@ def export_tasks(
     status: str | None = None,
     org_id: int | None = None,
     task_type: str | None = None,
+    mine: bool = False,
     limit: int = 2000,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
@@ -1301,17 +1304,23 @@ def export_tasks(
 
     不在服务端生成文件：平台既有的导出（绩效、考核）都走这个形状，
     多一种导出方式就多一份要维护的编码/换行/BOM 处理。
+
+    「只看我的」与清单同一个判据（承办人是自己，P2-526）：原先导出不收这个参数、页面发请求前还把它删掉，
+    勾着「只看我的」导出来的却是全部可见机构的任务。截断看得见：`matched` 是同一筛选下命中的总数。
     """
     query = db.query(SpdTask)
     orgs = visible_org_ids(db, user)
     if orgs is not None:
         query = query.filter(SpdTask.org_id.in_(orgs))
+    if mine:
+        query = query.filter(SpdTask.assignee_id == user.id)
     for column, value in (
         (SpdTask.program_code, program_code), (SpdTask.status, status),
         (SpdTask.org_id, org_id), (SpdTask.task_type, task_type),
     ):
         if value is not None and value != "":
             query = query.filter(column == value)
+    matched = query.count()
     rows = query.order_by(SpdTask.id.desc()).limit(min(max(limit, 1), 5000)).all()
     briefs = {
         p.id: p.name
@@ -1327,4 +1336,5 @@ def export_tasks(
             for r in rows
         ],
         "total": len(rows),
+        "matched": matched,
     }

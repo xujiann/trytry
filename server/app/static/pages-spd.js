@@ -2292,13 +2292,16 @@ async function renderSpdPath() {
       return;
     }
     if (exportBtn) {
+      // 「只看我的」照样带上（P2-526）：导出与清单同一个判据，原先这里把它删掉，勾着也导出全部可见机构的任务
       const filters = formJson($("#spd-task-filter"));
-      delete filters.mine;   // 导出端点没有 mine 参数：它按调用方可见机构导出
       const qs = new URLSearchParams({ limit: "2000", ...filters }).toString();
       try {
         const d = await api(`/api/spd/tasks-export?${qs}`);
         spdDownloadCsv(`spd_tasks_${localToday()}.csv`, d.columns, d.rows);
-        setMsg("#spd-task-msg", `已导出 ${d.total} 条（上限 2000，多于此请按状态/类型分次导）`);
+        // 截断明说：matched 是同一筛选下命中的总数，total 是实际导出的行数
+        setMsg("#spd-task-msg", d.matched > d.total
+          ? `共 ${d.matched} 条，只导出了前 ${d.total} 条（上限 2000）：请按状态 / 类型分次导`
+          : `已导出 ${d.total} 条`);
       } catch (err) { setMsg("#spd-task-msg", err.message, false); }
       return;
     }
