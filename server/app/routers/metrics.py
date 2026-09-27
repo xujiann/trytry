@@ -488,7 +488,11 @@ def metric_count(db: Session, metric: str) -> int:
 
 @router.get("/trends", response_model=TrendsOut)
 def monthly_trends(months: int = 6, db: Session = Depends(get_db)):
-    """近N月业务量趋势：就诊、远程诊断、转诊、处方（Python侧聚合，兼容SQLite/PostgreSQL）。"""
+    """近N月业务量趋势：就诊、远程诊断、转诊、处方（Python侧聚合，兼容SQLite/PostgreSQL）。
+
+    「就诊」不含住院类就诊记录（P2-642），与同页卡片的诊疗人次同一条口径（`OUTPATIENT_ENCOUNTER`，P2-199）：办入院会
+    同时建一条住院类就诊，原先趋势照数——同一位住院患者在趋势里算一次就诊，卡片里不算。
+    """
     from collections import Counter
 
     def month_key(dt) -> str:
@@ -507,13 +511,14 @@ def monthly_trends(months: int = 6, db: Session = Depends(get_db)):
 
     keys = last_months(max(1, min(months, 24)))
     series = {}
-    for name, column in (
-        ("encounters", Encounter.created_at),
-        ("exam_reports", ExamReport.reported_at),
-        ("referrals", Referral.created_at),
-        ("prescriptions", Prescription.created_at),
+    for name, column, where in (
+        ("encounters", Encounter.created_at, OUTPATIENT_ENCOUNTER),
+        ("exam_reports", ExamReport.reported_at, None),
+        ("referrals", Referral.created_at, None),
+        ("prescriptions", Prescription.created_at, None),
     ):
-        counter = Counter(month_key(row[0]) for row in db.query(column).all() if row[0])
+        query = db.query(column) if where is None else db.query(column).filter(where)
+        counter = Counter(month_key(row[0]) for row in query.all() if row[0])
         series[name] = [counter.get(k, 0) for k in keys]
     return {"months": keys, "series": series}
 
