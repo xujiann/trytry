@@ -476,7 +476,7 @@ def create_record(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """填写术中记录并结案；同时自动生成术后随访任务。"""
+    """填写术中记录并结案；同时自动生成术后随访任务（转归「死亡」的不生成，见下）。"""
     # 起止顺序（区间起止顺序）：`T` 写法与空格写法先换成同一种再比——时间戳原样落库（P1-100）
     if body.start_at and body.end_at and body.end_at.replace("T", " ") < body.start_at.replace("T", " "):
         raise HTTPException(status_code=422, detail="手术结束时间不得早于开始时间")
@@ -493,25 +493,29 @@ def create_record(
     )
     db.add(record)
     request.status = "completed"
-    db.add(
-        FollowupTask(
-            patient_id=request.patient_id,
-            org_id=request.org_id,
-            category="surgery",
-            source_id=request.id,
-            title=f"术后随访：{body.actual_surgery_name}"[:FOLLOWUP_TITLE_MAX],   # 超列宽截断（P1-164）
-            due_date=(clock.today() + timedelta(days=SURGERY_FOLLOWUP_DAYS)).isoformat(),
+    # 转归「死亡」不排术后随访、不发「术后随访已安排」（P2-499）：原先照排照发——「您的XX已完成，我们将在 N 天内与您联系
+    # 随访」发到死者名下（家属在居民端看得到），术后随访任务到期被扫成超期、挂进随访督办。转归与记录同一个请求，
+    # 不存在出院随访（P2-385）那种「转归还没写」的先后问题
+    if body.outcome != "死亡":
+        db.add(
+            FollowupTask(
+                patient_id=request.patient_id,
+                org_id=request.org_id,
+                category="surgery",
+                source_id=request.id,
+                title=f"术后随访：{body.actual_surgery_name}"[:FOLLOWUP_TITLE_MAX],   # 超列宽截断（P1-164）
+                due_date=(clock.today() + timedelta(days=SURGERY_FOLLOWUP_DAYS)).isoformat(),
+            )
         )
-    )
-    notify_patient(
-        db,
-        request.patient_id,
-        category="followup",
-        title="术后随访已安排",
-        body=f"您的{body.actual_surgery_name}已完成，我们将在 {SURGERY_FOLLOWUP_DAYS} 天内与您联系随访。",
-        link_type="surgery_request",
-        link_id=request.id,
-    )
+        notify_patient(
+            db,
+            request.patient_id,
+            category="followup",
+            title="术后随访已安排",
+            body=f"您的{body.actual_surgery_name}已完成，我们将在 {SURGERY_FOLLOWUP_DAYS} 天内与您联系随访。",
+            link_type="surgery_request",
+            link_id=request.id,
+        )
     try:
         db.commit()
     except IntegrityError:
