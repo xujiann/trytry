@@ -3523,14 +3523,16 @@ def test_妇幼页的访视分娩新筛都在页内表单里录入(page, base_ur
     page.fill("#mat-form input[name=patient_id]", str(maternal_seed["id"]))
     _submit(page, "#mat-form button")
 
+    # 两个模态框都等整页重画完（`_redrawn`）：页面上别的档案也可能是「已分娩」（P2-594 的用例留下的），只等这几个字
+    # 出现，写请求还在路上就去填儿童建档表单，填进了马上要被重画丢弃的那份 DOM（第九十五轮全量端到端实测）
     page.click("button[data-visit]")
-    _spd_modal(page, {"visit_type": "prenatal", "gest_week": "30", "bp": "150/95",
-                      "visit_date": "2026-09-20"})
+    _redrawn(page, lambda: _spd_modal(page, {"visit_type": "prenatal", "gest_week": "30", "bp": "150/95",
+                                             "visit_date": "2026-09-20"}))
     expect(page.locator("#page-body")).to_contain_text("妊娠期高血压可能")
 
     page.click("button[data-delivery]")
-    _spd_modal(page, {"org_id": str(seed["org"]["id"]), "delivery_date": "2026-09-22",
-                      "delivery_mode": "cesarean", "newborn_count": "2"})
+    _redrawn(page, lambda: _spd_modal(page, {"org_id": str(seed["org"]["id"]), "delivery_date": "2026-09-22",
+                                             "delivery_mode": "cesarean", "newborn_count": "2"}))
     expect(page.locator("#page-body")).to_contain_text("已分娩")
 
     page.fill("#child-form input[name=name]", "E2E新生儿")
