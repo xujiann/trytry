@@ -549,7 +549,8 @@ def test_随访办结必须是条件更新且处置任务只在命中后派():
     """
     helper_src = pyinspect.getsource(spd_service.close_followup_record)
     assert "update(SpdFollowupRecord)" in helper_src and ".rowcount" in helper_src
-    assert "SpdTask(" in pyinspect.getsource(spd_service.spawn_followup_abnormal_task)
+    # 处置任务由这个帮手派出，且走统一的 `spawn_task`（P1-184：原先自己拼 `SpdTask(...)`，挂着档案也不落主管医生）
+    assert "spawn_task(" in pyinspect.getsource(spd_service.spawn_followup_abnormal_task)
 
     dispatch = "spawn_followup_abnormal_task("
     for func, allowed in (

@@ -539,19 +539,25 @@ def spawn_followup_abnormal_task(db: Session, record: SpdFollowupRecord, level: 
 
     挂哪份档案：写了病种的按 `enrollment_for`（在管的优先）；随访记录没写病种的不挂（与原先医护那份一致）。
     到期：重度次日、中度三天。**不 commit**。
+
+    走 `spawn_task`（P1-184）：原先在这里自己拼 `SpdTask`，绕过了「所有任务都从这里出」的责任人缺省——挂着纳管档案也
+    不落主管医生、不落团队，处置任务停在待接收、谁的待办里都没有；预置问卷的处置动作写的正是「通知主管医师」「立即联系
+    手术医师」。重度异常另给责任人发一条站内消息（与催办同一个 `notify_user`）：居民自助作答的重度异常，原先要等有人去
+    翻任务中心才看得见。
     """
     if level not in FOLLOWUP_ABNORMAL_LEVELS:
         return None
     enrollment = enrollment_for(db, record.patient_id, record.program_code)[1] if record.program_code else None
-    task = SpdTask(
-        program_code=record.program_code, patient_id=record.patient_id,
-        enrollment_id=enrollment.id if enrollment else None,
-        task_type="report", title=title, org_id=record.org_id, status="pending",
-        priority=3 if level == "high" else 2,
-        due_date=(clock.today() + timedelta(days=1 if level == "high" else 3)).isoformat(),
-        source="followup",
+    task = spawn_task(
+        db, patient_id=record.patient_id, title=title, task_type="report", program_code=record.program_code,
+        enrollment=enrollment, org_id=record.org_id, due_days=1 if level == "high" else 3,
+        priority=3 if level == "high" else 2, source="followup",
     )
-    db.add(task)
+    if level == "high" and task.assignee_id is not None:
+        notify_user(
+            db, task.assignee_id, category="spd_task", title="随访重度异常待处置",
+            body=f"{title}（患者 {record.patient_id}，次日到期）", link_type="spd_task", link_id=task.id,
+        )
     return task
 
 
