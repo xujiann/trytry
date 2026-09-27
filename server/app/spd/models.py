@@ -1479,6 +1479,9 @@ class SpdReportInstance(Base):
     org_id: Mapped[int | None] = mapped_column(ForeignKey("organizations.id"), nullable=True)
     content: Mapped[dict] = mapped_column(JSON, default=dict)
     subscriber_ids: Mapped[list] = mapped_column(JSON, default=list)
+    # 「立即执行」（`POST /report-instances`）手工出的（P2-531）；定时推送出的为 False。定时推送判「当期出过没有」只认
+    # 定时推送自己出的——手工那份不投递订阅人，不能顶替当期的推送（迁移 c3bfca22dbdd，存量记 False）
+    manual: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 

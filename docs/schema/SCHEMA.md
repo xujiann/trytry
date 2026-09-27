@@ -3295,6 +3295,7 @@
 - `org_id` · INTEGER · → organizations.id
 - `content` · JSON · NOT NULL
 - `subscriber_ids` · JSON · NOT NULL
+- `manual` · BOOLEAN · NOT NULL
 - `created_at` · DATETIME · NOT NULL · index
 - _index_ ix_spd_report_instances_created_at(created_at)
 - _index_ ix_spd_report_instances_period_label(period_label)

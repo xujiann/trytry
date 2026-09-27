@@ -111,6 +111,9 @@ def spd_report_push(db: Session) -> tuple[int, str]:
                     # 机构后缀，原先只比标签——没绑机构的全域任务，谁在本机构点一下立即执行，当期的全域报告就被当成
                     # 「已出过」，定时推送不再生成、订阅人也收不到
                     SpdReportInstance.org_id.is_(None) if org_id is None else SpdReportInstance.org_id == org_id,
+                    # 只认定时推送自己出的（P2-531）：没有所属机构的管理员 / 主任点「立即执行」，出的那份正好是机构为空、
+                    # 标签不带后缀——P2-255 按机构区分挡不住它，当期推送照样被当成「已出过」、订阅人收不到
+                    SpdReportInstance.manual.is_(False),
                 )
                 .first()
             )

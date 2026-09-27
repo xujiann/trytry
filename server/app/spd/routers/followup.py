@@ -1721,6 +1721,7 @@ def generate_report(
         title=f"{template.name}（{period_label}）", period_label=period_label,
         scope_level=template.scope_level, org_id=org_id, content=content,
         subscriber_ids=(task.subscriber_ids if task else []) or [],
+        manual=True,   # 手工出的不顶替当期定时推送（P2-531，见 jobs.spd_report_push 的判重）
     )
     db.add(instance)
     if task is not None:
