@@ -144,6 +144,7 @@ RESOURCE_NAMES = {
     "spd_consult": "慢专病在线咨询",
     "spd_referral": "慢专病转诊",
     "spd_apply": "慢专病服务申请",
+    "spd_group": "慢专病患者分组",
 }
 
 # 附件留痕的 resource 由 `attachments._resource()` 拼成 `att:{owner_type}:{action}`，

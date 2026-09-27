@@ -1639,12 +1639,25 @@ def add_group_members(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """批量加入分组；`use_auto_rule` 时按分组的自动规则从在管人群里筛。"""
+    """批量加入分组；`use_auto_rule` 时按分组的自动规则从在管人群里筛。
+
+    手工给的患者号逐个判可见性并留痕，**先全部判完再写**（P0-50）——与同子系统批量干预、宣教推送（P0-34）同一口径：
+    原先只看分组所属机构能不能写，任一机构的医生按号就能把与本机构毫无关系的患者拉进自己的分组，成员清单随即回出
+    姓名、健康卡号、电话，不留调阅痕迹。按规则入组本就只从可见机构的在管人群里筛，不重复判。不存在的患者号 404
+    （原先静默跳过、回执照样 200）。
+    """
     group = db.get(SpdGroup, group_id)
     if group is None:
         raise HTTPException(status_code=404, detail="分组不存在")
     assert_org_writable(db, user, group.org_id)
-    patient_ids = list(body.patient_ids)
+    patient_ids = list(dict.fromkeys(body.patient_ids))
+    if patient_ids:
+        known = {pid for (pid,) in db.query(Patient.id).filter(Patient.id.in_(patient_ids))}
+        missing = [pid for pid in patient_ids if pid not in known]
+        if missing:
+            raise HTTPException(status_code=404, detail=f"患者不存在（patient_id={missing[0]}）")
+        for pid in patient_ids:
+            assert_patient_visible(db, user, pid, resource="spd_group")
     if body.use_auto_rule:
         if not group.auto_rule:
             raise HTTPException(status_code=422, detail="该分组未配置自动分组规则")
