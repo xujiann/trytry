@@ -76,12 +76,16 @@ def lookback_since(db: Session, source: SpdDataSource) -> datetime:
     原先只取 `freq_minutes × 4`，说是「比同步周期宽一倍以上，一次漏跑补得回来」——可同步周期不是 `freq_minutes`：
     定时任务按 5 分钟唤醒（`spd_data_source_sync`），1 分钟一次的源实际 5 分钟才跑一回，4 分钟的窗口每轮漏掉
     头 1 分钟里录的随访（约 20%）；定时任务停过、实例重启、某一轮采集失败，窗口移过去就再也补不回来。从上一次成功
-    同步算起，漏跑、失败都补得回来；幂等键（`source_ref`）保证补跑不重复。从没成功过的新源照旧只看 `× 4`。"""
+    同步算起，漏跑、失败都补得回来；幂等键（`source_ref`）保证补跑不重复。从没成功过的新源照旧只看 `× 4`。
+
+    只认**采集器自己**写的成功日志（P2-530）：数据源页的「记一次同步」（接口方回报 / 手工补录）同样写一条成功日志，
+    原先也被当成「上一次成功同步」——运维补登一条，窗口就挪到那一刻，此前没采回来的那段公卫随访血压再也补不回来。"""
     period = timedelta(minutes=max(source.freq_minutes, 1))
     floor = now_naive() - period * 4
     last_ok = (
         db.query(func.max(SpdSyncLog.started_at))
-        .filter(SpdSyncLog.source_id == source.id, SpdSyncLog.success.is_(True))
+        .filter(SpdSyncLog.source_id == source.id, SpdSyncLog.success.is_(True),
+                SpdSyncLog.manual.is_(False))
         .scalar()
     )
     return floor if last_ok is None else min(floor, last_ok - period)

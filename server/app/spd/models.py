@@ -439,6 +439,9 @@ class SpdSyncLog(Base):
     latency_ms: Mapped[int] = mapped_column(Integer, default=0)
     success: Mapped[bool] = mapped_column(Boolean, default=True)
     message: Mapped[str] = mapped_column(String(256), default="")
+    # 手工登记的（「记一次同步」：接口方回报 / 手工补录，P2-530）；采集器自己跑的为 False。采集的回溯窗口只从采集器
+    # 成功跑过的时刻算——手工记的「成功」不等于本平台把那段数据取回来了（迁移 fdf0d429aa89，存量记 False）
+    manual: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 

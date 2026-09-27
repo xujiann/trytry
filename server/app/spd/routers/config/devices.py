@@ -285,7 +285,8 @@ def record_sync(
     if source is None:
         raise HTTPException(status_code=404, detail="数据源不存在")
     assert_org_writable(db, user, source.org_id)
-    log = SpdSyncLog(source_id=source_id, **body.model_dump())
+    # 记为手工登记（P2-530）：采集的回溯窗口不从手工记的「成功」算起，见 `collectors.lookback_since`
+    log = SpdSyncLog(source_id=source_id, manual=True, **body.model_dump())
     db.add(log)
     db.flush()
     recent = (

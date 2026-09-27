@@ -3475,6 +3475,7 @@
 - `latency_ms` · INTEGER · NOT NULL
 - `success` · BOOLEAN · NOT NULL
 - `message` · VARCHAR(256) · NOT NULL
+- `manual` · BOOLEAN · NOT NULL
 - `created_at` · DATETIME · NOT NULL · index
 - _index_ ix_spd_sync_logs_created_at(created_at)
 - _index_ ix_spd_sync_logs_source_id(source_id)
