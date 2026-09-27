@@ -798,17 +798,20 @@ def award_points(
         return None
     account = point_account_for(db, user_id, org_id)
     if rule.daily_limit:
-        today = clock.today().isoformat()
-        earned_today = sum(
-            r.points
-            for r in db.query(SpdPointRecord)
+        # 「当天」是本地业务日，与同一套积分的每日签到（`spd_signins.day` 取 `clock.today()`）同一把尺子；流水时间戳是
+        # naive UTC，把本地这一天换成 UTC 区间再比（P2-534）。原先拿流水的 UTC 日期比本地的今天：东八区 0–8 点入的账
+        # 算进「昨天」，这段时间上限形同虚设，一天能入到上限的两倍多
+        start, end = clock.local_day_utc_range(clock.today())
+        earned_today = (
+            db.query(func.coalesce(func.sum(SpdPointRecord.points), 0))
             .filter(
                 SpdPointRecord.account_id == account.id,
                 SpdPointRecord.rule_code == rule.code,
                 SpdPointRecord.direction == "in",
+                SpdPointRecord.created_at >= start,
+                SpdPointRecord.created_at < end,
             )
-            .all()
-            if r.created_at.date().isoformat() == today
+            .scalar()
         )
         if earned_today + rule.points > rule.daily_limit:
             return None

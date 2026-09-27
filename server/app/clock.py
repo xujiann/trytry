@@ -27,9 +27,11 @@ aware 值按会话时区转换后再丢掉时区——同一张表的两列一�
 而那个文件直到 2026-09-11 才被真正创建。P0-2 的收敛是真做了的，只有守它的闸门没做——
 **一句声称守卫存在的注释，比没有注释更让人放心，也更少有人回头核。**
 """
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time, timedelta, timezone
 
-__all__ = ["now_naive", "now_aware", "now_local", "to_aware", "today", "today_str"]
+__all__ = [
+    "now_naive", "now_aware", "now_local", "to_aware", "today", "today_str", "local_day_utc_range",
+]
 
 
 def now_naive() -> datetime:
@@ -69,3 +71,15 @@ def today() -> date:
 
 def today_str() -> str:
     return today().isoformat()
+
+
+def local_day_utc_range(day: date) -> tuple[datetime, datetime]:
+    """本地日历上的一天，换成落库口径（naive UTC）的左闭右开区间 `[start, end)`。
+
+    业务日期是本地日历（`today()`），落库时间戳是 naive UTC：问「本地的这一天里入过几笔」，要拿这一天的本地零点
+    与次日零点换成 UTC 去比列。拿列的 `.date()`（UTC 日期）去比本地日期，会差出时区偏移那几个小时——
+    东八区 0–8 点发生的算进前一天（P2-534）。
+    """
+    start = datetime.combine(day, time.min).astimezone(timezone.utc).replace(tzinfo=None)
+    end = datetime.combine(day + timedelta(days=1), time.min).astimezone(timezone.utc).replace(tzinfo=None)
+    return start, end
