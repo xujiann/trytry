@@ -1508,6 +1508,34 @@ def test_课件附件上传后看得到也下得了(page, base_url, admin_call, 
     expect(listing).to_contain_text("e2e_p2431.pdf")
 
 
+def test_会诊与转诊的佐证材料在页面上传得上看得到(page, base_url, seed, admin_call, tmp_path):
+    """P2-432：会诊、转诊两类附件（病历影像截图、检查单 PDF）后端早就支持，页面上连上传入口都没有——
+    只能靠接口调用方。修后两页各有一块佐证材料面板：按单号上传、查附件、下载。"""
+    org = seed["org"]["id"]
+    other = admin_call("POST", "/api/organizations", {"name": "E2E佐证受邀医院", "org_type": "township",
+                                                      "level": "township"})["id"]
+    consult = admin_call("POST", "/api/consultations", {
+        "patient_id": seed["patient"]["id"], "from_org_id": org, "to_org_id": other, "question": "E2E佐证会诊"})
+    referral = admin_call("POST", "/api/referrals", {
+        "patient_id": seed["patient"]["id"], "from_org_id": other, "to_org_id": org, "direction": "up",
+        "reason": "E2E佐证转诊"})
+    pdf = tmp_path / "e2e_p2432.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n")
+    _login(page, base_url)
+    for page_id, title, prefix, owner_id in (("consultations", "远程会诊", "cons", consult["id"]),
+                                             ("referrals", "双向转诊", "ref", referral["id"])):
+        _open_page(page, page_id, title)
+        form = page.locator(f"#{prefix}-att-form")   # 修前：页面上没有这张表
+        form.locator('input[name="owner_id"]').fill(str(owner_id))
+        form.locator('input[type="file"]').set_input_files(str(pdf))
+        form.locator("button").click()
+        listing = page.locator(f"#{prefix}-att-list")
+        expect(listing).to_contain_text("e2e_p2432.pdf")
+        with page.expect_download() as info:
+            listing.locator("button[data-attdl]").first.click()
+        assert info.value.suggested_filename == "e2e_p2432.pdf"
+
+
 def test_删除路径节点先确认(page, base_url, admin_read, admin_call):
     """P2-43：「删除」路径节点原先点一下就删，节点的时限、角色与表单配置一并没了。"""
     hyp = next(p for p in admin_read("/api/spd/programs") if p["code"] == "hypertension")

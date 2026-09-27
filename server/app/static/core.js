@@ -429,6 +429,8 @@ async function renderConsultations() {
   const CS = { applied: ["已申请", "orange"], accepted: ["已受理", ""], completed: ["已完成", "green"], declined: ["已拒绝", "red"] };
   // 专家建档后端是 require_admin，不是 admin 就别摆那个表单
   const canExpert = currentRole() === "admin";
+  // 会诊佐证材料（P2-432）：后端早就收 owner_type=consultation 的附件，页面上原先连上传入口都没有；上传限医师 / 经办
+  const canAttach = ["doctor", "operator", "admin"].includes(currentRole());
   const onDuty = experts.filter((x) => x.available);
   $("#page-body").innerHTML = `
     ${panel("会诊申请", `
@@ -480,7 +482,9 @@ async function renderConsultations() {
          <td>${esc(x.specialty) || "—"}</td>
          <td>${statusTag(EXPERT_STATUS, x.available ? "on" : "off")}</td></tr>`)}
       <p class="desc">受理时的专家下拉只列<b>可排班</b>的（当前 ${onDuty.length} 人）；
-        专家库为空时退回手工输入，不至于卡住受理。</p>`)}`;
+        专家库为空时退回手工输入，不至于卡住受理。</p>`)}
+    ${attachmentPanelHtml("cons", "会诊佐证材料（病历影像截图 / 检查单 PDF，≤10MB）", "会诊单ID", canAttach)}`;
+  bindAttachmentPanel("consultation", "cons");
   $("#cons-form").onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
@@ -1544,6 +1548,8 @@ async function renderExams() {
 async function renderReferrals() {
   $("#page-desc").textContent = "医共体内上转/下转：申请 → 接诊 → 结案";
   const referrals = await api("/api/referrals");
+  // 转诊佐证材料（P2-432）：同会诊，后端早就收、页面上原先没有入口；上传限医师 / 经办
+  const canAttach = ["doctor", "operator", "admin"].includes(currentRole());
   $("#page-body").innerHTML = `
     ${panel("转诊申请", `
       <form class="inline" id="ref-form">
@@ -1566,7 +1572,9 @@ async function renderReferrals() {
         <td>${r.from_org_id} → ${r.to_org_id}</td><td>${esc(r.reason)}</td>
         <td><span class="tag ${color}">${esc(text)}</span></td>
         <td>${actions} <button class="btn secondary" data-print-ref="${r.id}">打印转诊单</button></td></tr>`;
-    }))}`;
+    }))}
+    ${attachmentPanelHtml("ref", "转诊佐证材料（病历影像截图 / 检查单 PDF，≤10MB）", "转诊单ID", canAttach)}`;
+  bindAttachmentPanel("referral", "ref");
   $("#ref-form").onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);

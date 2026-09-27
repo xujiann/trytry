@@ -560,6 +560,40 @@ async function drawAttachments(ownerType, ownerId, containerSel, msgSel) {
   };
 }
 
+/** 业务单据的佐证材料面板：按单号上传 / 查附件（P2-432；与检查报告、不良事件两处附件面板同形）。
+    上传只给接口收的角色（OwnerSpec 的 roles），查看由后端按患者档口径判（校验 + 留痕）。 */
+function attachmentPanelHtml(prefix, title, idLabel, canUpload) {
+  return panel(title, `
+    ${canUpload ? `<form class="inline" id="${prefix}-att-form">
+      <input name="owner_id" type="number" placeholder="${esc(idLabel)}" required>
+      <input type="file" name="file" accept="image/png,image/jpeg,image/gif,image/webp,application/pdf" required>
+      <button>上传</button></form>` : ""}
+    <form class="inline" id="${prefix}-att-query">
+      <input name="owner_id" type="number" placeholder="${esc(idLabel)}" required>
+      <button>查附件</button></form>
+    <p class="msg" id="${prefix}-att-msg"></p><div id="${prefix}-att-list"></div>`);
+}
+
+function bindAttachmentPanel(ownerType, prefix) {
+  const list = `#${prefix}-att-list`;
+  const msg = `#${prefix}-att-msg`;
+  const form = $(`#${prefix}-att-form`);
+  if (form) form.onsubmit = async (e) => {
+    e.preventDefault();
+    const ownerId = new FormData(e.target).get("owner_id");
+    try {
+      await uploadAttachment(ownerType, ownerId, e.target.querySelector("input[type=file]"));
+      setMsg(msg, "附件已上传");
+      await drawAttachments(ownerType, ownerId, list, msg);
+    } catch (err) { setMsg(msg, err.message, false); }
+  };
+  $(`#${prefix}-att-query`).onsubmit = async (e) => {
+    e.preventDefault();
+    try { await drawAttachments(ownerType, new FormData(e.target).get("owner_id"), list, msg); }
+    catch (err) { setMsg(msg, err.message, false); }
+  };
+}
+
 async function renderEmergency() {
   $("#page-desc").textContent = "呼救调度→转运（生命体征回传）→到院→收治，上车即入院；到院后判定抢救转归";
   const cases = await api("/api/emergency/cases");
