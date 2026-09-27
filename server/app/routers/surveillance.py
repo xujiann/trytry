@@ -60,8 +60,8 @@ class SyndromeIn(BaseModel):
     org_id: int
     syndrome: str = Field(pattern="^(fever|respiratory|diarrhea|rash|jaundice|neuro)$")
     case_count: int = Field(ge=0, le=INT4_MAX)
-    # 0 表示该机构该症候群不设阈值（不参与预警，但仍进趋势）
-    threshold: int = Field(default=0, ge=0, le=INT4_MAX)
+    # 0 表示该机构该症候群不设阈值（不参与预警，但仍进趋势）；**不给表示沿用**（P1-182），见 `_inherited_threshold`
+    threshold: int | None = Field(default=None, ge=0, le=INT4_MAX)
     record_date: DateStr
     note: str = Field(default="", max_length=256)
 
@@ -214,11 +214,29 @@ def report_syndrome(body: SyndromeIn, db: Session = Depends(get_db), user: User 
         },
         values={
             "case_count": body.case_count,
-            "threshold": body.threshold,
+            "threshold": body.threshold if body.threshold is not None
+            else _inherited_threshold(db, body.org_id, body.syndrome, body.record_date),
             "note": body.note,
         },
     )
     return {**_syndrome_out(record), "overwritten": overwritten}
+
+
+def _inherited_threshold(db: Session, org_id: int, syndrome: str, record_date: str) -> int:
+    """上报没给阈值时沿用哪一个（P1-182）：这家机构这个症候群、上报日期不晚于本日期的最近一条（同日补报即当天那条）；
+    这天以前一条都没有，取眼下最新的一条；从没报过即 0（不设阈值）。
+
+    阈值是这家机构对这个症候群的设定（模块口径 1），不是每张日报各填一次的数。原先不给就按 0 存：早上报发热 8 例、
+    阈值 5，进多点触发预警；中午补报成 12 例、没再填阈值，覆盖时阈值成了 0——例数更多，预警反倒没了；页面阈值框又预填 0，
+    不重敲一遍，每次从页面上报都等于关掉这家机构的预警。明确给 0 仍是「不设阈值」。
+    """
+    same = db.query(SyndromeMonitor.threshold).filter(
+        SyndromeMonitor.org_id == org_id, SyndromeMonitor.syndrome == syndrome
+    )
+    newest = (SyndromeMonitor.record_date.desc(), SyndromeMonitor.id.desc())
+    row = same.filter(SyndromeMonitor.record_date <= record_date).order_by(*newest).first() \
+        or same.order_by(*newest).first()
+    return row[0] if row is not None else 0
 
 
 @router.get("/syndromes", response_model=list[SyndromeOut])

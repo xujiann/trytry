@@ -1608,7 +1608,7 @@ async function renderSurveillance() {
         <input name="org_id" type="number" placeholder="机构ID" required>
         <select name="syndrome">${Object.entries(SYN).map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}</select>
         <input name="case_count" type="number" placeholder="例数" required>
-        <input name="threshold" type="number" placeholder="阈值（0=不预警）" value="0">
+        <input name="threshold" type="number" min="0" placeholder="阈值（留空沿用上次，0=不预警）" title="阈值是本机构这个症候群的设定：留空沿用上次上报的，填 0 表示不预警（P1-182）">
         <input name="record_date" placeholder="日期 YYYY-MM-DD" required><button>上报</button></form>
       <p class="msg" id="syn-msg"></p>
       ${table(["机构", "症候群", "例数", "阈值", "日期", "预警"], syndromes.slice(0, 50), (r) =>
