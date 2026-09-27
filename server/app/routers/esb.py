@@ -329,6 +329,13 @@ def enqueue_message(
     鉴权失败 401、停用 403、超出端点分钟限额 429。
     """
     endpoint = _authenticate_endpoint(db, x_esb_endpoint, x_esb_token)
+    # 出站消息的类型编码要放进投递请求头（`X-Esb-Msg-Type`），请求头只收 ASCII（P2-412）：原先照收，投递时 httpx
+    # 抛 UnicodeEncodeError（ValueError 的子类），按失败记一句「'ascii' codec can't encode…」一路重试到死信，这条消息
+    # 永远投不出去。入站消息不投递，照旧不限
+    if endpoint.direction == "outbound" and not body.msg_type.isascii():
+        raise HTTPException(
+            status_code=422, detail="出站消息的类型编码须为 ASCII 字符（投递时放在请求头 X-Esb-Msg-Type 里）"
+        )
     if not _allow(endpoint):
         raise HTTPException(
             status_code=429,
@@ -419,6 +426,10 @@ def _deliver(endpoint: EsbEndpoint, msg_type: str, body: dict) -> str:
     - 响应 2xx 记投递成功（delivered）；非 2xx 与网络异常抛 ValueError，
       由调用方走既有 `_record_failure` 重试/死信机制，不另造一套。
     """
+    # 类型编码进请求头，只能是 ASCII（P2-412）：入队时已拦住出站的，这里兜编排路由步骤转投的入站消息与存量行——
+    # 说清楚为什么投不出去，不再是一句看不懂的「'ascii' codec can't encode…」
+    if not msg_type.isascii():
+        raise ValueError(f"消息类型编码「{msg_type}」含非 ASCII 字符，放不进投递请求头 X-Esb-Msg-Type")
     data = json.dumps(body, ensure_ascii=False).encode("utf-8")
     headers = {"Content-Type": "application/json", "X-Esb-Msg-Type": msg_type}
     if endpoint.secret:
