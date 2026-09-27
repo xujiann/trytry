@@ -240,9 +240,15 @@ def _score(db, section, org_id, period):
     latest_plan = query.order_by(SpdScore.id.desc()).with_entities(SpdScore.plan_id).first()
     if latest_plan is not None:
         query = query.filter(SpdScore.plan_id == latest_plan[0])
-    rows = query.order_by(SpdScore.id.desc()).limit(20).all()
-    return {**_head(section, "table"), "columns": ["对象", "周期", "得分", "排名"],
-            "rows": [[r.object_name, r.period, r.total_score, r.rank] for r in rows]}
+    # 按名次取前 20（P2-638），与卫健工作台的考核排名同一句：原先按写入顺序倒着取最新 20 条——分数是按对象顺序写入、
+    # 写完才排名次，对象多于 20 个时名次最前的几个正好落在截掉的那一截里，列出来的还是倒序
+    total = query.count()
+    rows = query.order_by(SpdScore.rank, SpdScore.id).limit(20).all()
+    out = {**_head(section, "table"), "columns": ["对象", "周期", "得分", "排名"],
+           "rows": [[r.object_name, r.period, r.total_score, r.rank] for r in rows]}
+    if total > len(rows):
+        out["note"] = f"共 {total} 个考核对象，列前 {len(rows)} 名"
+    return out
 
 
 def _screening(db, section, org_id, period):

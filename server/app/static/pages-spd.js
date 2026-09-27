@@ -3458,8 +3458,10 @@ async function renderSpdReport() {
       }
       const sections = (d.content.sections || []).map((s) => {
         if (s.type === "table") {
+          // 截断的表格段带一句「共 N …，列前 M …」（P2-638）：原先截了也不说
           return `<h4>${esc(s.title)}</h4>${table(s.columns || [], s.rows || [],
-            (row) => `<tr>${row.map((v) => `<td>${esc(v)}</td>`).join("")}</tr>`)}`;
+            (row) => `<tr>${row.map((v) => `<td>${esc(v)}</td>`).join("")}</tr>`)}${
+            s.note ? `<p class="desc">${esc(s.note)}</p>` : ""}`;
         }
         if (s.type === "chart") {
           return `<h4>${esc(s.title)}</h4>${barChart(
