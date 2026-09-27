@@ -50,8 +50,6 @@ KNOWN: set[str] = {
     # 「跨机构调阅」「家庭代管授权」（授权链），更正申请里有「注销」（牵涉 P1-107 待裁定）——不是一个表单的事
     "POST /api/consents",
     "POST /api/consents/corrections",
-    # 删除只有接口（页面有启停，没有删）
-    "DELETE /api/dataquality/rules/{rule_id}",
 }
 
 

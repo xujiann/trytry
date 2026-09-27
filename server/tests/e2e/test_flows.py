@@ -2248,6 +2248,12 @@ def test_数据质控规则能在界面上新增_配置写坏由后端说清楚(
         "patients", "required", {"field": "phone"}, "warn"), created
     # 启用即参与扫描：规则汇总与规则库各一行，看规则库那行（带启停按钮）
     expect(page.locator("tr:has(button[data-qctoggle])", has_text="E2EQC1")).to_contain_text("必填项")
+    # P2-564：自建的能删（先确认），内置的只能停用、没有删除按钮
+    expect(page.locator("tr:has(button[data-qctoggle])", has_text="QC001").locator("button[data-qcdel]")).to_have_count(0)
+    with _answers(page, [""]):   # 原生 confirm：点确定
+        page.locator("tr:has(button[data-qctoggle])", has_text="E2EQC1").locator("button[data-qcdel]").click()
+        expect(page.locator("tr:has(button[data-qctoggle])", has_text="E2EQC1")).to_have_count(0)
+    assert all(r["code"] != "E2EQC1" for r in admin_read("/api/dataquality/rules"))
 
 
 def test_消毒供应成本项按批次看得见(page, base_url, admin_call):

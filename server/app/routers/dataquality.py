@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from .. import clock
 from ..concurrency import insert_or_conflict
+from ..data.qc_rules_seed import SEED_QC_RULES
 from ..database import get_db
 from ..deps import get_current_user, require_admin, row_dict
 from ..numtypes import non_finite_path
@@ -49,6 +50,10 @@ RULE_TYPES = {
     "logic": "逻辑校验",
 }
 SEVERITIES = {"error": "错误", "warn": "警告"}
+
+#: 内置规则（种子）的编码。种子「只增不改」、每次启动按编码补缺——内置规则删了，下次启动就按种子原样补回来，
+#: 本地对它的停用与严重度调整也一并丢了。所以内置规则只能停用、不许删（P2-564）
+BUILTIN_RULE_CODES = frozenset(rule["code"] for rule in SEED_QC_RULES)
 
 # 可被质控规则引用的表（target_table → 模型）；新增被检表在此登记即可
 _TABLE_MODELS = {
@@ -605,6 +610,7 @@ def _rule_out(r: QcRule) -> dict:
         "severity": r.severity,
         "severity_name": SEVERITIES.get(r.severity, r.severity),
         "active": r.active,
+        "builtin": r.code in BUILTIN_RULE_CODES,
     }
 
 
@@ -622,6 +628,8 @@ class QcRuleOut(BaseModel):
     severity: str
     severity_name: str
     active: bool
+    #: 内置规则（种子）：只能停用、不能删（P2-564）
+    builtin: bool
 
 
 @router.get("/rules", response_model=list[QcRuleOut])
@@ -679,6 +687,9 @@ def delete_rule(rule_id: int, db: Session = Depends(get_db)):
     rule = db.get(QcRule, rule_id)
     if rule is None:
         raise HTTPException(status_code=404, detail="规则不存在")
+    if rule.code in BUILTIN_RULE_CODES:
+        # 原先照删、回 200：下次启动种子按编码补回来，删了等于没删，本地的停用与严重度调整反倒丢了（P2-564）
+        raise HTTPException(status_code=409, detail="内置规则不能删除（删了下次启动会按种子补回），不用请停用")
     db.delete(rule)
     db.commit()
     return {"deleted": rule_id}

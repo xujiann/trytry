@@ -33,9 +33,10 @@ def admin(client):
     return {"Authorization": f"Bearer {resp.json()['access_token']}"}
 
 
+#: builtin：内置规则（种子）只能停用、不能删（P2-564，只加字段）
 RULE_KEY_ORDER = [
     "id", "code", "name", "target_table", "rule_type", "rule_type_name",
-    "config", "severity", "severity_name", "active",
+    "config", "severity", "severity_name", "active", "builtin",
 ]
 #: skipped_rules：配置写坏、本次没扫的规则（P2-81，只加字段）；种子规则都过得了校验，恒为空
 RUN_KEY_ORDER = ["total", "error_total", "warn_total", "offset", "limit", "items", "skipped_rules"]
@@ -85,6 +86,7 @@ def test_规则清单_种子行精确形状与键序(client, admin):
         "severity": "error",
         "severity_name": "错误",
         "active": True,
+        "builtin": True,
     }
     assert by_code["QC003"] == {
         "id": by_code["QC003"]["id"],
@@ -97,6 +99,7 @@ def test_规则清单_种子行精确形状与键序(client, admin):
         "severity": "warn",
         "severity_name": "警告",
         "active": True,
+        "builtin": True,
     }
 
 
@@ -206,6 +209,7 @@ def test_规则CRUD回执精确(client, admin):
         "severity": "warn",
         "severity_name": "警告",
         "active": True,
+        "builtin": False,
     }
     patched = client.patch(
         f"/api/dataquality/rules/{body['id']}", json={"severity": "error"}, headers=admin

@@ -12,7 +12,8 @@ config 结构按 rule_type 区分（执行逻辑见 app/routers/dataquality.py�
 - logic      {"check": 命名校验, ...校验参数}                  命名逻辑校验（见 _LOGIC_CHECKS）
 
 落地时应由医共体质控办依据《医院信息互联互通标准化成熟度测评》与本地填报要求，
-经 /api/dataquality/rules 增删调整；停用规则不参与扫描。
+经 /api/dataquality/rules 新增、调整与停用；停用规则不参与扫描。本文件里的内置规则只能停用、不能删
+（种子每次启动按编码补缺，删了会原样补回，P2-564）；自建的规则可以删。
 """
 
 SEED_QC_RULES = [

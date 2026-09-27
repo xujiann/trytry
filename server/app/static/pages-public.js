@@ -706,7 +706,7 @@ async function renderDataQuality() {
         <td>${esc(r.rule_type_name)}</td><td>${esc(r.table)}</td><td><span class="tag ${color}">${esc(text)}</span></td>
         <td>${r.violations ? `<span class="tag ${color}">${r.violations}</span>` : 0}</td></tr>`;
     })}`)}
-    ${panel("规则库（管理员可新增、停用/启用与调整严重度）", `
+    ${panel("规则库（管理员可新增、停用/启用、调整严重度，自建规则可删除）", `
       ${canRule ? `<form class="inline" id="qc-rule-form" style="margin-bottom:8px">
         <input name="code" placeholder="规则编码" required style="width:100px">
         <input name="name" placeholder="规则名称" required style="min-width:200px">
@@ -719,11 +719,15 @@ async function renderDataQuality() {
         <button>新增规则</button>
       </form><p class="msg" id="qc-rule-msg"></p>` : ""}
       ${table(["编码", "名称", "类型", "被检表", "严重度", "状态", "操作"], rules, (r) => {
-        return `<tr><td><span class="tag">${esc(r.code)}</span></td><td>${esc(r.name)}</td><td>${esc(r.rule_type_name)}</td>
+        // 操作按钮只给管理员（后端三个写接口都是 require_admin，别的角色点了只会 403）；
+        // 删除只给自建规则——内置规则删了下次启动会按种子补回，只能停用（P2-564）
+        return `<tr><td><span class="tag">${esc(r.code)}</span>${r.builtin ? ' <span class="tag">内置</span>' : ""}</td>
+          <td>${esc(r.name)}</td><td>${esc(r.rule_type_name)}</td>
           <td>${esc(r.target_table)}</td><td>${statusTag(QC_SEVERITY, r.severity)}</td>
           <td>${r.active ? '<span class="tag green">启用</span>' : '<span class="tag">停用</span>'}</td>
-          <td><button class="btn secondary" data-qctoggle="${r.id}" data-active="${r.active ? 1 : 0}">${r.active ? "停用" : "启用"}</button>
-            <button class="btn secondary" data-qcsev="${r.id}" data-sev="${esc(r.severity)}">切换严重度</button></td></tr>`;
+          <td>${canRule ? `<button class="btn secondary" data-qctoggle="${r.id}" data-active="${r.active ? 1 : 0}">${r.active ? "停用" : "启用"}</button>
+            <button class="btn secondary" data-qcsev="${r.id}" data-sev="${esc(r.severity)}">切换严重度</button>${r.builtin ? ""
+              : ` <button class="btn secondary" data-qcdel="${r.id}" data-code="${esc(r.code)}">删除</button>`}` : "—"}</td></tr>`;
       })}`)}`;
   // 规则库原先只能启停、切严重度，不能新增（P2-93 动词级孤儿）；种子 docstring 写着「落地时由质控办经接口增删调整」
   const ruleForm = $("#qc-rule-form");
@@ -750,9 +754,14 @@ async function renderDataQuality() {
     catch (err) { setMsg("#qc-msg", err.message, false); }
   };
   $("#page-body").onclick = async (e) => {
-    const { qctoggle, active, qcsev, sev } = e.target.dataset;
+    const { qctoggle, active, qcsev, sev, qcdel, code } = e.target.dataset;
     try {
-      if (qctoggle) {
+      if (qcdel) {
+        // 删了就没了（违规明细按规则现扫，不留历史）；只是暂时不想扫的，用「停用」
+        if (!confirm(`删除规则 ${code}？删除后不可恢复；只是暂时不扫请用「停用」。`)) return;
+        await api(`/api/dataquality/rules/${qcdel}`, { method: "DELETE" });
+        route();
+      } else if (qctoggle) {
         await api(`/api/dataquality/rules/${qctoggle}`, { method: "PATCH", body: JSON.stringify({ active: active !== "1" }) });
         route();
       } else if (qcsev) {
