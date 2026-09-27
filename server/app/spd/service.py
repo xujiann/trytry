@@ -1126,6 +1126,9 @@ ENROLL_STATUS_LABELS = {
     "dead": "已死亡", "lost": "脱管", "recalled": "召回中", "completed": "已结案",
 }
 
+#: 服务包绑定（`spd_package_bindings.status`）的中文：居民端首页的服务包照它显示（P2-557）
+PACKAGE_BINDING_STATUS_NAMES = {"bound": "绑定中", "unbound": "已解绑"}
+
 #: `risk_level` → 中文（成员端四级危险分层）。**不与平台的 1/2/3 互相映射**：
 #: 那是控制情况、这是并发症风险，两把尺子量的不是同一件事。
 _RISK_LABELS = {"low": "低危", "mid": "中危", "high": "高危", "very_high": "极高危"}

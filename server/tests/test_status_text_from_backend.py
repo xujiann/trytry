@@ -347,7 +347,7 @@ def _label_tables():
                             Voucher, WorkflowInstance)
     from app.models import AccountSubject, ChargeItem, Course, Department, OfficialDoc, Organization, SimulationCase
     from app.models import (Encounter, SpdAssessPlan, SpdDataSource, SpdEduMaterial, SpdEnrollment, SpdGroup,
-                            SpdMeasurement, SpdPathNode, SpdScreening, SpdTag, SpdTeam)
+                            SpdMeasurement, SpdPackageBinding, SpdPathNode, SpdScreening, SpdTag, SpdTeam)
     from app.models import LoginLog, ShiftHandover
     from app.spd import service
     from app.spd.routers import assess, population
@@ -425,6 +425,7 @@ def _label_tables():
         "service.MEASUREMENT_SOURCE_NAMES": (service.MEASUREMENT_SOURCE_NAMES, SpdMeasurement, "source", set()),
         # P2-527：迁入确认的 409 文案也用这张表（原先是 service 里的私有表）
         "service.ENROLL_STATUS_LABELS": (service.ENROLL_STATUS_LABELS, SpdEnrollment, "status", set()),
+        "service.PACKAGE_BINDING_STATUS_NAMES": (service.PACKAGE_BINDING_STATUS_NAMES, SpdPackageBinding, "status", set()),
         "service.MEDIA_TYPE_NAMES": (service.MEDIA_TYPE_NAMES, SpdEduMaterial, "media_type", set()),
         "scales.TAG_CATEGORY_NAMES": (scales.TAG_CATEGORY_NAMES, SpdTag, "category", set()),
         "population.SCREENING_SOURCE_NAMES": (population.SCREENING_SOURCE_NAMES, SpdScreening, "source", set()),
@@ -467,6 +468,7 @@ LABEL_TABLE_NAMES = [
     "paths.NODE_SERVICE_TYPE_NAMES", "assess.ASSESS_LEVEL_NAMES", "assess.PERIOD_TYPE_NAMES",
     "followup.ENCOUNTER_TYPE_NAMES", "devices.DATA_SOURCE_STATUS_NAMES",
     "users.LOGIN_FAIL_REASON_NAMES", "clinical_docs.SHIFT_NAMES", "service.ENROLL_STATUS_LABELS",
+    "service.PACKAGE_BINDING_STATUS_NAMES",
 ]
 
 

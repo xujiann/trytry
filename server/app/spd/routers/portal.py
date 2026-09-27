@@ -48,8 +48,8 @@ from ..models import (
     SpdTeam,
 )
 from ..rules import is_suspect_risk, score_scale
-from ..service import (FOLLOWUP_OPEN_STATUSES, MEASUREMENT_SOURCE_NAMES, MEDIA_TYPE_NAMES, REFERRAL_STATUS_LABELS,
-                       TASK_OPEN_STATUSES,
+from ..service import (FOLLOWUP_OPEN_STATUSES, MEASUREMENT_SOURCE_NAMES, MEDIA_TYPE_NAMES, PACKAGE_BINDING_STATUS_NAMES,
+                       REFERRAL_STATUS_LABELS, TASK_OPEN_STATUSES,
                        close_followup_record, enrollment_for, judge_measurement, mark_intervention_done,
                        measure_program_for, measure_value_problem, move_task,
                        scale_program_mismatch, scale_unusable, spawn_followup_abnormal_task, unknown_program)
@@ -141,6 +141,9 @@ class SpdHomePackageOut(BaseModel):
     # 恒为 float：`used / total * 100` 走真除法，无服务项时字面量 0.0
     progress: float
     period_end: str
+    # 当前与历史的都列（P2-557）：绑定中的在前，已解绑的、档案已结案的也在
+    status: str
+    status_name: str
 
 
 class SpdHomeOut(BaseModel):
@@ -192,28 +195,33 @@ def home(
                               "measured_at": row.measured_at.isoformat()}
 
     today = clock.today().isoformat()
+    # 服务包列当前与历史的（P2-557，需求对照表居民端 #20「查看当前及历史服务包」）：原先只列在管档案上绑定中的——档案结案、
+    # 包被解绑之后居民端就看不到了，医护端那边的绑定记录照旧在。绑定中的在前
+    program_of = {
+        e.id: e.program_code
+        for e in db.query(SpdEnrollment).filter(SpdEnrollment.patient_id == patient.id)
+    }
     packages = []
-    for enrollment in enrollments:
-        for binding in (
-            db.query(SpdPackageBinding)
-            .filter(
-                SpdPackageBinding.enrollment_id == enrollment.id,
-                SpdPackageBinding.status == "bound",
-            )
-            .all()
-        ):
-            items = binding.items or []
-            total = sum(int(i.get("total", 0)) for i in items)
-            used = sum(int(i.get("used", 0)) for i in items)
-            package = db.get(SpdServicePackage, binding.package_id)
-            packages.append({
-                "binding_id": binding.id,
-                "name": package.name if package else "",
-                "program_code": enrollment.program_code,
-                "total": total, "used": used,
-                "progress": round(used / total * 100, 1) if total else 0.0,
-                "period_end": binding.period_end,
-            })
+    for binding in (
+        db.query(SpdPackageBinding)
+        .filter(SpdPackageBinding.enrollment_id.in_(list(program_of) or [0]))
+        .order_by(SpdPackageBinding.status != "bound", SpdPackageBinding.id.desc())
+        .all()
+    ):
+        items = binding.items or []
+        total = sum(int(i.get("total", 0)) for i in items)
+        used = sum(int(i.get("used", 0)) for i in items)
+        package = db.get(SpdServicePackage, binding.package_id)
+        packages.append({
+            "binding_id": binding.id,
+            "name": package.name if package else "",
+            "program_code": program_of[binding.enrollment_id],
+            "total": total, "used": used,
+            "progress": round(used / total * 100, 1) if total else 0.0,
+            "period_end": binding.period_end,
+            "status": binding.status,
+            "status_name": PACKAGE_BINDING_STATUS_NAMES.get(binding.status, binding.status),
+        })
 
     return {
         "patient": {"id": patient.id, "name": patient.name, "gender": patient.gender,

@@ -656,6 +656,7 @@ class SpdPackageBinding(Base):
     package_id: Mapped[int] = mapped_column(ForeignKey("spd_service_packages.id"), index=True)
     # [{"code":"bp_check","name":"血压测量","total":12,"used":3}]
     items: Mapped[list] = mapped_column(JSON, default=list)
+    # bound=绑定中, unbound=已解绑（文案表 service.PACKAGE_BINDING_STATUS_NAMES）
     status: Mapped[str] = mapped_column(String(16), default="bound", index=True)
     bound_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     unbound_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

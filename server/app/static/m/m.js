@@ -1266,6 +1266,7 @@ async function renderSpdHome(box) {
     ${kv("下次随访", esc(p.next_followup_at || "—"))}</div>`).join("");
   const packages = home.packages.map((p) => `<div class="m-card">
     ${kv("服务包", esc(p.name))}
+    ${kv("状态", `<span class="tag ${p.status === "bound" ? "green" : ""}">${esc(p.status_name)}</span>`)}
     ${kv("完成进度", `${p.used}/${p.total}（${p.progress}%）`)}
     ${kv("有效期至", esc(p.period_end || "—"))}</div>`).join("");
   box.innerHTML = `
