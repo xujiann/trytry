@@ -75,6 +75,7 @@ def _rows() -> list[tuple[str, str, str, str]]:
     import test_status_vocabulary as statusvocab
     import test_frontend_destructive_confirm_guard as destructive
     import test_frontend_fetch_error_detail as fetcherr
+    import test_modal_submit_ratchet as modalsubmit
     import test_frontend_api_calls_resolve as apicalls
     import test_filter_ids_not_truncated as truncids
     import test_list_pagination_ratchet as pagination
@@ -356,6 +357,8 @@ def _rows() -> list[tuple[str, str, str, str]]:
          "tests/test_frontend_fetch_error_detail.py"),
         ("功能完善", "直接 fetch 的失败分支按设计不报后端原话（逐条写明理由）", len(fetcherr.EXEMPT),
          "tests/test_frontend_fetch_error_detail.py"),
+        ("功能完善", "带多行文本、还是「点确定就关框」的模态框（422 后填的内容要重填，P2-607；妇幼页 5 张已迁成框内提交）",
+         len(modalsubmit.KNOWN), "tests/test_modal_submit_ratchet.py"),
     ]
 
 

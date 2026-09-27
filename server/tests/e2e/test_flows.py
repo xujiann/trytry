@@ -218,6 +218,12 @@ def _spd_modal(page, values):
     结尾必须等表单消失——遮罩是 `position:fixed;inset:0`，留在页面上会让后续
     任何点击都超时，而报错指向的是被拦住的那个元素，不是这里。
     """
+    form = _fill_spd_modal(page, values)
+    form.locator("button[type=submit]").click()
+    expect(form).to_have_count(0)
+
+
+def _fill_spd_modal(page, values):
     form = page.locator("form.panel:has(button[data-cancel])")
     expect(form).to_be_visible()
     for name, value in values.items():
@@ -226,8 +232,19 @@ def _spd_modal(page, values):
             field.select_option(value)
         else:
             field.fill(value)
+    return form
+
+
+def _spd_modal_rejected(page, values):
+    """应答一张由框自己提交（`spdModal` 的 `submit`，P2-607）、这次会被后端拒收的模态框：填值 → 确定 → 等框内出现报错。
+
+    框不关、填的值都在——返回表单，调用方断言报错与保留下来的值，再用 `_spd_modal` 改几项交一次（它会等框关掉）。
+    """
+    form = _fill_spd_modal(page, values)
     form.locator("button[type=submit]").click()
-    expect(form).to_have_count(0)
+    expect(form.locator("[data-modal-msg]")).not_to_have_text("")
+    expect(form.locator("button[type=submit]")).to_be_enabled()
+    return form
 
 
 def _open_page(page, page_id, title):
@@ -3565,12 +3582,15 @@ def test_妇幼页的访视分娩新筛都在页内表单里录入(page, base_ur
     page.fill("#child-form input[name=birth_date]", "2026-09-22")
     _submit(page, "#child-form button")
 
-    # 体重写成中文：此前 Number() 得到 NaN、序列化成 null，值被悄悄丢掉也不报错
+    # 体重写成中文：此前 Number() 得到 NaN、序列化成 null，值被悄悄丢掉也不报错。写错时框不关（P2-607）：报错写在框里、
+    # 已填的身长与备注都还在，只改体重再交——原先框一关、报错落到页面消息行，要重新点开从头再填
     page.click("button[data-cvisit]")
-    _spd_modal(page, {"visit_type": "newborn", "weight_kg": "三点五"})
-    expect(page.locator("#mat-msg")).to_contain_text("weight_kg")
-    page.click("button[data-cvisit]")
-    _spd_modal(page, {"visit_type": "newborn", "height_cm": "50.5", "weight_kg": "3.4"})
+    form = _spd_modal_rejected(page, {"visit_type": "newborn", "height_cm": "50.5", "weight_kg": "三点五",
+                                      "note": "E2E 新生儿访视备注"})
+    expect(form.locator("[data-modal-msg]")).to_contain_text("weight_kg")
+    expect(form.locator('[name="height_cm"]')).to_have_value("50.5")
+    expect(form.locator('[name="note"]')).to_have_value("E2E 新生儿访视备注")
+    _spd_modal(page, {"weight_kg": "3.4"})
     expect(page.locator("#mat-msg")).to_have_text("")  # 成功即整页重画，报错行清空
 
     page.click("button[data-screen]")

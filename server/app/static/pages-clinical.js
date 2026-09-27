@@ -1275,7 +1275,9 @@ async function renderMaternal() {
     const d = e.target.dataset;
     // P2-38：原先是浏览器原生弹窗连问（访视三连、分娩四连、新筛输序号再加确认框），录不了多字段、
     // 输错也没有提示。换成页内表单，顺带把后端早就收、页面一直没入口的字段补上：
-    // 产检孕周、新生儿数、儿童身高体重、各处备注。日期写错时 422 的人话经 errorText 落到 #mat-msg。
+    // 产检孕周、新生儿数、儿童身高体重、各处备注。
+    // P2-607：带填写内容的几张框由框自己提交（spdModal 的 submit）——422 的人话写在框里、框不关、填的都在，改了再交；
+    // 原先点确定就关框、报错落到 #mat-msg，访视备注、分娩结局写了一大段也要从头再填。
     // 留空发 null；认不出的原样发给后端，让它 422 出人话——Number() 得到 NaN、
     // JSON.stringify 又会把 NaN 变成 null，值就被悄悄丢掉了
     const numOrNull = (v) => (v === "" || v == null ? null : Number.isNaN(Number(v)) ? v : Number(v));
@@ -1287,10 +1289,10 @@ async function renderMaternal() {
         { name: "bp", label: "血压（收缩压 ≥140 自动标记高危）", placeholder: "如 120/80" },
         { name: "visit_date", label: "访视日期（可空）", placeholder: "YYYY-MM-DD" },
         { name: "note", label: "备注", type: "textarea" },
-      ]);
-      if (!v) return;
-      return postAction(`/api/maternal/records/${d.visit}/visits`,
-        { ...v, gest_week: numOrNull(v.gest_week) }, "#mat-msg");
+      ], { submit: (v) => api(`/api/maternal/records/${d.visit}/visits`, { method: "POST",
+        body: JSON.stringify({ ...v, gest_week: numOrNull(v.gest_week) }) }) });
+      if (v) route();
+      return;
     }
     if (d.delivery) {
       const v = await spdModal("分娩登记", [
@@ -1301,10 +1303,10 @@ async function renderMaternal() {
           { value: "natural", label: "顺产" }, { value: "cesarean", label: "剖宫产" }] },
         { name: "newborn_count", label: "新生儿数", type: "number", value: 1 },
         { name: "outcome", label: "分娩结局", type: "textarea" },
-      ]);
-      if (!v) return;
-      return postAction(`/api/maternal/records/${d.delivery}/delivery`,
-        { ...v, org_id: Number(v.org_id), newborn_count: v.newborn_count || 1 }, "#mat-msg");
+      ], { submit: (v) => api(`/api/maternal/records/${d.delivery}/delivery`, { method: "POST",
+        body: JSON.stringify({ ...v, org_id: Number(v.org_id), newborn_count: v.newborn_count || 1 }) }) });
+      if (v) route();
+      return;
     }
     if (d.close) {
       // P2-43：原先点一下就结案；页面上没有重开入口
@@ -1320,10 +1322,10 @@ async function renderMaternal() {
         { name: "weight_kg", label: "体重（kg）", placeholder: "如 3.5" },
         { name: "visit_date", label: "访视日期（可空）", placeholder: "YYYY-MM-DD" },
         { name: "note", label: "备注", type: "textarea" },
-      ]);
-      if (!v) return;
-      return postAction(`/api/maternal/children/${d.cvisit}/visits`,
-        { ...v, height_cm: numOrNull(v.height_cm), weight_kg: numOrNull(v.weight_kg) }, "#mat-msg");
+      ], { submit: (v) => api(`/api/maternal/children/${d.cvisit}/visits`, { method: "POST",
+        body: JSON.stringify({ ...v, height_cm: numOrNull(v.height_cm), weight_kg: numOrNull(v.weight_kg) }) }) });
+      if (v) route();
+      return;
     }
     if (d.screen) {
       const v = await spdModal("新生儿筛查登记", [
@@ -1333,9 +1335,10 @@ async function renderMaternal() {
           { value: "normal", label: "正常" }, { value: "abnormal", label: "异常/可疑" }] },
         { name: "screen_date", label: "筛查日期（可空）", placeholder: "YYYY-MM-DD" },
         { name: "note", label: "备注", type: "textarea" },
-      ]);
-      if (!v) return;
-      return postAction(`/api/maternal/children/${d.screen}/screenings`, v, "#mat-msg");
+      ], { submit: (v) => api(`/api/maternal/children/${d.screen}/screenings`, { method: "POST",
+        body: JSON.stringify(v) }) });
+      if (v) route();
+      return;
     }
     if (d.shist) {
       try {
@@ -1350,13 +1353,14 @@ async function renderMaternal() {
     }
     if (d.hrtoggle) {
       const toHigh = d.cur !== "true";
-      let note = "";
-      if (toHigh) {
-        const v = await spdModal("标记高危儿", [{ name: "risk_note", label: "高危原因", type: "textarea" }]);
-        if (!v) return;
-        note = v.risk_note || "人工标记";
+      if (!toHigh) {
+        return postAction(`/api/maternal/children/${d.hrtoggle}/high-risk`, { high_risk: false, risk_note: "" }, "#mat-msg");
       }
-      return postAction(`/api/maternal/children/${d.hrtoggle}/high-risk`, { high_risk: toHigh, risk_note: note }, "#mat-msg");
+      const ok = await spdModal("标记高危儿", [{ name: "risk_note", label: "高危原因", type: "textarea" }], {
+        submit: (v) => api(`/api/maternal/children/${d.hrtoggle}/high-risk`, { method: "POST",
+          body: JSON.stringify({ high_risk: true, risk_note: v.risk_note || "人工标记" }) }) });
+      if (ok) route();
+      return;
     }
   };
   await drawPrenatalScreenings();  // 块4㉔ 产前筛查与诊断
