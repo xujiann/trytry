@@ -660,7 +660,11 @@ class SpdPackageBinding(Base):
     status: Mapped[str] = mapped_column(String(16), default="bound", index=True)
     bound_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     unbound_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # 「有效期至」= 纳管档案的服务起始日 + 有效天数 − 1；没填起始日的为空串
     period_end: Mapped[str] = mapped_column(String(10), default="")
+    # 绑包那一刻服务包的有效天数（快照，P2-576）：改服务起始日时按它重算「有效期至」，包后来改了天数不影响已绑的。
+    # 0 = 本列上线前绑的，天数未知——有效期保持绑包时算的那个值（补录见迁移 1b10d2f72426 的说明）
+    period_days: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 

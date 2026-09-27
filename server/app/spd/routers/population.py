@@ -1195,12 +1195,15 @@ def update_enrollment(
     if {"service_start", "service_end"} & changes.keys():
         _check_service_window(changes.get("service_start", enrollment.service_start),
                               changes.get("service_end", enrollment.service_end))
+    old_start = enrollment.service_start
     for key, value in changes.items():
         setattr(enrollment, key, value)
     # 建档完整性：三项关键信息任一有值即视为已建档（成员端 #20 的"建档纳管衔接"）
     enrollment.archived = bool(
         enrollment.habits or enrollment.risk_factors or enrollment.complications
     )
+    if enrollment.service_start != old_start:   # 在绑服务包的有效期跟着起始日走（P2-576）
+        _follow_service_start(db, enrollment, old_start)
     db.commit()
     return _enroll_out(enrollment)
 
@@ -1731,6 +1734,46 @@ def _usable_package(db: Session, package_id: int, program_code: str) -> SpdServi
     return package
 
 
+def _package_period_end(service_start: str, period_days: int) -> str:
+    """服务包的「有效期至」：最后能用的那一天——N 天的包从服务起始日算，到第 N 天为止（P2-547）。原先起始 + N，
+    居民端写的「有效期至」多出一天；平台「有效期至」都是这个口径（中药批次 P2-165：N 个月后那一天的前一天）。
+
+    没填起始日、起始日是存量里写坏的、天数未知（0）的，一律空串（页面显示「—」）：不拿别的日子去猜。
+    """
+    if not service_start or period_days <= 0:
+        return ""
+    try:
+        return (date.fromisoformat(service_start) + timedelta(days=period_days - 1)).isoformat()
+    except ValueError:
+        return ""
+
+
+def _follow_service_start(db: Session, enrollment: SpdEnrollment, old_start: str) -> None:
+    """改了服务起始日（`enrollment.service_start` 已是新值），在绑服务包的「有效期至」按绑包时快照的天数重算（P2-576）。
+
+    原先有效期只在绑包那一刻算一次：绑包时没填起始日的一直是空的，事后补填、更正起始日都不跟着变。解绑了的是历史，
+    不动；快照天数为 0 的是快照列上线前绑的，天数未知，保持原值（补录见迁移 1b10d2f72426）。
+
+    起始日这一列按读到的旧值条件写：两人同时改同一份档案的起始日，后到的一路改到 0 行、整单 409——否则两路各按
+    自己的起始日重算，档案上的起始日与服务包的有效期可能对不上。`enrollment` 身上已挂着新起始日（未落库）：条件写之前
+    不许自动 flush，否则先写进去的是自己的新值，条件永远不成立（与会话的 autoflush 配置无关，这里显式关掉）。
+    """
+    with db.no_autoflush:
+        moved = move_row(db, SpdEnrollment, enrollment.id, SpdEnrollment.service_start == old_start,
+                         service_start=enrollment.service_start)
+    if not moved:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="服务起始日刚被别人改过，请刷新后再改")
+    bindings = (
+        db.query(SpdPackageBinding)
+        .filter(SpdPackageBinding.enrollment_id == enrollment.id, SpdPackageBinding.status == "bound",
+                SpdPackageBinding.period_days > 0)
+        .all()
+    )
+    for binding in bindings:
+        binding.period_end = _package_period_end(enrollment.service_start, binding.period_days)
+
+
 def _bind_package(db: Session, enrollment: SpdEnrollment, package_id: int) -> SpdPackageBinding:
     package = _usable_package(db, package_id, enrollment.program_code)
     items = [
@@ -1738,20 +1781,11 @@ def _bind_package(db: Session, enrollment: SpdEnrollment, package_id: int) -> Sp
          "used": 0, "price": i.get("price", 0)}
         for i in package.items or []
     ]
-    period_end = ""
-    if enrollment.service_start:
-        # 「有效期至」是最后能用的那一天：N 天的包从起始日算，到第 N 天为止（P2-547）。原先起始 + N，居民端写的「有效期至」
-        # 多出一天——平台「有效期至」都是这个口径（中药批次 P2-165：N 个月后那一天的前一天）
-        try:
-            period_end = (
-                date.fromisoformat(enrollment.service_start)
-                + timedelta(days=package.period_days - 1)
-            ).isoformat()
-        except ValueError:
-            period_end = ""
+    # 有效天数与项目、次数、单价一样在绑包这一刻快照（P2-576）：之后改服务起始日按它重算有效期，包改了天数不影响已绑的
     binding = SpdPackageBinding(
         enrollment_id=enrollment.id, package_id=package_id, items=items,
-        status="bound", period_end=period_end,
+        status="bound", period_days=package.period_days,
+        period_end=_package_period_end(enrollment.service_start, package.period_days),
     )
     db.add(binding)
     try:

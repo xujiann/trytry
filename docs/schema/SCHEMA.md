@@ -2984,6 +2984,7 @@
 - `bound_at` · DATETIME · NOT NULL
 - `unbound_at` · DATETIME
 - `period_end` · VARCHAR(10) · NOT NULL
+- `period_days` · INTEGER · NOT NULL
 - `created_at` · DATETIME · NOT NULL · index
 - _index_ ix_spd_package_bindings_created_at(created_at)
 - _index_ ix_spd_package_bindings_enrollment_id(enrollment_id)

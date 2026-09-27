@@ -1416,6 +1416,8 @@ async function renderSpdPatients() {
           <option value="high">高危</option><option value="very_high">极高危</option>
         </select>
         <input name="sign_date" placeholder="签约日 YYYY-MM-DD">
+        <input name="service_start" placeholder="服务起始 YYYY-MM-DD">
+        <input name="service_end" placeholder="服务截止 YYYY-MM-DD">
         <button>签约纳管</button>
       </form><p class="msg" id="spd-enroll-msg"></p>
       <form class="inline" id="spd-enroll-filter">
@@ -1611,12 +1613,15 @@ async function renderSpdPatients() {
         { name: "doctor_user_id", label: "主管医生用户ID", type: "number" },
         { name: "manager_user_id", label: "个案管理师用户ID", type: "number" },
         { name: "next_followup_at", label: "下次随访日期 YYYY-MM-DD" },
+        // 服务期可补填、更正（P2-576）：改了起始日，在绑服务包的「有效期至」按绑包时的天数跟着重算
+        { name: "service_start", label: "服务起始日 YYYY-MM-DD" },
+        { name: "service_end", label: "服务截止日 YYYY-MM-DD" },
       ]);
       if (!form) return;
       const body = { risk_level: form.risk_level };
       if (form.stage) body.stage = form.stage;
       for (const k of ["team_id", "doctor_user_id", "manager_user_id"]) if (form[k]) body[k] = form[k];
-      if (form.next_followup_at) body.next_followup_at = form.next_followup_at;
+      for (const k of ["next_followup_at", "service_start", "service_end"]) if (form[k]) body[k] = form[k];
       return postAction(`/api/spd/enrollments/${enrEdit.dataset.enrEdit}`, body, "#spd-enroll-msg", "PATCH");
     }
     if (enrBind) {
