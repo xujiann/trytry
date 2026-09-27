@@ -3994,6 +3994,18 @@ def test_药房批次台账按批号查到那一批_召回回执报召回前的�
     expect(page.locator("#batch-msg")).to_contain_text("退出可用汇总 7 → 0")
 
 
+def test_中心药房的操作表单与召回按角色给(page, base_url, batch_seed):
+    """P2-430：汇总入库只收管理员、批次入库 / 发药 / 退药 / 调拨只收经办 / 药师、召回只收药师 / 管理层，
+    页面原先对谁都摆着——医师打开中心药房，每个按钮点下去都是 403。修后医师只看得到台账与记录。"""
+    _login(page, base_url, "e2e_doctor", "passw0rd1")
+    _open_page(page, "pharmacy", "中心药房")
+    expect(page.locator("#batch-ledger")).to_be_visible()   # 查询类照常给
+    for form in ("#stock-form", "#batch-form", "#dispense-form", "#reverse-form", "#transfer-form"):
+        expect(page.locator(form)).to_have_count(0)
+    expect(page.locator("button[data-recall]")).to_have_count(0)
+    expect(page.locator("button[data-trace]").first).to_be_visible()   # 「发给了谁」是查询，照常给
+
+
 @pytest.fixture(scope="module")
 def vaccine_seed(base_url, seed):
     """一个可用的疫苗批次：接种登记从下拉里选它（P1-154）。"""

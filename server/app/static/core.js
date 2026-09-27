@@ -1777,6 +1777,12 @@ async function renderPharmacy() {
   // 取值真源是 models/pharmacy.py:DrugBatch.status——只有这两个值，
   // 且它只表达"人决定召回"，过没过期是按效期现算的另一回事（见该列的注释）
   const BATCH_STATUS = { normal: ["正常", "green"], recalled: ["已召回", "red"] };
+  // 表单与按钮只给接口收的角色（P2-430）：汇总入库只收管理员（require_admin）；批次入库 / 发药 / 退药 / 调拨只收
+  // 经办 / 药师；召回只收药师 / 管理层——管理员都放行。原先谁打开都摆着，点下去一次 403
+  const role = currentRole();
+  const canStock = role === "admin";
+  const canOperate = ["operator", "pharmacist", "admin"].includes(role);
+  const canRecall = ["pharmacist", "director", "admin"].includes(role);
   const batchTable = (rows) =>
     table(["ID", "机构", "药品", "批号", "效期", "总量/已用", "可用", "不可发", "状态", "操作"], rows, (b) =>
       `<tr><td>${b.id}</td><td>${b.org_id}</td><td>${esc(b.drug_name)}（${esc(b.drug_code)}）</td>
@@ -1784,14 +1790,15 @@ async function renderPharmacy() {
        <td>${b.available}</td><td>${b.blocked_quantity}</td>
        <td>${statusTag(BATCH_STATUS, b.status)}${b.recall_reason
          ? `<br><span class="desc">${esc(b.recall_reason)}</span>` : ""}</td>
-       <td>${b.status === "normal" ? `<button class="btn danger" data-recall="${b.id}">召回</button>` : ""}
+       <td>${b.status === "normal" && canRecall ? `<button class="btn danger" data-recall="${b.id}">召回</button>` : ""}
            <button class="btn" data-trace="${b.id}">发给了谁</button></td></tr>`);
   const DISPENSE_STATUS = { dispensed: ["已发药", "green"], reversed: ["已冲销", "red"] };
   // 第二个面板的外壳**迁不了** `panel()`：它的标题里嵌着一个 `<span>`（缺药预警条数），
   // 而组件会把标题整段 `esc()` 掉，迁过去那个 span 会变成一段转义文本显示出来。
   // 同形状的还有慢病页与 openDrilldown，共 3 处，理由记在 docs/adr/0009 第十三批。
   $("#page-body").innerHTML = `
-    ${panel("入库", `
+    ${canStock || canOperate ? panel("入库", `
+      ${canStock ? `
       <form class="inline" id="stock-form">
         <input name="org_id" type="number" placeholder="机构ID" required>
         <input name="drug_code" placeholder="药品编码" required>
@@ -1800,6 +1807,8 @@ async function renderPharmacy() {
         <input name="threshold" type="number" placeholder="预警阈值（留空不改）" min="0">
         <button>入库</button>
       </form>
+      ` : ""}
+      ${canOperate ? `
       <h3 style="margin-top:14px">按批次入库（批号效期台账）</h3>
       <form class="inline" id="batch-form">
         <input name="org_id" type="number" placeholder="机构ID" required>
@@ -1828,7 +1837,7 @@ async function renderPharmacy() {
         <input name="to_org_id" type="number" placeholder="调入机构ID" required>
         <input name="quantity" type="number" placeholder="数量" required min="1">
         <button>调拨</button>
-      </form><p class="msg" id="pharm-msg"></p>`)}
+      </form>` : ""}<p class="msg" id="pharm-msg"></p>`) : ""}
     <div class="panel"><h3>库存${alerts.length ? `（<span style="color:#c62828">${alerts.length} 项缺药预警</span>）` : ""}</h3>
       ${table(["机构ID", "药品", "数量", "阈值", "状态"], stocks, (s) =>
         `<tr><td>${s.org_id}</td><td>${esc(s.drug_name)}（${esc(s.drug_code)}）</td><td>${s.quantity}</td><td>${s.threshold}</td>
@@ -1859,7 +1868,7 @@ async function renderPharmacy() {
       table(["药品编码", "药品", "近 30 天用量", "当前库存", "建议采购量"], suggestions, (g) =>
         `<tr><td>${esc(g.drug_code)}</td><td>${esc(g.drug_name)}</td><td>${g.usage_30d}</td>
          <td>${g.current_stock}</td><td><b>${g.suggested_quantity}</b></td></tr>`))}`;
-  $("#stock-form").onsubmit = async (e) => {
+  if (canStock) $("#stock-form").onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
     try {
@@ -1871,7 +1880,7 @@ async function renderPharmacy() {
       route();
     } catch (err) { setMsg("#pharm-msg", err.message, false); }
   };
-  $("#batch-form").onsubmit = async (e) => {
+  if (canOperate) $("#batch-form").onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
     try {
@@ -1881,7 +1890,7 @@ async function renderPharmacy() {
       route();
     } catch (err) { setMsg("#pharm-msg", err.message, false); }
   };
-  $("#dispense-form").onsubmit = async (e) => {
+  if (canOperate) $("#dispense-form").onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
     try {
@@ -1890,7 +1899,7 @@ async function renderPharmacy() {
       route();
     } catch (err) { setMsg("#pharm-msg", err.message, false); }
   };
-  $("#reverse-form").onsubmit = async (e) => {
+  if (canOperate) $("#reverse-form").onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
     try {
@@ -1899,7 +1908,7 @@ async function renderPharmacy() {
       route();
     } catch (err) { setMsg("#pharm-msg", err.message, false); }
   };
-  $("#transfer-form").onsubmit = async (e) => {
+  if (canOperate) $("#transfer-form").onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
     try {
