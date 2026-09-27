@@ -365,16 +365,10 @@ KNOWN_UNMIGRATED_SHELLS = {
 MIGRATED = "renderServiceRequests"
 
 
-def _strip_comments(src: str) -> str:
-    """去掉 `//` 行注释**与** `/* */` 块注释。
-
-    比 `_code()` 多去一种：棘轮是按**整个文件**数外壳的，而 `panel()` 的文档注释里
-    就写着一个 `<div class="panel">…` 的示例。示例不是代码，数进去等于给棘轮凭空
-    加一条永远还不掉的账。（`_code()` 不用管这个：它的输入都是从 `function X(` 起切的
-    函数体，函数前面的块注释根本进不来。）
-    """
-    src = re.sub(r"/\*.*?\*/", "", src, flags=re.S)
-    return "\n".join(re.sub(r"//.*$", "", line) for line in src.splitlines())
+# 注释剥离只有一份（P2-649）：原先这里的正则把字符串里的 `/*`（`"image/*,.pdf"`）当块注释开头、一直「注释」到下一个
+# `*/`，再从 `"https://…"` 里的 `//` 截断整行——几十行代码从来没被扫过。`jssrc.strip_comments` 认得出字符串 / 模板 /
+# 正则字面量，块注释换成等量换行、行号不变。
+from jssrc import strip_comments as _strip_comments  # noqa: E402
 
 
 #: **棘轮：全仓库仍然手写的面板外壳**（所在函数 → 条数 → 为什么留着）。只减不增。

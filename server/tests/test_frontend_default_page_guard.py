@@ -24,14 +24,10 @@ import re
 STATIC = os.path.join(os.path.dirname(__file__), "..", "app", "static")
 
 
-def _strip_comments(src: str) -> str:
-    """去掉注释，**保行号**（块注释换等量换行）。
-
-    这次是先写好再改代码的——本轮已经八次栽在「注释不是代码」上，
-    而修 P2-20 的那段注释里就原样写着 `PAGES[1]` / `PAGES[0]` 在讲缺陷。
-    """
-    src = re.sub(r"/\*.*?\*/", lambda m: "\n" * m.group(0).count("\n"), src, flags=re.S)
-    return "\n".join(re.sub(r"//.*$", "", line) for line in src.splitlines())
+# 注释剥离只有一份（P2-649）：原先这里的正则把字符串里的 `/*`（`"image/*,.pdf"`）当块注释开头、一直「注释」到下一个
+# `*/`，再从 `"https://…"` 里的 `//` 截断整行——几十行代码从来没被扫过。`jssrc.strip_comments` 认得出字符串 / 模板 /
+# 正则字面量，块注释换成等量换行、行号不变。
+from jssrc import strip_comments as _strip_comments  # noqa: E402
 
 
 def _read(name: str) -> str:

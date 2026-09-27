@@ -48,14 +48,10 @@ _LOOKUP = re.compile(r"\$\{\s*([A-Za-z_$][\w$]*)\s*\[([^\]\[]{1,60})\]\s*\}")
 _INDEXY = re.compile(r"\d+|[a-z]{1,3}|.*%.*")
 
 
-def _strip_comments(src: str) -> str:
-    """去掉注释，**保行号**（块注释换成等量换行）。
-
-    第一版直接把块注释删掉，于是报出来的行号与原文件差了几十行，
-    照着去看根本对不上。注释不是代码，但注释占的行数是。
-    """
-    src = re.sub(r"/\*.*?\*/", lambda m: "\n" * m.group(0).count("\n"), src, flags=re.S)
-    return "\n".join(re.sub(r"//.*$", "", line) for line in src.splitlines())
+# 注释剥离只有一份（P2-649）：原先这里的正则把字符串里的 `/*`（`"image/*,.pdf"`）当块注释开头、一直「注释」到下一个
+# `*/`，再从 `"https://…"` 里的 `//` 截断整行——几十行代码从来没被扫过。`jssrc.strip_comments` 认得出字符串 / 模板 /
+# 正则字面量，块注释换成等量换行、行号不变。
+from jssrc import strip_comments as _strip_comments  # noqa: E402
 
 
 def bare_map_lookups() -> list[str]:

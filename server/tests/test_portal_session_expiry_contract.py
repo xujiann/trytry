@@ -40,19 +40,10 @@ PORTAL_PY = os.path.join(
 _COPY_PROBES = ("登录状态无效", "请先登录", "已退出登录", "账户不存在")
 
 
-def _strip_comments(src: str) -> str:
-    """去掉 `//` 行注释与 `/* */` 块注释——**注释不是代码**。
-
-    这条不是预防性的：本文件第一版就栽在这儿。修完之后我在 `authApi` 的注释里
-    原样引了旧正则来说明改了什么，于是守卫在**注释里**看见了那几个中文片段，
-    当场判定「又按文案判了」。同一形状本轮已经是第六次
-    （越权扫描漏 `require_admin`、分页棘轮把 docstring 当代码、收口统计漏
-    `assert_patient_visible`、分类漏别名归属列、分类漏局部辅助函数、这次）。
-    仓库里 `test_frontend_panel_component.py:336` 早有同名同实现的helper，
-    也是被同一个坑逼出来的。
-    """
-    src = re.sub(r"/\*.*?\*/", "", src, flags=re.S)
-    return "\n".join(re.sub(r"//.*$", "", line) for line in src.splitlines())
+# 注释剥离只有一份（P2-649）：原先这里的正则把字符串里的 `/*`（`"image/*,.pdf"`）当块注释开头、一直「注释」到下一个
+# `*/`，再从 `"https://…"` 里的 `//` 截断整行——几十行代码从来没被扫过。`jssrc.strip_comments` 认得出字符串 / 模板 /
+# 正则字面量，块注释换成等量换行、行号不变。
+from jssrc import strip_comments as _strip_comments  # noqa: E402
 
 
 def test_居民端不得再按文案判断掉线():

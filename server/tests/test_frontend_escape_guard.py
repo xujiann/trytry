@@ -64,25 +64,10 @@ DESTRUCTURED_FALLBACK = re.compile(
 )
 
 
-def _strip_comments(src: str) -> str:
-    """去掉块注释与整行注释——注释里的字不是代码。
-
-    被自己抓了个现行：`shared.js` 的 `statusTag()` 文档注释里，为了说明"这个组件
-    要替换掉的是什么"而**原样抄了一段有缺陷的写法**，扫描当场把它报成了真缺陷。
-    `test_frontend_chart_escaping.py` 的文件注释里记着同一个坑（注释里的字面
-    `<text>` 标签被正则当成真标签），这里是第二次踩。
-
-    刻意**只**去块注释与整行注释，不做"行内 `//` 到行尾"那种粗暴处理：
-    这是安全守卫，过度剥离会**藏起真缺陷**（比如把含 `://` 的模板字符串截断，
-    后面真正的裸插值就扫不到了）。宁可少剥一点。
-    """
-    # 块注释换成等量换行而不是删掉：删掉会让其后每一行的行号往前错（报错里的
-    # `core.js:763` 实为 845 行，2026-09-24 加属性值那条守卫时撞见）
-    src = re.sub(r"/\*.*?\*/", lambda m: "\n" * m.group(0).count("\n"), src, flags=re.S)
-    return "\n".join(
-        "" if line.lstrip().startswith(("//", "*")) else line
-        for line in src.splitlines()
-    )
+# 注释剥离只有一份（P2-649）：原先这里的正则把字符串里的 `/*`（`"image/*,.pdf"`）当块注释开头、一直「注释」到下一个
+# `*/`，再从 `"https://…"` 里的 `//` 截断整行——几十行代码从来没被扫过。`jssrc.strip_comments` 认得出字符串 / 模板 /
+# 正则字面量，块注释换成等量换行、行号不变。
+from jssrc import strip_comments as _strip_comments  # noqa: E402
 
 
 def _enclosing_block(src: str, start: int) -> str:
