@@ -81,6 +81,9 @@ BLINDSPOT_BY_DESIGN = {
     "education.py:list_live_feedback":
         "远程直播全县开放：任一账号可对结束的直播反馈，直播清单同样不设限；反馈是对讲座的评分与评语。",
     "org_groups.py:groups_of_org": "机构所属分组是组织拓扑：docstring 写明第九轮「明确不设限」（同文件的分组成员见上层）。",
+    "prescriptions.py:list_rule_changes":
+        "审方规则是全县共用的配置（`drug_rules` 没有机构列），规则清单登录即可看；改动记录是同一批规则逐项的改前改后"
+        "与改动人，无患者身份（P2-578）。",
     "publichealth.py:list_actions":
         "突发公卫事件是县级应急指挥：事件表没有机构列、全县协同处置，事件清单同样不设限；处置动作是指挥记录。",
     "rbac.py:role_permissions":
