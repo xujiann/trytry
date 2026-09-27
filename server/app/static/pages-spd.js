@@ -1873,7 +1873,9 @@ function spdTaskActions(t) {
     parts.push(b("data-task-review", "审核"));
     return parts.join(" ");
   }
-  if (t.status === "pending") parts.push(b("data-task-claim", "接收"));
+  // 已超期的也能接收（P2-600）：接收接口收待接收与已超期（TASK_CLAIMABLE_STATUSES），医生手机端早就两种都给；
+  // 原先这里只给待接收——没人接、已超期的任务恰是最该有人去接的
+  if (t.status === "pending" || t.status === "overdue") parts.push(b("data-task-claim", "接收"));
   parts.push(b("data-task-assign", t.assignee_id ? "转派" : "分派"));
   parts.push(b("data-task-submit", "提交"));
   if (t.require_evidence) parts.push(b("data-task-evidence", "上传佐证"));
