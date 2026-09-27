@@ -4370,6 +4370,13 @@ def test_spd_admin_screen_enroll_path_task(page, base_url, spd_seed):
     assert any("首次评估" in (t.get("title") or "") for t in tasks), (
         f"路径实例已建但任务 API 里没有『首次评估』，现有任务：{[t.get('title') for t in tasks]}"
     )
+    # 分派给不存在的责任人（P2-607）：框不关、报错写在框里、写好的备注还在；取消后照常办结
+    page.locator("#spd-task-list tr", has_text="首次评估").locator("[data-task-assign]").click()
+    form = _spd_modal_rejected(page, {"assignee_id": "987654", "note": "E2E 分派说明"})
+    expect(form.locator("[data-modal-msg]")).to_contain_text("责任人")
+    expect(form.locator('[name="note"]')).to_have_value("E2E 分派说明")
+    form.locator("[data-cancel]").click()
+    expect(form).to_have_count(0)
     # 精确点到"首次评估"那一行的办结按钮：任务中心里还躺着 seed 预置的其他任务
     # （按 priority/due/id 排序），拍第一个按钮拍到谁取决于排序细节，太脆。
     page.locator("#spd-task-list tr", has_text="首次评估").locator(

@@ -2298,34 +2298,38 @@ async function renderSpdPath() {
     if (urge) return postAction(`/api/spd/tasks/${urge.dataset.taskUrge}/urge`, null, "#spd-task-msg");
     if (escalate) return postAction(`/api/spd/tasks/${escalate.dataset.taskEscalate}/escalate`, null, "#spd-task-msg");
     if (detail) return showTask(detail.dataset.taskDetail);
+    // 这四张框由框自己提交（P2-607）：责任人写错、状态已变（409）时报错写在框里、框不关，写了一段的说明 / 意见不用重填
     if (assign) {
-      const form = await spdModal("分配 / 转派任务", [
+      const ok = await spdModal("分配 / 转派任务", [
         { name: "assignee_id", label: "责任人用户ID", type: "number", required: true },
         { name: "note", label: "备注（可留空）", type: "textarea" },
-      ]);
-      if (!form || !form.assignee_id) return;
-      return postAction(`/api/spd/tasks/${assign.dataset.taskAssign}/assign`,
-        { assignee_id: form.assignee_id, note: form.note || "" }, "#spd-task-msg");
+      ], { submit: (form) => {
+        if (!form.assignee_id) throw new Error("请填责任人用户ID");
+        return api(`/api/spd/tasks/${assign.dataset.taskAssign}/assign`, { method: "POST",
+          body: JSON.stringify({ assignee_id: form.assignee_id, note: form.note || "" }) });
+      } });
+      if (ok) route();
+      return;
     }
     if (submit) {
-      const form = await spdModal("提交任务", [
+      const ok = await spdModal("提交任务", [
         { name: "note", label: "办理结果 / 说明", type: "textarea" },
         { name: "mode", label: "提交方式", type: "select", value: "final", options: [
           { value: "final", label: "提交审核" }, { value: "draft", label: "保存草稿（状态转办理中）" }] },
-      ]);
-      if (!form) return;
-      return postAction(`/api/spd/tasks/${submit.dataset.taskSubmit}/submit`,
-        { result: { note: form.note || "" }, draft: form.mode === "draft" }, "#spd-task-msg");
+      ], { submit: (form) => api(`/api/spd/tasks/${submit.dataset.taskSubmit}/submit`, { method: "POST",
+        body: JSON.stringify({ result: { note: form.note || "" }, draft: form.mode === "draft" }) }) });
+      if (ok) route();
+      return;
     }
     if (review) {
-      const form = await spdModal("审核任务", [
+      const ok = await spdModal("审核任务", [
         { name: "approved", label: "结论", type: "select", value: "true", options: [
           { value: "true", label: "通过（完成并推进路径）" }, { value: "false", label: "退回（已退回，办理人按意见重新提交）" }] },
         { name: "note", label: "审核意见", type: "textarea" },
-      ]);
-      if (!form) return;
-      return postAction(`/api/spd/tasks/${review.dataset.taskReview}/review`,
-        { approved: form.approved !== "false", note: form.note || "" }, "#spd-task-msg");
+      ], { submit: (form) => api(`/api/spd/tasks/${review.dataset.taskReview}/review`, { method: "POST",
+        body: JSON.stringify({ approved: form.approved !== "false", note: form.note || "" }) }) });
+      if (ok) route();
+      return;
     }
     if (evidence) {
       // 佐证 = 挂在该任务名下的附件（owner_type=spd_task）。上传后用"保存草稿"把附件 id
@@ -2372,12 +2376,12 @@ async function renderSpdPath() {
       return;
     }
     if (done) {
-      const form = await spdModal("办结任务", [
+      const ok = await spdModal("办结任务", [
         { name: "note", label: "办理结果", type: "textarea" },
-      ]);
-      if (!form) return;
-      return postAction(`/api/spd/tasks/${done.dataset.taskDone}/complete`,
-        { result: { note: form.note } }, "#spd-task-msg");
+      ], { submit: (form) => api(`/api/spd/tasks/${done.dataset.taskDone}/complete`, { method: "POST",
+        body: JSON.stringify({ result: { note: form.note } }) }) });
+      if (ok) route();
+      return;
     }
   };
   // 取数放最后：首屏 innerHTML 与全部监听器已在同一个同步块里就位，

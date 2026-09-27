@@ -3,7 +3,7 @@
 `spdModal` 原先的约定是「点确定就关框、把填的值交回调用方」，调用方再发请求：请求被拒（写超了、日期写错、必填
 漏了），报错落在页面的消息行，框早关了——多行的服务记录、处置意见、会诊结论写了一大段，一个 422 全部重填。
 现在 `spdModal(title, fields, {submit})` 由框自己提交：失败留框、报错写在框里、填的都在；成功才关（端到端
-`_spd_modal_rejected` 驱动这一种）。167 处调用点逐页迁移，从多行文本多的页起——妇幼页（5 张）第一批。
+`_spd_modal_rejected` 驱动这一种）。167 处调用点逐页迁移，从多行文本多的页起——妇幼页（5 张）第一批，慢专病任务中心（4 张）第二批。
 
 本文件：带多行文本、却还没给 `submit` 的模态框登记在 `KNOWN`（文件、所在函数、标题），**只减不增**：
 新写一张这样的框即红；迁过的必须从名单划掉（不划也红）。只数带 `type: "textarea"` 的——只有单行字段、选择题的
@@ -17,7 +17,7 @@ from test_frontend_api_calls_resolve import _call_args
 
 STATIC = Path(__file__).resolve().parents[1] / "app" / "static"
 
-#: 带多行文本、还是「点确定就关框」的模态框（2026-09-27 量：妇幼页迁走 5 张后余 51）。只减不增。
+#: 带多行文本、还是「点确定就关框」的模态框（2026-09-27 量：妇幼页迁走 5 张后余 51，任务中心 4 张再迁走后余 47）。只减不增。
 KNOWN: set[tuple[str, str, str]] = {
     ('core.js', 'renderConsultations', '"出具会诊意见"'),
     ('core.js', 'renderContracts', '"记录履约"'),
@@ -58,10 +58,6 @@ KNOWN: set[tuple[str, str, str]] = {
     ('pages-spd.js', 'renderSpdCenter', 'accepted ? "受理服务申请" : "拒绝服务申请"'),
     ('pages-spd.js', 'renderSpdCenter', '"登记召回进度"'),
     ('pages-spd.js', 'renderSpdPatients', '"服务项目扣减登记"'),
-    ('pages-spd.js', 'renderSpdPath', '"分配 / 转派任务"'),
-    ('pages-spd.js', 'renderSpdPath', '"提交任务"'),
-    ('pages-spd.js', 'renderSpdPath', '"审核任务"'),
-    ('pages-spd.js', 'renderSpdPath', '"办结任务"'),
     ('pages-spd.js', 'renderSpdReferral', '"审核通过"'),
     ('pages-spd.js', 'renderSpdReferral', '"退回转诊"'),
     ('pages-spd.js', 'renderSpdReferral', '"下转随访接收"'),
