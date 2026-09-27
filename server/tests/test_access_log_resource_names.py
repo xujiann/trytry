@@ -264,12 +264,26 @@ def test_判据自证():
     assert "spd_journey" in found           # spd 居民端 _patient → accessible_patient → log_resident_access
     assert "death_report_card" in found     # log_patient_access 位置实参
     assert "consent" in found               # scope_patient_list 第 6 个位置实参
-    assert "access_log_view" in found       # AccessLog(...) 直接构造
+    assert "access_log_view" in found       # _write_access_log 位置实参（P2-471 前是 AccessLog(...) 直接构造）
     assert "archive" in found               # 缺省实参取签名默认值（revise_report 没传 resource）
     assert len(found) >= 80, len(found)
     _, basis, _, _ = _collect("basis")
     assert {"self", "delegate"} <= set(basis)   # `"self" if … else "delegate"` 两支都收
     assert {"encounter", "contract", "authorization"} <= set(_basis_returns())
+
+
+def test_判据自证_直接构造AccessLog的字面量照收(monkeypatch):
+    """P2-471 之后 app 里已没有直接构造 AccessLog 的写入点（access_log_view 改走共用底座）——这条推导路径没了现成例子，
+    用一段合成源码自证判据还认得它：以后谁再直接构造一笔，写进去的 resource 照样要有可读名。"""
+    import sys
+
+    real = _trees
+    probe = ast.parse("def probe(db):\n"
+                      "    db.add(AccessLog(user_id=1, patient_id=2, resource='probe_direct', basis='global'))\n")
+    monkeypatch.setattr(sys.modules[__name__], "_trees", lambda: {**real(), APP / "probe.py": probe})
+    _, found, _, unknown = _collect("resource")
+    assert found.get("probe_direct") == ["app/probe.py:2"]
+    assert not [u for u in unknown if u.startswith("app/probe.py")]
 
 
 def test_可读名的取法():

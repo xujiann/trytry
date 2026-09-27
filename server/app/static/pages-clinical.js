@@ -344,6 +344,7 @@ async function renderAccessLogs() {
       <form class="inline" id="al-search">
         <input name="patient_id" placeholder="患者ID">
         <input name="username" placeholder="调阅人账号">
+        <input name="org_id" type="number" placeholder="调阅人所属机构ID">
         <input name="basis" placeholder="依据(encounter/referral/…)">
         <input name="start" placeholder="起 YYYY-MM-DD"><input name="end" placeholder="止 YYYY-MM-DD">
         <button>查询</button></form>

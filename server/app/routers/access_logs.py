@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_date, require_roles, through_day
 from ..models import AccessLog, Organization, Patient, ResidentAccount, User
+from ..visibility import _write_access_log
 from .portal import current_resident, current_resident_patient
 
 router = APIRouter(prefix="/api/access-logs", tags=["敏感读留痕"])
@@ -257,6 +258,9 @@ def list_access_logs(
     """
     query = db.query(AccessLog)
     if patient_id is not None:
+        # 与 /stats 同一句（P2-471）：原先照查照回 []，留痕因外键落不了库、还被吞掉，查了一个不存在的编号谁也不知道
+        if db.get(Patient, patient_id) is None:
+            raise HTTPException(status_code=404, detail="患者不存在")
         query = query.filter(AccessLog.patient_id == patient_id)
     if username:
         query = query.filter(AccessLog.username == username)
@@ -284,29 +288,12 @@ def list_access_logs(
 
 
 def _log_view(db: Session, user: User, patient_id: int) -> None:
-    """给"查询某患者的调阅记录"这个动作留痕。走独立会话，与读事务解耦
-    （同 visibility._write_access_log 的理由：读接口不该顺带开写事务）。"""
-    from ..clock import now_naive
-    from ..database import SessionLocal
+    """给"查询某患者的调阅记录"这个动作留痕：走共用的留痕底座（独立会话，与读事务解耦）。
 
-    s = SessionLocal()
-    try:
-        s.add(
-            AccessLog(
-                user_id=user.id,
-                username=user.username,
-                org_id=user.org_id,
-                patient_id=patient_id,
-                resource="access_log_view",
-                basis="global",  # 本接口限 director/admin，均为全域角色
-                created_at=now_naive(),
-            )
-        )
-        s.commit()
-    except Exception:  # pragma: no cover - 留痕失败不阻断查询
-        s.rollback()
-    finally:
-        s.close()
+    原先在这里另写了一份，落库失败只回滚、一行日志都不打（P2-471）——共用底座记「调阅留痕写入失败……本条留痕丢失」
+    的错误日志，运维查得到是哪一笔丢了。basis 记 global：本接口限 director/admin，均为全域角色。
+    """
+    _write_access_log(user, patient_id, "access_log_view", "global")
 
 
 @router.get("/mine", response_model=list[AccessLogOut])
