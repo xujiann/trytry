@@ -705,7 +705,8 @@ def import_admissions(db, rows, report: ImportReport, ctx: ImportContext) -> Non
     """住院登记：幂等键 患者+机构+入院日期；病区/床位缺失时幂等自动建。
 
     留空 discharged_at 的行按"在院"导入并占用床位（同床两条在院记录报错）；
-    历史已出院记录不占床。
+    历史已出院记录不占床。同一患者同时只能有一条在院记录（与平台入院登记同一道 `uq_admission_patient_admitted`）：
+    已在院的患者再来一条在院行记进错误行（P2-583）——原先撞唯一索引，整批连同别人的有效行一起回滚、错误明细不落盘。
     """
     by_id_card = _patients_by_id_card(db)
     by_ehc = _patients_by_ehc(db)
@@ -722,6 +723,7 @@ def import_admissions(db, rows, report: ImportReport, ctx: ImportContext) -> Non
             Admission.patient_id, Admission.org_id, Admission.admitted_at
         ).all()
     }
+    in_hospital_patients = {pid for (pid,) in db.query(Admission.patient_id).filter(Admission.status == "admitted")}
     for line_no, row in rows:
         if not _require(row, line_no, report, "org_name", "ward_name", "bed_no", "admitted_at"):
             continue
@@ -745,6 +747,10 @@ def import_admissions(db, rows, report: ImportReport, ctx: ImportContext) -> Non
         if key in existing:
             report.skipped += 1
             continue
+        in_hospital = not discharged_at
+        if in_hospital and patient_id in in_hospital_patients:
+            report.error(line_no, "该患者已有在院记录（同一患者同时只能在院一次，先补出院日期或在平台办出院）", row)
+            continue
         ward_name, bed_no = row["ward_name"].strip(), row["bed_no"].strip()
         ward_id = wards.get((org_id, ward_name))
         if ward_id is None:
@@ -759,7 +765,6 @@ def import_admissions(db, rows, report: ImportReport, ctx: ImportContext) -> Non
             db.flush()
             bed_entry = beds[(ward_id, bed_no)] = (bed.id, "free")
         bed_id, bed_status = bed_entry
-        in_hospital = not discharged_at
         if in_hospital:
             if bed_status == "occupied":
                 report.error(line_no, f"床位已被占用: {ward_name}/{bed_no}（在院记录不可同床）", row)
@@ -784,6 +789,8 @@ def import_admissions(db, rows, report: ImportReport, ctx: ImportContext) -> Non
             )
         )
         existing.add(key)
+        if in_hospital:
+            in_hospital_patients.add(patient_id)
         report.imported += 1
         ctx.checkpoint()
 
