@@ -113,7 +113,8 @@ def issue_referral_cert(
     existing = db.query(ReferralCert).filter(ReferralCert.referral_id == referral_id).first()
     if existing:
         return {"cert_no": existing.cert_no, "referral_id": referral_id}
-    cert = ReferralCert(referral_id=referral_id, cert_no="ZZ" + secrets.token_hex(5).upper())
+    # 签发人落库（P2-524）：原先只有证明号与时间，谁签的库里答不上来；复签幂等返回的是首签那张，签发人随之不变
+    cert = ReferralCert(referral_id=referral_id, cert_no="ZZ" + secrets.token_hex(5).upper(), issued_by=user.id)
     db.add(cert)
     try:
         db.commit()

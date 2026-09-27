@@ -122,6 +122,8 @@ class ReferralCert(Base):
     referral_id: Mapped[int] = mapped_column(ForeignKey("referrals.id"), unique=True)
     cert_no: Mapped[str] = mapped_column(String(32), unique=True)
     issued_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    # 签发人（P2-524，P0-29 残留）：证明是凭证，出了争议要答得上「谁签的」（迁移 0cbfd7d05951；存量不回填）
+    issued_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 

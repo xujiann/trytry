@@ -2190,6 +2190,7 @@
 - `referral_id` · INTEGER · NOT NULL · → referrals.id
 - `cert_no` · VARCHAR(32) · NOT NULL
 - `issued_at` · DATETIME · NOT NULL
+- `issued_by` · INTEGER · → users.id
 - `created_at` · DATETIME · NOT NULL · index
 - _unique_ (cert_no)
 - _unique_ (referral_id)
