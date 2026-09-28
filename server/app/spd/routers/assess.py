@@ -852,6 +852,8 @@ def score_rule_problem(rule: dict, *, known_type_only: bool = True) -> str:
     for step in steps:
         if any(step.get(key) is not None and not _is_number(step[key]) for key in ("min", "max")):
             return "分档的上下限（min / max）必须是数，不设限留空"
+        if step.get("min") is not None and step.get("max") is not None and step["min"] > step["max"]:
+            return f"分档的下限 {step['min']} 大于上限 {step['max']}，这一档永远命中不了"   # P2-712
         if "score" in step and not _is_number(step["score"]):
             return "分档的分值（score）必须是数"
     return ""

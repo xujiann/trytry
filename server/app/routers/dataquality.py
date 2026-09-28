@@ -345,6 +345,17 @@ def _column_type(model, name: str):
         return None
 
 
+def _range_reversed(low, high) -> bool:
+    """区间下限大于上限（两端同为数、或同为文字时才比；布尔不算数）。"""
+    if isinstance(low, bool) or isinstance(high, bool):
+        return False
+    if isinstance(low, (int, float)) and isinstance(high, (int, float)):
+        return low > high
+    if isinstance(low, str) and isinstance(high, str):
+        return low > high
+    return False
+
+
 def rule_config_problem(target_table: str, rule_type: str, config: dict) -> str:
     """规则配置里会让扫描抛错、或让规则悄悄失效的写法，没问题返回空串（P2-81）。
 
@@ -387,6 +398,10 @@ def rule_config_problem(target_table: str, rule_type: str, config: dict) -> str:
                 return f"{field} 是数值列，区间的 {key} 必须是数"
             if kind not in (None, str, int, float):
                 return f"{field} 不是数值或文字列，不能按区间判定"
+        low, high = config.get("min"), config.get("max")
+        if _range_reversed(low, high):
+            # 下限不大于上限（P2-712，与慢专病目标「下限不得大于上限」同一句）：min 300 / max 50 把每一行都判成违规
+            return f"区间下限 {low} 大于上限 {high}，每一行都会判成违规"
     if rule_type == "enum" and not isinstance(config.get("values", []), list):
         return "values 要写成取值列表"
     if rule_type == "cross_ref":

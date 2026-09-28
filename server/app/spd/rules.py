@@ -31,6 +31,7 @@
 """
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from ..numtypes import non_finite_path
@@ -106,6 +107,7 @@ def validate_conditions(conditions: list[dict]) -> list[dict]:
         bad = non_finite_path(raw.get("value"), f"条件 {field} 的 value")
         if bad:
             raise RuleError(f"{bad} 不能是 NaN / Infinity")
+        _check_comparison_value(field, op, raw.get("value"))
         normalized.append(
             {
                 "field": field,
@@ -115,6 +117,23 @@ def validate_conditions(conditions: list[dict]) -> list[dict]:
             }
         )
     return normalized
+
+
+def _check_comparison_value(field: str, op: str, value) -> None:
+    """大小比较与「介于」的比较值读得成数、区间下限不大于上限（P2-712）；NaN / Infinity 由调用方先按 P2-466 报。
+
+    求值按数比、读不成数判不命中，区间按 `low <= 值 <= high` 比——「介于 200,160」「180,」（页面把空段读成 0）
+    「180，abc」（读成 null）、「≥ 18O」（字母 O）都建得成，之后永远不命中，也没有任何报错。读得成数的文本（"180"）
+    照收，与求值同一个读法。
+    """
+    if op == "between":
+        low, high = _finite_number(value[0]), _finite_number(value[1])
+        if low is None or high is None:
+            raise RuleError(f"条件 {field} 的区间两端都必须是数（收到 {value}）")
+        if low > high:
+            raise RuleError(f"条件 {field} 的区间下限 {value[0]} 大于上限 {value[1]}，永远不会命中")
+    elif op in (">", ">=", "<", "<=") and _finite_number(value) is None:
+        raise RuleError(f"条件 {field} 的比较值必须是数（收到 {value!r}）")
 
 
 def as_validated(conditions: list[dict]) -> list[dict]:
@@ -133,6 +152,12 @@ def _as_number(value) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _finite_number(value) -> float | None:
+    """配置时查比较值用：读得成**有限**的数才算（求值同样按 `_as_number` 读；NaN / Infinity 和谁比都不成立）。"""
+    number = _as_number(value)
+    return number if number is not None and math.isfinite(number) else None
 
 
 def _same(actual, expected) -> bool:
@@ -273,6 +298,14 @@ def scale_problem(items: list, scoring: dict) -> str:
     ranges = (scoring or {}).get("ranges", [])
     if not isinstance(ranges, list) or not all(isinstance(rng, dict) for rng in ranges):
         return "评分分段（scoring.ranges）要写成 [{min, max, risk, advice}] 这样的列表"
+    for rng in ranges:   # 下限不大于上限（P2-712）：颠倒的一段永远落不进去，落进缺口的得分记「未分级」（P2-689）
+        low, high = rng.get("min"), rng.get("max")
+        if low is not None and high is not None:
+            low_n, high_n = _finite_number(low), _finite_number(high)
+            if low_n is None or high_n is None:
+                return f"评分分段的上下限必须是数：{low!r} ~ {high!r}"
+            if low_n > high_n:
+                return f"评分分段的下限 {low} 大于上限 {high}，这一段永远落不进去"
     return ""
 
 
