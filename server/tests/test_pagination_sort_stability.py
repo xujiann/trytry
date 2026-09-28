@@ -104,12 +104,37 @@ def _find_order_by(expr: ast.AST, assigns: dict, seen: tuple = ()):
     return None
 
 
+def _module_consts(tree: ast.Module) -> dict:
+    """模块顶层的元组 / 列表常量（`TASK_LIST_ORDER = (X.priority.desc(), X.id.desc())`）。"""
+    consts = {}
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and isinstance(node.value, (ast.Tuple, ast.List)):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    consts[target.id] = node.value
+    return consts
+
+
+def _expand_starred(args: list, consts: dict) -> list:
+    """`order_by(*TASK_LIST_ORDER)`：清单与导出共用一份排序（P2-677）——展开成常量里的各个键再判末位。
+    认不出的星号照旧原样留着，末位判「认不出是哪一列」，不会因此放过。"""
+    out = []
+    for arg in args:
+        if (isinstance(arg, ast.Starred) and isinstance(arg.value, ast.Name)
+                and arg.value.id in consts):
+            out.extend(consts[arg.value.id].elts)
+        else:
+            out.append(arg)
+    return out
+
+
 def paginate_sites() -> list[tuple[str, str, str]]:
     """返回 (站点, 判定, 末位排序键)；判定为 "OK" 之外的都是问题。"""
     models = _models()
     sites: list[tuple[str, str, str]] = []
     for name, path in _router_files():
         tree = ast.parse(open(path, encoding="utf-8").read())
+        consts = _module_consts(tree)
         for fn in [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
             assigns: dict[str, list] = {}
             for node in ast.walk(fn):
@@ -131,6 +156,7 @@ def paginate_sites() -> list[tuple[str, str, str]]:
                 if args is None:
                     sites.append((where, "没有 order_by", ""))
                     continue
+                args = _expand_starred(list(args), consts)
                 last = _unwrap(args[-1])
                 if not (isinstance(last, ast.Attribute) and isinstance(last.value, ast.Name)):
                     sites.append((where, "末位排序键认不出是哪一列", ast.unparse(args[-1])))
@@ -165,6 +191,17 @@ def test_变量里的order_by也要认出来():
         "access_logs.py:my_access_logs"
     )
     assert sites.get("outpatient_docs.py:list_treatments_by_patient") == "OK"
+
+
+def test_模块级排序常量要展开认():
+    """自证：`paginate(query.order_by(*TASK_LIST_ORDER), ...)`（清单与导出共用一份排序，P2-677）要展开常量判末位键。
+    只认字面写在调用点上的，会逼着人把同一份排序抄回两处——那正是 P2-677 修掉的「导出与表格排序各写一份」。"""
+    sites = dict((w, (v, k)) for w, v, k in paginate_sites())
+    assert sites.get("spd/tasks.py:list_tasks") == ("OK", "SpdTask.id"), sites.get("spd/tasks.py:list_tasks")
+    tree = ast.parse("ORDER = (X.a.desc(), X.id)\n")
+    args = ast.parse("q.order_by(*ORDER, *UNKNOWN)", mode="eval").body.args
+    expanded = _expand_starred(list(args), _module_consts(tree))
+    assert [ast.unparse(a) for a in expanded] == ["X.a.desc()", "X.id", "*UNKNOWN"]   # 认不出的原样留着
 
 
 def test_每个分页站点的排序都必须是全序():
