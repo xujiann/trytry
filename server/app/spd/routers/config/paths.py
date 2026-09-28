@@ -145,16 +145,30 @@ def _node_out(n: SpdPathNode) -> dict:
     }
 
 
+def _assert_template_writable(db: Session, user: User, template: SpdPathTemplate | None) -> None:
+    """路径模板的写归属：挂了机构的归该机构；**不挂机构的是病种通用路径**，归病种的
+    牵头机构（P1-59）。原先一律判 `template.org_id`，而它为空时 `assert_org_writable`
+    直接放行——任何机构的医师都能改、发布、复制县医院牵头病种的通用路径。"""
+    if template is None:
+        return
+    owner = template.org_id
+    if owner is None:
+        program = db.get(SpdProgram, template.program_id)
+        owner = program.lead_org_id if program is not None else None
+    assert_org_writable(db, user, owner)
+
+
 @router.post("/path-templates", response_model=PathTemplateOut,
              response_model_exclude_unset=True, status_code=201,
              dependencies=[Depends(require_roles(*CONFIG_ROLES))])
 def create_path_template(
     body: PathTemplateIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
-    if db.get(SpdProgram, body.program_id) is None:
+    program = db.get(SpdProgram, body.program_id)
+    if program is None:
         raise HTTPException(status_code=404, detail="专病档案不存在")
-    if body.org_id is not None:
-        assert_org_writable(db, user, body.org_id)
+    # 挂了机构的是该机构自己的路径；不挂机构的是**病种通用**路径，归病种牵头机构（P1-59）
+    assert_org_writable(db, user, body.org_id if body.org_id is not None else program.lead_org_id)
     template = SpdPathTemplate(**body.model_dump(), created_by=user.username, status="draft")
     db.add(template)
     try:
@@ -221,7 +235,7 @@ def add_path_node(
     template = db.get(SpdPathTemplate, template_id)
     if template is None:
         raise HTTPException(status_code=404, detail="路径模板不存在")
-    assert_org_writable(db, user, template.org_id)
+    _assert_template_writable(db, user, template)
     if template.status == "published":
         # 已发布的模板不允许直接加节点：在跑的实例会突然多出一个没人知道的任务。
         # 要改就复制一版新的，这也是"版本"存在的意义。
@@ -253,7 +267,7 @@ def update_path_node(
     if node is None:
         raise HTTPException(status_code=404, detail="路径节点不存在")
     template = db.get(SpdPathTemplate, node.template_id)
-    assert_org_writable(db, user, template.org_id if template else None)
+    _assert_template_writable(db, user, template)
     if template is not None and template.status == "published":
         raise HTTPException(status_code=409, detail="已发布路径不可直接改节点，请复制新版本后修改")
     allowed = {
@@ -279,7 +293,7 @@ def delete_path_node(
     if node is None:
         raise HTTPException(status_code=404, detail="路径节点不存在")
     template = db.get(SpdPathTemplate, node.template_id)
-    assert_org_writable(db, user, template.org_id if template else None)
+    _assert_template_writable(db, user, template)
     if template is not None and template.status == "published":
         raise HTTPException(status_code=409, detail="已发布路径不可直接删节点，请复制新版本后修改")
     db.delete(node)
@@ -306,7 +320,7 @@ def copy_path_template(
     src = db.get(SpdPathTemplate, template_id)
     if src is None:
         raise HTTPException(status_code=404, detail="路径模板不存在")
-    assert_org_writable(db, user, src.org_id)
+    _assert_template_writable(db, user, src)
     copy = SpdPathTemplate(
         program_id=src.program_id,
         code=body.code or src.code,
@@ -354,7 +368,7 @@ def set_path_status(
     template = db.get(SpdPathTemplate, template_id)
     if template is None:
         raise HTTPException(status_code=404, detail="路径模板不存在")
-    assert_org_writable(db, user, template.org_id)
+    _assert_template_writable(db, user, template)
     if body.status == "published":
         nodes = db.query(SpdPathNode).filter(SpdPathNode.template_id == template_id).all()
         if not nodes:
@@ -383,7 +397,7 @@ def delete_path_template(
     template = db.get(SpdPathTemplate, template_id)
     if template is None:
         raise HTTPException(status_code=404, detail="路径模板不存在")
-    assert_org_writable(db, user, template.org_id)
+    _assert_template_writable(db, user, template)
     used = (
         db.query(SpdPathInstance.id)
         .filter(SpdPathInstance.template_id == template_id)

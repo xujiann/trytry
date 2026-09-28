@@ -15,6 +15,7 @@ from datetime import date, timedelta
 from sqlalchemy.orm import Session
 
 from ..clock import now_naive
+from ..visibility import assert_org_writable
 from ..concurrency import add_amount
 from .platform import diagnosis_codes, diagnosis_names, notify_user, patient_of
 from .models import (
@@ -103,6 +104,17 @@ def program_lead_org(db: Session, program_code: str) -> int | None:
         return None
     program = db.query(SpdProgram).filter(SpdProgram.code == program_code).first()
     return program.lead_org_id if program is not None else None
+
+
+def assert_program_config_writable(db: Session, user, *program_codes: str) -> None:
+    """病种配置的写：每个涉及的病种都须由其牵头机构来改（P1-59）。
+
+    改配置时若请求体里换了 `program_code`，**新旧两个病种都要过**——只判旧的，
+    就能把自己的配置挂到别家牵头的病种下；只判新的，就能把别家的配置挪走。
+    不挂病种（空串）或病种没设牵头机构的，按归属未定放行。
+    """
+    for code in dict.fromkeys(program_codes):
+        assert_org_writable(db, user, program_lead_org(db, code))
 
 
 def target_for(db: Session, program_code: str, stage: str, metric: str) -> SpdTarget | None:

@@ -494,9 +494,8 @@ BYID_CROSS_ORG_OK = {
     # 同样多发生在领取之前。领取之后出报告已按 `claimed_org_id` 判
     "exams.py:claim_request",
     "exams.py:advance_sample",
-    # 取消预约：代约方常是另一家机构（乡镇替患者约县医院的号），而代约方没有落库，
-    # 按号源机构判会让代约的乡镇取消不了自己约的号。到诊核销已按号源机构判
-    "appointments.py:cancel",
+    # （取消预约原在此列：代约方没有落库。P1-59 补了 `booked_org_id`，按代约机构或
+    # 号源机构任一判，转为已防护、删去。）
 }
 
 # 按 id 写、**不按机构判而按更严的口径判**的接口——闸门只认机构守卫，这里逐条写明。
@@ -505,18 +504,6 @@ BYID_GUARDED_OTHERWISE = {
     # 比"本机构任一人"更窄，再加机构守卫是冗余
     "spd/referral.py:withdraw_referral",
 }
-
-
-def _only_global_roles(decorator_src: str) -> bool:
-    """装饰器里的 `require_roles(...)` 是否只列了全域角色（如 `require_roles('director')`）。"""
-    from app.visibility import GLOBAL_ROLES
-    tree = ast.parse(decorator_src)
-    for call in ast.walk(tree):
-        if (isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
-                and call.func.id == "require_roles" and call.args
-                and all(isinstance(a, ast.Constant) for a in call.args)):
-            return {a.value for a in call.args} <= GLOBAL_ROLES
-    return False
 
 
 def _byid_org_write_endpoints():
@@ -549,8 +536,17 @@ def _byid_org_write_endpoints():
             for col in c.__table__.columns for fk in col.foreign_keys
         )
     }
-    direct = direct | one_hop
+    # 按病种编码挂归属的配置表（P1-59）：只挂 `program_code`（字符串，不是外键），
+    # 归属在病种的牵头机构上（`spd/service.program_lead_org`）。只收**配置**——带
+    # `patient_id` 的是业务记录，归属看患者关系而不是病种；带机构列的上面已算过
+    code_keyed = {
+        c.__name__ for c in classes
+        if "program_code" in c.__table__.columns and "patient_id" not in c.__table__.columns
+        and c.__name__ not in direct
+    }
+    direct = direct | one_hop | code_keyed
     guards = {"assert_obj_org_writable", "assert_org_writable", "assert_any_org_writable",
+              "assert_program_config_writable",
               "assert_org_visible",
               "assert_patient_visible", "scope_org_list", "scope_patient_list",
               "log_patient_access"}
@@ -589,12 +585,12 @@ def _byid_org_write_endpoints():
                 continue
             if not any("{" in d for d in decs):
                 continue
-            # 仅全域角色可调的接口：任何机构守卫对 admin/director 都恒放行，
-            # 加了也只是装饰——不算欠账（P1-57/58 研判：`org_groups` 两处、专病目录改路径、
-            # 医保基金池四处 director-only）
-            if any("require_admin" in d for d in decs) or any(
-                _only_global_roles(d) for d in decs
-            ):
+            # 仅 admin 可调的接口：`require_admin` 直接比 `user.role != "admin"`，
+            # 没有自定义角色旁路，而 admin 是全域角色，任何机构守卫对它恒放行——不算欠账。
+            # **`require_roles('director')` 不算**：它会放行被授了该权限点的自定义角色，
+            # 自定义角色不是全域角色（P1-58 一度把它也跳过了，P1-59 收回，理由同
+            # `test_body_org_write_guard` 模块文档第 3 条）
+            if any("require_admin" in d for d in decs):
                 continue
             u = ast.unparse(fn)
             if any(g in u for g in guards):

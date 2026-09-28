@@ -164,6 +164,8 @@ _ORG_VIA_PARENT = {
     # 预约：号源属于哪家机构，这次预约就是哪家在服务他。
     # 不接上的后果很具体：居民在 X 院挂了号、还没就诊（没有 Encounter），
     # 医生叫号时想先看既往档案——打不开。
+    # P1-59 起预约自带 `booked_org_id`（**代约**机构，另一方），它按列名自动进
+    # `_relation_tables()`；号源机构仍只在父行上，这一条不能因此删掉。
     "appointments": ("slot_id", "appointment_slots", "org_id"),
     # 慢专病群组：群组属于哪家机构，把他拉进群就是哪家在管他。
     "spd_group_members": ("group_id", "spd_groups", "org_id"),

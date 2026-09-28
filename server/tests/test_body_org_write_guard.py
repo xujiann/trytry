@@ -64,7 +64,9 @@ ACTING = {"org_id", "from_org_id", "initiator_org_id", "current_org_id",
           # P1-58 新增的两列：急救的调度方、承接的中药房。二者都由服务端从操作人身上取、
           # 不收请求体；归进 acting 是 fail-closed——哪天有人把它们开放成入参，
           # 那就是调用方自报"我以哪家的名义在做"，必须校验
-          "dispatch_org_id", "pharmacy_org_id"}
+          "dispatch_org_id", "pharmacy_org_id",
+          # P1-59：预约的代约机构，同样由服务端取自经办人
+          "booked_org_id"}
 #: 「写给谁」——跨机构是业务本身，不能校验
 COUNTERPARTY = {
     "to_org_id": "转诊/会诊/调拨的接收方，跨机构正是这些业务的全部意义",
@@ -278,14 +280,40 @@ _P56_OWNED: set[str] = set()
 
 
 def _p56_owned_models() -> set[str]:
-    """带 `org_id` 列的模型名——从元数据推导，新表自动进分母。"""
+    """自带机构归属的模型名——从元数据推导，新表自动进分母。
+
+    P1-59 放宽了两处（原先只认字面 `org_id` 列，于是 `SterilizationBatch.center_org_id`、
+    `OrgGroup.lead_org_id` 这些整族不在视野里）：
+    - 任一列名以 `org_id` 结尾；
+    - **一跳归属**：自己没有机构列、外键指向带机构列的表（里程碑之于项目）。
+      指向机构/用户/患者主数据的外键不算——那是"谁经手/关于谁"，不是归属。
+    按病种编码挂归属的配置表**不收**：新建时引用它们（引用模板、素材、随访方案）
+    是只读引用，不改写配置；它们自己的新建另有一条闸门（见下方 P1-59 段）。
+    """
     if not _P56_OWNED:
-        _P56_OWNED.update(
-            cls.__name__
-            for cls in Base.registry._class_registry.values()
-            if hasattr(cls, "__table__") and "org_id" in cls.__table__.columns
-        )
+        classes = [c for c in Base.registry._class_registry.values() if hasattr(c, "__table__")]
+        by_table = {c.__tablename__: c for c in classes}
+        direct = {
+            c.__name__ for c in classes
+            if any(col.name.endswith("org_id") for col in c.__table__.columns)
+        }
+        master = {"organizations", "users", "patients"}
+        one_hop = {
+            c.__name__ for c in classes
+            if c.__name__ not in direct and any(
+                fk.column.table.name not in master
+                and getattr(by_table.get(fk.column.table.name), "__name__", None) in direct
+                for col in c.__table__.columns for fk in col.foreign_keys
+            )
+        }
+        _P56_OWNED.update(direct | one_hop)
     return _P56_OWNED
+
+
+#: 认作"判过归属"的调用：通用守卫（前两个参数是 db、user），以及同文件里以
+#: `_assert` 开头的专用 helper（按单据自己的双方/当前处理方判，如 `_assert_center`）
+_P56_GUARDS = {"assert_org_writable", "assert_org_visible", "assert_any_org_writable",
+               "assert_obj_org_writable", "assert_program_config_writable"}
 
 
 def _p56_root(node) -> str | None:
@@ -316,39 +344,63 @@ def _p56_scan_function(fn, owned: set[str]) -> list[tuple[str, str | None, int, 
         return None
 
     fetches = []
+    # 父行派生：`parent = db.get(Parent, child.fk)`——判过 parent 就等于判过 child（一跳归属）
+    derived: dict[str, set[str]] = {}
     for n in ast.walk(fn):
         if not isinstance(n, ast.Call) or not isinstance(n.func, ast.Attribute):
             continue
+        if n.func.attr == "get" and len(n.args) == 2 and isinstance(n.args[0], ast.Name):
+            src = _p56_root(n.args[1])
+            name = bound_name(n)
+            if name and src and src not in body_roots:
+                derived.setdefault(name, set()).add(src)
         if (n.func.attr == "get" and len(n.args) == 2 and isinstance(n.args[0], ast.Name)
                 and n.args[0].id in owned and _p56_root(n.args[1]) in body_roots
                 and isinstance(n.args[1], ast.Attribute)):
-            fetches.append((n.args[0].id, bound_name(n), n.lineno, "get"))
+            fetches.append((n.args[0].id, bound_name(n), n.lineno, "get", ast.unparse(n.args[1])))
         elif (n.func.attr == "in_" and isinstance(n.func.value, ast.Attribute)
                 and n.func.value.attr == "id" and isinstance(n.func.value.value, ast.Name)
                 and n.func.value.value.id in owned and n.args and _p56_root(n.args[0]) in body_roots):
-            fetches.append((n.func.value.value.id, bound_name(n), n.lineno, "in_"))
+            fetches.append((n.func.value.value.id, bound_name(n), n.lineno, "in_", ""))
 
     checked: set[str] = set()
+    guarded_exprs: list[str] = []
     loops: dict[str, set[str]] = {}
     for n in ast.walk(fn):
         if isinstance(n, ast.For) and isinstance(n.target, ast.Name) and isinstance(n.iter, ast.Name):
             loops.setdefault(n.iter.id, set()).add(n.target.id)
         if isinstance(n, ast.Compare):
             for side in (n.left, *n.comparators):
-                if isinstance(side, ast.Attribute) and side.attr == "org_id" and isinstance(side.value, ast.Name):
+                if (isinstance(side, ast.Attribute) and side.attr.endswith("org_id")
+                        and isinstance(side.value, ast.Name)):
                     checked.add(side.value.id)
-        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name):
-            if n.func.id in ("assert_org_writable", "assert_org_visible"):
-                for a in n.args:
-                    if isinstance(a, ast.Attribute) and a.attr == "org_id" and isinstance(a.value, ast.Name):
-                        checked.add(a.value.id)
-            elif n.func.id == "assert_obj_org_writable":
-                checked.update(a.id for a in n.args if isinstance(a, ast.Name))
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and (
+                n.func.id in _P56_GUARDS or n.func.id.startswith("_assert")):
+            # 通用守卫的前两个参数是 db、user，判的是后面的；专用 helper 判它收到的实体。
+            # 参数里出现的**任何**名字都算判过：`assert_any_org_writable(db, user,
+            # (c.from_org_id, c.to_org_id))`、`_assert_center(db, user, specimen)`、
+            # `assert_program_config_writable(db, user, rule.program_code)` 都是比对它自己
+            judged = n.args[2:] if n.func.id in _P56_GUARDS else n.args
+            for a in judged:
+                checked.update(x.id for x in ast.walk(a) if isinstance(x, ast.Name))
+                guarded_exprs.append(ast.unparse(a))
+    # 父行判过 → 子行判过（可传递）
+    changed = True
+    while changed:
+        changed = False
+        for parent in list(checked):
+            for child in derived.get(parent, ()):
+                if child not in checked:
+                    checked.add(child)
+                    changed = True
 
     out = []
-    for model, name, lineno, kind in fetches:
+    for model, name, lineno, kind, id_expr in fetches:
         if kind == "get":
-            ok = name is not None and name in checked
+            # 没留名的取数（`if db.get(M, body.x) is None`）也可能被判过：拿**同一个请求体
+            # 字段**去取了它的归属再校验（`_group_lead(db, body.org_group_id)`）
+            ok = (name is not None and name in checked) or any(
+                id_expr in g for g in guarded_exprs if id_expr)
         else:  # 按一组 id 取出来的行：得在逐行循环里比对
             ok = name is not None and bool(loops.get(name, set()) & checked)
         out.append((model, name, lineno, ok))
@@ -401,6 +453,19 @@ P56_CROSS_ORG_BY_DESIGN: dict[str, str] = {
     ),
     "app/spd/routers/tasks.py::start_path_instance::SpdPathTemplate": (
         "路径模板是配置，引用它不改写模板所属机构的任何数据；纳管档案已按其机构校验。"
+    ),
+    # ---- P1-59 放宽视野（`*org_id` 列 + 一跳归属）后新看见的，逐条研判为只读引用 ----
+    "app/routers/analytics.py::create_outbound_visit::Referral": (
+        "县外就诊登记挂一张既有转诊单，只用来算有序转诊率；已校验转诊单属于同一患者，"
+        "不改写转诊单。转出/接收机构都可能是登记机构之外的别家，按机构判会漏记有序转诊。"
+    ),
+    "app/routers/clinical_docs.py::create_nursing_record::InpatientOrder": (
+        "医嘱只用来关联，且已比对 `order.admission_id` 等于路径上的住院单——住院单已按其"
+        "机构校验，医嘱的归属就是那张住院单的（一跳）。闸门认不出拿路径参数比对这种写法。"
+    ),
+    "app/routers/exams.py::create_request::ExamRequest": (
+        "检查结果互认：医共体搞互认就是要让本院引用别家已出的报告，不做重复检查。"
+        "已校验同一患者、同一项目、同一中心类型与 30 天窗口；只读引用，不改写别家的申请单。"
     ),
 }
 
@@ -485,3 +550,119 @@ def test_P56覆盖面自证(capsys):
         print(f"    按业务跨机构、书面豁免：{exempt}")
         print("    认不出的形态：取数写在 helper 里（按路径 id 的也不在本条射程，归横向越权闸门）")
     assert sites
+
+
+def test_P59放宽的判据不空转():
+    """P1-59 新认的几种"判过"写法各喂一次，修复前的形状必须仍被认出。"""
+    owned = {"SterilizationBatch", "OrgGroup", "InpatientOrder", "InpatientAdmission"}
+    before = ast.parse(
+        # 机构列不叫 org_id：原先根本不在分母里
+        "def cost(body, db, user):\n"
+        "    if db.get(SterilizationBatch, body.batch_id) is None: raise X\n"
+        # 一跳归属：只判了请求体里自报的机构
+        "def nurse(body, db, user):\n"
+        "    order = db.get(InpatientOrder, body.order_id)\n"
+        "    assert_org_writable(db, user, body.org_id)\n"
+    )
+    flagged = [s for fn in before.body for s in _p56_scan_function(fn, owned) if not s[3]]
+    assert len(flagged) == 2, f"修复前的两种形状只认出 {len(flagged)} 种：{flagged}"
+
+    after = ast.parse(
+        "def cost(body, db, user):\n"
+        "    batch = db.get(SterilizationBatch, body.batch_id)\n"
+        "    assert_org_writable(db, user, batch.center_org_id)\n"
+        # 没留名，但拿同一个请求体字段取了归属去校验
+        "def pool(body, db, user):\n"
+        "    if db.get(OrgGroup, body.group_id) is None: raise X\n"
+        "    assert_org_writable(db, user, _group_lead(db, body.group_id))\n"
+        # 父行判过 → 子行判过
+        "def nurse(body, db, user):\n"
+        "    order = db.get(InpatientOrder, body.order_id)\n"
+        "    adm = db.get(InpatientAdmission, order.admission_id)\n"
+        "    assert_org_writable(db, user, adm.org_id)\n"
+        # 专用 helper 判它收到的实体
+        "def spec(body, db, user):\n"
+        "    batch = db.get(SterilizationBatch, body.batch_id)\n"
+        "    _assert_center(db, user, batch)\n"
+    )
+    still = [s for fn in after.body for s in _p56_scan_function(fn, owned) if not s[3]]
+    assert still == [], f"修复后的写法被误报：{still}"
+
+
+# ---------------------------------------------------------------------------
+# P1-59：新建"按病种编码挂归属"的配置，必须过病种归属校验
+# ---------------------------------------------------------------------------
+#
+# 量表、宣教素材、服务包、随访方案、干预模板、上报任务……只挂 `program_code`（字符串，
+# 不是外键），归属落在病种的牵头机构上（`spd/service.program_lead_org`）。上面两条闸门
+# 都看不见这个形状：请求体里没有机构 id，也没有按 id 取出任何带主的实体——于是乙院医师
+# 能在甲院牵头的病种下建转诊规则、建服务包（P1-58 实测 201），而闸门一直是绿的。
+# 判据：写接口里**构造**了这类模型，就必须调 `assert_program_config_writable`。
+
+
+def _code_keyed_config_models() -> set[str]:
+    """挂 `program_code`、不带 `patient_id`，且没有「以谁的名义」那类机构列的配置表。
+
+    只带 counterparty 机构列的也算（如转诊规则的 `target_org_id`——那是转诊**去向**，
+    不是配置归谁），否则它会因为有一个机构列而被当成"自带归属"漏出去。
+    """
+    return {
+        c.__name__ for c in Base.registry._class_registry.values()
+        if hasattr(c, "__table__")
+        and "program_code" in c.__table__.columns
+        and "patient_id" not in c.__table__.columns
+        and all(col.name in COUNTERPARTY for col in c.__table__.columns
+                if col.name.endswith("org_id"))
+    }
+
+
+#: 构造了这类模型、却按设计不判病种归属的写接口。**只减不增**，每条写理由。
+P59_CONFIG_CREATE_OK: dict[str, str] = {
+    "app/spd/routers/config/centers.py::create_center::SpdCenter": (
+        "专病中心有**自己的**牵头机构（`lead_org_id`，建中心时已按它校验，P1-57），"
+        "`program_code` 只说明它是哪个病种的中心。乡镇在县医院牵头的病种下建分中心"
+        "是模型本身描述的形态（「分中心运行状态」），按病种牵头机构判会把分中心关掉。"
+    ),
+    "app/spd/routers/assess.py::run_scoring::SpdScore": (
+        "考核结果不是配置：按考核方案对**全部**考核对象（机构/团队/个人）批量算分落库，"
+        "`program_code` 只是统计口径的过滤条件，不是归属。考核由卫健侧统一跑，按病种牵头"
+        "机构判会让县医院之外谁都跑不了全县考核。"
+    ),
+}
+
+
+def _p59_config_creates() -> list[tuple[str, str, str, bool]]:
+    models = _code_keyed_config_models()
+    app_dir = Path(__file__).resolve().parent.parent / "app"
+    files = sorted((app_dir / "routers").rglob("*.py")) + sorted((app_dir / "spd" / "routers").rglob("*.py"))
+    out = []
+    for path in files:
+        rel = path.relative_to(app_dir.parent).as_posix()
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for fn in (n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))):
+            decs = [ast.unparse(d) for d in fn.decorator_list]
+            if not any(m in d for d in decs for m in (".post(", ".put(", ".patch(")):
+                continue
+            built = {c.func.id for c in ast.walk(fn)
+                     if isinstance(c, ast.Call) and isinstance(c.func, ast.Name) and c.func.id in models}
+            ok = "assert_program_config_writable" in ast.unparse(fn)
+            for model in sorted(built):
+                out.append((rel, fn.name, model, ok))
+    return out
+
+
+def test_新建病种配置都过了病种归属校验(capsys):
+    sites = _p59_config_creates()
+    bad = sorted(f"{rel}::{fn}::{model}" for rel, fn, model, ok in sites
+                 if not ok and f"{rel}::{fn}::{model}" not in P59_CONFIG_CREATE_OK)
+    with capsys.disabled():
+        print(f"\n  [P1-59] 新建按病种编码挂归属的配置：{len(sites)} 处"
+              f"（此类模型 {len(_code_keyed_config_models())} 个，从元数据推导）")
+    assert sites, "一处都没扫到——判据断了（模型集合或构造识别失效），不是没有欠账"
+    assert bad == [], (
+        "以下写接口新建了挂在病种下的配置，却没过病种归属校验：\n  " + "\n  ".join(bad)
+        + "\n\n修法：`assert_program_config_writable(db, user, body.program_code)`"
+        "（`spd/service.py`）。确属按设计不判的，写进 P59_CONFIG_CREATE_OK 并说明理由。"
+    )
+    stale = sorted(set(P59_CONFIG_CREATE_OK) - {f"{r}::{f}::{m}" for r, f, m, ok in sites if not ok})
+    assert stale == [], f"这些豁免已经不需要了：{stale}"

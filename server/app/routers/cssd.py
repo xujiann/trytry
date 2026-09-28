@@ -146,8 +146,13 @@ def create_cost_item(
     body: CostItemCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
     """登记灭菌批次成本项（人工/耗材/能耗/设备折旧）。"""
-    if db.get(SterilizationBatch, body.batch_id) is None:
+    batch = db.get(SterilizationBatch, body.batch_id)
+    if batch is None:
         raise HTTPException(status_code=404, detail="灭菌批次不存在")
+    # 成本记在批次所属的消毒供应中心账上（P1-59：原先别家经办能往甲院中心的批次上
+    # 记成本，单位成本核算跟着失真——请求体闸门只认字面 `org_id` 列，批次的机构列
+    # 叫 `center_org_id`，一直不在它眼里）
+    assert_org_writable(db, user, batch.center_org_id)
     item = CssdCostItem(**body.model_dump(), created_by=user.id)
     db.add(item)
     db.commit()

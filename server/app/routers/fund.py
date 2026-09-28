@@ -31,6 +31,7 @@ from ..concurrency import insert_or_conflict, upsert_unique
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_roles, resolve_org_scope
 from ..formula import FormulaError, evaluate, validate
+from ..visibility import assert_org_writable
 from ..models import (
     FundDistribution,
     FundPeriod,
@@ -228,6 +229,8 @@ def create_pool(
 ):
     if body.org_group_id is not None and db.get(OrgGroup, body.org_group_id) is None:
         raise HTTPException(status_code=404, detail="机构分组不存在")
+    # 与改/清算/分配同一口径：不得替别的分组建池（见 `_assert_pool_writable`）
+    assert_org_writable(db, user, _group_lead(db, body.org_group_id))
     # 应用层查重只为给出可读的提示；**真正兜底的是数据库**——全域池由部分唯一索引
     # `uq_fund_pool_global`（org_group_id IS NULL）拦住，分组池由 uq_fund_pool_scope
     # 拦住。check-then-act 中间有竞态窗口，6 线程并发实测建出过 2 个池。
@@ -273,8 +276,12 @@ def list_pools(
 
 @router.patch("/pools/{pool_id}", response_model=FundPoolOut,
               dependencies=[Depends(require_roles("director"))])
-def update_pool(pool_id: int, body: PoolUpdate, db: Session = Depends(get_db)):
+def update_pool(
+    pool_id: int, body: PoolUpdate, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     pool = _pool(db, pool_id)
+    _assert_pool_writable(db, user, pool)
     if pool.status == "settled":
         raise HTTPException(status_code=409, detail="已清算的基金池不可修改")
     for field, value in body.model_dump(exclude_unset=True).items():
@@ -310,6 +317,7 @@ def add_prepayment(
     """登记预付批次。**超出计划预付额只警告不拦截**——现实中确有追加预拨，
     平台不该因为一个比例参数就挡住真实发生的资金流。"""
     pool = _pool(db, pool_id)
+    _assert_pool_writable(db, user, pool)
     if pool.status != "active":
         raise HTTPException(status_code=409, detail=f"基金池状态为 {pool.status}，不可再预付")
     db.add(FundPrepayment(pool_id=pool_id, created_by=user.id, **body.model_dump()))
@@ -369,13 +377,17 @@ def _collect_expense(db: Session, pool: FundPool, period: str) -> float:
     "/pools/{pool_id}/periods", response_model=PeriodClosedOut, status_code=201,
     dependencies=[Depends(require_roles("director"))]
 )
-def close_period(pool_id: int, body: PeriodIn, db: Session = Depends(get_db)):
+def close_period(
+    pool_id: int, body: PeriodIn, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """月度预结：归集当期发生额，与预付对冲看进度。
 
     **不产生资金流**——这只是账面数。重复预结同一期会覆盖（月中核对反复跑是常态），
     但会把来源标为人工还是系统，便于事后分辨。
     """
     pool = _pool(db, pool_id)
+    _assert_pool_writable(db, user, pool)
     if pool.status != "active":
         raise HTTPException(status_code=409, detail=f"基金池状态为 {pool.status}，不可再预结")
     amount = (
@@ -462,6 +474,7 @@ def settle(
     超支（balance < 0）**不自动扣减任何机构**，只记录处置选择。
     """
     pool = _pool(db, pool_id)
+    _assert_pool_writable(db, user, pool)
     if pool.status != "active":
         raise HTTPException(status_code=409, detail=f"基金池状态为 {pool.status}，不可清算")
     expense = (
@@ -503,13 +516,17 @@ def get_settlement(pool_id: int, db: Session = Depends(get_db)):
     "/pools/{pool_id}/distribute", response_model=SettlementOut,
     dependencies=[Depends(require_roles("director"))]
 )
-def distribute(pool_id: int, body: DistributeIn, db: Session = Depends(get_db)):
+def distribute(
+    pool_id: int, body: DistributeIn, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """按公式分配结余，并**冻结**当次绩效得分快照。
 
     超支时拒绝分配：没有结余可分，此时该做的是按 `overrun_action` 处置超支，
     而不是分一笔不存在的钱。
     """
     pool = _pool(db, pool_id)
+    _assert_pool_writable(db, user, pool)
     settlement = db.query(FundSettlement).filter(FundSettlement.pool_id == pool_id).first()
     if settlement is None:
         raise HTTPException(status_code=409, detail="请先完成年终清算")
@@ -658,6 +675,23 @@ def _settlement_out(settlement: FundSettlement, db: Session) -> dict:
             "score": "分配依据为分配当时冻结的绩效得分快照，此后调整指标权重不影响已分结果",
         },
     }
+
+
+def _group_lead(db: Session, org_group_id: int | None) -> int | None:
+    group = db.get(OrgGroup, org_group_id) if org_group_id is not None else None
+    return group.lead_org_id if group is not None else None
+
+
+def _assert_pool_writable(db: Session, user: User, pool: FundPool) -> None:
+    """分组基金池归**分组的牵头机构**管；全县池（不挂分组）归属未定，不判（P1-59）。
+
+    这几个写接口挂的是 `require_roles("director")`，看着只有全域角色进得来——但
+    `require_roles` 会放行**被授了该权限点的自定义角色**（阶段十一），而自定义角色
+    不是全域角色。原先一道归属校验都没有：给乙院的"医保办"自定义角色授了清算/分配
+    权限点，它就能清算、分配甲院牵头的医共体基金池（实测 200/201），而分配结果直接
+    落到各成员机构的钱上。
+    """
+    assert_org_writable(db, user, _group_lead(db, pool.org_group_id))
 
 
 def _pool(db: Session, pool_id: int) -> FundPool:

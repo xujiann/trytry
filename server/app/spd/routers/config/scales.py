@@ -13,9 +13,8 @@ from sqlalchemy.orm import Session
 
 from ....database import get_db
 from ....deps import get_current_user, paginate, require_roles
-from ....visibility import assert_org_writable
 from ...platform import User
-from ...service import program_lead_org
+from ...service import assert_program_config_writable
 from ...models import (
     SpdEduMaterial,
     SpdScale,
@@ -117,7 +116,9 @@ def _scale_out(s: SpdScale) -> dict:
 
 @router.post("/scales", response_model=ScaleOut, status_code=201,
              dependencies=[Depends(require_roles(*CONFIG_ROLES))])
-def create_scale(body: ScaleIn, db: Session = Depends(get_db)):
+def create_scale(body: ScaleIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    # 病种配置归病种的牵头机构（P1-59，与管理目标/服务包/转诊规则同一口径）
+    assert_program_config_writable(db, user, body.program_code)
     keys = [i.get("key") for i in body.items]
     if len(keys) != len(set(keys)):
         raise HTTPException(status_code=422, detail="量表题目 key 不得重复")
@@ -161,10 +162,14 @@ def get_scale(scale_id: int, db: Session = Depends(get_db)):
 
 @router.patch("/scales/{scale_id}", response_model=ScaleOut,
               dependencies=[Depends(require_roles(*CONFIG_ROLES))])
-def update_scale(scale_id: int, body: dict, db: Session = Depends(get_db)):
+def update_scale(
+    scale_id: int, body: dict, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     scale = db.get(SpdScale, scale_id)
     if scale is None:
         raise HTTPException(status_code=404, detail="量表不存在")
+    assert_program_config_writable(db, user, scale.program_code)
     if scale.status == "published" and ("items" in body or "scoring" in body):
         raise HTTPException(status_code=409, detail="已发布量表不可改题目或评分，请新建版本")
     for key in ("name", "items", "scoring", "category", "owner_team_id"):
@@ -176,11 +181,15 @@ def update_scale(scale_id: int, body: dict, db: Session = Depends(get_db)):
 
 @router.post("/scales/{scale_id}/publish", response_model=ScaleOut,
              dependencies=[Depends(require_roles(*CONFIG_ROLES))])
-def publish_scale(scale_id: int, db: Session = Depends(get_db)):
+def publish_scale(
+    scale_id: int, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """发布并生成二维码令牌——量表要"经审核发布"后才允许被评估引用。"""
     scale = db.get(SpdScale, scale_id)
     if scale is None:
         raise HTTPException(status_code=404, detail="量表不存在")
+    assert_program_config_writable(db, user, scale.program_code)
     if not scale.items:
         raise HTTPException(status_code=422, detail="量表没有题目，不能发布")
     scale.status = "published"
@@ -209,10 +218,14 @@ def scale_qr(scale_id: int, request: Request, db: Session = Depends(get_db)):
 
 @router.post("/scales/{scale_id}/disable", response_model=ScaleOut,
              dependencies=[Depends(require_roles(*CONFIG_ROLES))])
-def disable_scale(scale_id: int, db: Session = Depends(get_db)):
+def disable_scale(
+    scale_id: int, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     scale = db.get(SpdScale, scale_id)
     if scale is None:
         raise HTTPException(status_code=404, detail="量表不存在")
+    assert_program_config_writable(db, user, scale.program_code)
     scale.status = "disabled"
     db.commit()
     return _scale_out(scale)
@@ -233,7 +246,8 @@ class EduIn(BaseModel):
 
 @router.post("/edu-materials", response_model=EduMaterialOut, status_code=201,
              dependencies=[Depends(require_roles("director", "doctor", "public_health"))])
-def create_edu(body: EduIn, db: Session = Depends(get_db)):
+def create_edu(body: EduIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    assert_program_config_writable(db, user, body.program_code)
     material = SpdEduMaterial(**body.model_dump())
     db.add(material)
     try:
@@ -275,10 +289,15 @@ def list_edu(
 
 @router.patch("/edu-materials/{material_id}", response_model=EduMaterialOut,
               dependencies=[Depends(require_roles("director", "doctor", "public_health"))])
-def update_edu(material_id: int, body: dict, db: Session = Depends(get_db)):
+def update_edu(
+    material_id: int, body: dict, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     material = db.get(SpdEduMaterial, material_id)
     if material is None:
         raise HTTPException(status_code=404, detail="宣教素材不存在")
+    # 请求体可以改 `program_code`：新旧两个病种都要过（见 helper 文档）
+    assert_program_config_writable(db, user, material.program_code, body.get("program_code", ""))
     for key in ("title", "content", "media_url", "media_type", "dept", "active", "program_code"):
         if key in body:
             setattr(material, key, body[key])
@@ -313,7 +332,7 @@ def create_package(
 ):
     # 服务包自己没有机构列，挂在病种下就归病种的牵头机构定（P1-58）；
     # 价格与次数上限直接决定扣减，谁都能改等于谁都能给别家的患者改价
-    assert_org_writable(db, user, program_lead_org(db, body.program_code))
+    assert_program_config_writable(db, user, body.program_code)
     for item in body.items:
         if not item.get("code") or int(item.get("times", 0)) <= 0:
             raise HTTPException(status_code=422, detail="服务包项目须有编码且次数大于0")
@@ -351,7 +370,7 @@ def update_package(
     package = db.get(SpdServicePackage, package_id)
     if package is None:
         raise HTTPException(status_code=404, detail="服务包不存在")
-    assert_org_writable(db, user, program_lead_org(db, package.program_code))
+    assert_program_config_writable(db, user, package.program_code)
     for key in ("name", "price", "period_days", "items", "active"):
         if key in body:
             setattr(package, key, body[key])

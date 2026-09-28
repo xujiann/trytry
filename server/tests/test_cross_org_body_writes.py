@@ -883,3 +883,146 @@ def test_中药订单只能被一家药房承接(client, env, p58, third_party):
         assert db.get(TcmDispenseOrder, oid).pharmacy_org_id == env["B"]["id"]
     assert client.post(f"/api/tcm/dispense-orders/{oid}/advance",
                        headers=third_party["operator"]).status_code == 403
+
+
+# ---- P1-59：两道闸门仍看不见的几种归属形状 ----
+#
+# ① 按病种编码挂归属的配置（量表、宣教素材、随访方案、干预模板、上报任务、病种通用路径）；
+# ② 请求体引用的实体机构列不叫 `org_id`（灭菌批次的 `center_org_id`）；
+# ③ 预约没记代约机构；
+# ④ `require_roles("director")` 看着只有全域角色，其实放行**被授了权限点的自定义角色**——
+#    基金池那几个写接口因此一道归属校验都没有，P1-58 的闸门还一度把它们当全域跳过了。
+
+
+@pytest.fixture(scope="module")
+def p59(client, env, p58):
+    from app.database import SessionLocal
+    from app.models import AppointmentSlot, FundPool, OrgGroup, SterilizationBatch
+    from app.spd.models import (
+        SpdCaseReportTask, SpdEduMaterial, SpdFollowupRule, SpdPathTemplate, SpdProgram, SpdScale,
+    )
+
+    A, B = env["A"]["id"], env["B"]["id"]
+    with SessionLocal() as db:
+        prog = SpdProgram(code="p159", name="P1-59 病种", lead_org_id=A)
+        group = OrgGroup(name="P1-59 甲院医共体", lead_org_id=A)
+        batch = SterilizationBatch(batch_no="P159-1", center_org_id=A, item_name="器械", quantity=1)
+        slot = AppointmentSlot(org_id=A, resource_type="doctor", resource_name="甲院专家",
+                               slot_date="2026-10-02", capacity=10)
+        scales = [SpdScale(code=f"p159-{i}", name=f"甲院量表{i}", program_code="p159",
+                           items=[{"key": "q1"}]) for i in range(3)]
+        edu = SpdEduMaterial(code="p159", title="甲院素材", program_code="p159")
+        frule = SpdFollowupRule(code="p159", name="甲院随访方案", program_code="p159", points=[7])
+        crt = SpdCaseReportTask(code="p159", name="甲院上报任务", program_code="p159")
+        db.add_all([prog, group, batch, slot, *scales, edu, frule, crt]); db.flush()
+        pool = FundPool(year=2026, org_group_id=group.id, total_amount=1000)
+        tpls = [SpdPathTemplate(program_id=prog.id, code=f"p159-{i}", name=f"病种通用路径{i}")
+                for i in range(2)]
+        db.add_all([pool, *tpls]); db.commit()
+        out = {"prog": prog.id, "group": group.id, "batch": batch.id, "slot": slot.id,
+               "scales": [x.id for x in scales], "edu": edu.id, "frule": frule.id,
+               "crt": crt.id, "pool": pool.id, "tpls": [t.id for t in tpls]}
+    # 乙院的"医保办"自定义角色，被授了基金池的建池与修改权限点
+    role = client.post("/api/rbac/roles", json={"key": "p159_fund", "name": "医保办"},
+                       headers=env["adm"]).json()
+    perms = client.get("/api/rbac/permissions", params={"keyword": "/api/fund/pools"},
+                       headers=env["adm"]).json()
+    wanted = {"POST:/api/fund/pools", "PATCH:/api/fund/pools/{pool_id}"}
+    ids = [p["id"] for p in perms if p["code"] in wanted]
+    assert len(ids) == 2, f"权限点没找齐：{[p['code'] for p in perms]}"
+    client.post(f"/api/rbac/roles/{role['id']}/permissions", json={"permission_ids": ids},
+                headers=env["adm"])
+    out["fund_b"] = _login(client, env, "xq_fund_b59", "p159_fund", B)
+    # 预约：甲院经办代约一个（号源也在甲院）、乙院经办代约一个（乡镇替患者约县医院的号）
+    pt = p58["pt"]
+    out["appt_a"] = client.post("/api/appointments", json={"slot_id": out["slot"], "patient_id": pt},
+                                headers=env["operator_a"]).json()["id"]
+    pt2 = client.post("/api/patients", json={
+        "name": "P1-59 代约患者", "id_card": "330102199910101234"}, headers=env["adm"]).json()["id"]
+    out["appt_b"] = client.post("/api/appointments", json={"slot_id": out["slot"], "patient_id": pt2},
+                                headers=env["operator_b"]).json()["id"]
+    return out
+
+
+def _p59_cases(env, t, x):
+    B_doc = env["doctor_b"]
+    return [
+        ("基金池：乙院自定义角色改甲院牵头医共体的基金池", x["fund_b"], "patch",
+         f"/api/fund/pools/{x['pool']}", {"note": "被改了"}),
+        ("基金池：乙院自定义角色替甲院牵头的医共体建池", x["fund_b"], "post", "/api/fund/pools",
+         {"year": 2027, "org_group_id": x["group"], "total_amount": 1}),
+        ("消毒供应：往甲院中心的灭菌批次上记成本", env["operator_b"], "post", "/api/cssd/cost-items",
+         {"batch_id": x["batch"], "cost_type": "labor", "amount": 999}),
+        ("慢专病：在甲院牵头病种下建量表", B_doc, "post", "/api/spd/scales",
+         {"code": "p159-forged", "name": "冒名量表", "program_code": "p159"}),
+        ("慢专病：改甲院牵头病种的量表", B_doc, "patch", f"/api/spd/scales/{x['scales'][0]}",
+         {"name": "被改了"}),
+        ("慢专病：发布甲院牵头病种的量表", B_doc, "post",
+         f"/api/spd/scales/{x['scales'][1]}/publish", None),
+        ("慢专病：停用甲院牵头病种的量表", B_doc, "post",
+         f"/api/spd/scales/{x['scales'][2]}/disable", None),
+        ("慢专病：在甲院牵头病种下建宣教素材", B_doc, "post", "/api/spd/edu-materials",
+         {"code": "p159-forged", "title": "冒名素材", "program_code": "p159"}),
+        ("慢专病：改甲院牵头病种的宣教素材", B_doc, "patch", f"/api/spd/edu-materials/{x['edu']}",
+         {"title": "被改了"}),
+        ("慢专病：在甲院牵头病种下建随访方案", B_doc, "post", "/api/spd/followup-rules",
+         {"code": "p159-forged", "name": "冒名方案", "program_code": "p159", "points": [7]}),
+        ("慢专病：改甲院牵头病种的随访方案", B_doc, "patch", f"/api/spd/followup-rules/{x['frule']}",
+         {"points": [3650]}),
+        ("慢专病：在甲院牵头病种下建干预模板", B_doc, "post", "/api/spd/intervention-templates",
+         {"code": "p159-forged", "name": "冒名模板", "program_code": "p159"}),
+        ("慢专病：在甲院牵头病种下建上报任务", B_doc, "post", "/api/spd/case-report-tasks",
+         {"code": "p159-forged", "name": "冒名任务", "program_code": "p159"}),
+        ("慢专病：改甲院牵头病种的上报任务", B_doc, "patch", f"/api/spd/case-report-tasks/{x['crt']}",
+         {"active": False}),
+        ("慢专病：在甲院牵头病种下建病种通用路径", B_doc, "post", "/api/spd/path-templates",
+         {"program_id": x["prog"], "code": "p159-forged", "name": "冒名路径"}),
+        ("慢专病：停用甲院牵头病种的通用路径", B_doc, "post",
+         f"/api/spd/path-templates/{x['tpls'][0]}/status", {"status": "disabled"}),
+        ("慢专病：复制甲院牵头病种的通用路径", B_doc, "post",
+         f"/api/spd/path-templates/{x['tpls'][1]}/copy", {"code": "p159-copy"}),
+        ("预约：取消别家代约、别家号源的预约", t["operator"], "post",
+         f"/api/appointments/{x['appt_a']}/cancel", None),
+    ]
+
+
+def test_病种配置与非org_id机构列的别家实体写入被拦(client, env, p59, third_party):
+    """建闸门时这 18 条逐条实打全部放行；删掉对应那一行校验，对应那条必红。"""
+    passed_through = []
+    for label, who, method, path, body in _p59_cases(env, third_party, p59):
+        r = getattr(client, method)(path, json=body, headers=who)
+        if r.status_code in (200, 201):
+            passed_through.append(f"{label} → {r.status_code}")
+        else:
+            assert r.status_code == 403, f"{label} 期望 403，实际 {r.status_code}：{r.text[:160]}"
+    assert passed_through == [], "以下写入动到了别家的实体：\n  " + "\n  ".join(passed_through)
+
+
+def test_代约机构与号源机构都能取消预约(client, env, p59):
+    """乡镇替患者约了县医院的号：乡镇能取消自己约的，县医院也能取消挂在自己号源上的。"""
+    from app.database import SessionLocal
+    from app.models import Appointment
+
+    with SessionLocal() as db:
+        assert db.get(Appointment, p59["appt_b"]).booked_org_id == env["B"]["id"], "代约机构没落库"
+    r = client.post(f"/api/appointments/{p59['appt_b']}/cancel", headers=env["operator_b"])
+    assert r.status_code == 200, f"代约机构取消自己约的号应照常：{r.text[:160]}"
+    r = client.post(f"/api/appointments/{p59['appt_a']}/cancel", headers=env["operator_a"])
+    assert r.status_code == 200, f"号源机构取消应照常：{r.text[:160]}"
+
+
+def test_没记代约机构的预约照旧不判(client, env, p59):
+    """居民自助预约与补列前的存量都没有代约机构：只拦得住号源机构一方会把当初代约的
+    乡镇关在门外，所以照旧不判。"""
+    from app.database import SessionLocal
+    from app.models import Appointment
+
+    # 独立一位患者：同一号源同一患者有唯一约束，共用会撞上夹具里那条
+    pt = client.post("/api/patients", json={
+        "name": "P1-59 存量预约患者", "id_card": "330102199911111234"}, headers=env["adm"]).json()["id"]
+    with SessionLocal() as db:
+        legacy = Appointment(slot_id=p59["slot"], patient_id=pt)
+        db.add(legacy); db.commit()
+        legacy_id = legacy.id
+    r = client.post(f"/api/appointments/{legacy_id}/cancel", headers=env["operator_b"])
+    assert r.status_code == 200, f"存量预约行为应不变：{r.text[:160]}"

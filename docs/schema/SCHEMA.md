@@ -138,9 +138,11 @@
 - `id` · INTEGER · PK · NOT NULL
 - `slot_id` · INTEGER · NOT NULL · index · → appointment_slots.id
 - `patient_id` · INTEGER · NOT NULL · index · → patients.id
+- `booked_org_id` · INTEGER · index · → organizations.id
 - `status` · VARCHAR(16) · NOT NULL
 - `created_at` · DATETIME · NOT NULL
 - _unique_ (slot_id, patient_id) uq_appointment_slot_patient
+- _index_ ix_appointments_booked_org_id(booked_org_id)
 - _index_ ix_appointments_patient_id(patient_id)
 - _index_ ix_appointments_slot_id(slot_id)
 

@@ -84,6 +84,12 @@ class Appointment(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     slot_id: Mapped[int] = mapped_column(ForeignKey("appointment_slots.id"), index=True)
     patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
+    # 代约机构：管理端经办替患者约号时，由服务端取经办人所在机构落库（乡镇替患者约
+    # 县医院的号是常态）。居民自助预约与存量行为空。取消按"代约机构或号源机构任一"判，
+    # 为空的照旧不判（P1-59）
+    booked_org_id: Mapped[int | None] = mapped_column(
+        ForeignKey("organizations.id"), nullable=True, index=True
+    )
     # booked=已预约, cancelled=已取消, fulfilled=已就诊
     status: Mapped[str] = mapped_column(String(16), default="booked")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

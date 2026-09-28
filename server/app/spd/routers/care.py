@@ -34,7 +34,7 @@ from ..models import (
     SpdScale,
 )
 from ..rules import score_scale
-from ..service import award_points, judge_measurement, spawn_task
+from ..service import assert_program_config_writable, award_points, judge_measurement, spawn_task
 from ...visibility import assert_org_writable, assert_patient_visible, visible_org_ids
 
 router = APIRouter(
@@ -700,8 +700,10 @@ class InterventionTemplateIn(BaseModel):
 @router.post("/intervention-templates", response_model=InterventionTemplateCreatedOut, status_code=201,
              dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def create_intervention_template(
-    body: InterventionTemplateIn, db: Session = Depends(get_db)
+    body: InterventionTemplateIn, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
+    assert_program_config_writable(db, user, body.program_code)
     from sqlalchemy.exc import IntegrityError
 
     template = SpdInterventionTemplate(**body.model_dump())
@@ -1142,7 +1144,8 @@ class ReportTaskIn(BaseModel):
 
 @router.post("/case-report-tasks", response_model=CaseReportTaskCreatedOut, status_code=201,
              dependencies=[Depends(require_roles(*SERVICE_ROLES))])
-def create_case_report_task(body: ReportTaskIn, db: Session = Depends(get_db)):
+def create_case_report_task(body: ReportTaskIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    assert_program_config_writable(db, user, body.program_code)
     from sqlalchemy.exc import IntegrityError
 
     task = SpdCaseReportTask(**body.model_dump())
@@ -1176,10 +1179,15 @@ def list_case_report_tasks(
 
 @router.patch("/case-report-tasks/{task_id}", response_model=CaseReportTaskUpdatedOut,
               dependencies=[Depends(require_roles(*SERVICE_ROLES))])
-def update_case_report_task(task_id: int, body: dict, db: Session = Depends(get_db)):
+def update_case_report_task(
+    task_id: int, body: dict, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     task = db.get(SpdCaseReportTask, task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="上报任务不存在")
+    # 与新建同一口径；请求体可改 `program_code`，新旧都要过（P1-59）
+    assert_program_config_writable(db, user, task.program_code, body.get("program_code", ""))
     for key in ("name", "program_code", "dept", "manager_user_id", "assignee_ids",
                 "org_ids", "active"):
         if key in body:

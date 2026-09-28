@@ -172,10 +172,14 @@ def test_每张无机构列的表都已逐张判过():
 def test_分类清单里没有陈旧条目():
     """表改名/删表后条目会静默失效——四份清单都按表名匹配。"""
     no_org = _no_org_tables()
+    # 「机构在父行」一类可以与自带机构列并存：自带的列记的是**另一方**。预约自 P1-59
+    # 起带 `booked_org_id`（代约机构），但号源机构仍只在父行上——两条服务关系各自成立，
+    # 缺了父行那条，挂了号的医院在叫号时反倒打不开档案。所以这一类只要求表还带 patient_id
+    patient_tables = {c.__tablename__ for c in _patient_tables()}
     stale = {
-        name: sorted(tables - no_org)
+        name: sorted(tables - (patient_tables if name == "机构在父行(已接上)" else no_org))
         for name, tables in _JUDGED.items()
-        if tables - no_org
+        if tables - (patient_tables if name == "机构在父行(已接上)" else no_org)
     }
     assert stale == {}, (
         f"这些条目已经对不上真实的表（改名、删表，或那张表现在已经有机构列了）：{stale}"

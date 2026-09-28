@@ -6,7 +6,9 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from ..visibility import assert_org_writable, scope_org_list, scope_patient_list
+from ..visibility import (
+    assert_any_org_writable, assert_org_writable, scope_org_list, scope_patient_list,
+)
 from ..database import get_db
 from ..datetypes import DateStr
 from ..deps import (
@@ -282,7 +284,9 @@ def list_slots(
     )
 
 
-def book_slot(db: Session, slot_id: int, patient_id: int) -> Appointment:
+def book_slot(
+    db: Session, slot_id: int, patient_id: int, booked_org_id: int | None = None
+) -> Appointment:
     """号源预约核心逻辑：管理端代约与居民端自助预约共用。
 
     黑名单拦截、原子占号、重复预约判定都在这里，两条入口不会走出不同的行为。
@@ -335,7 +339,7 @@ def book_slot(db: Session, slot_id: int, patient_id: int) -> Appointment:
         db.commit()
         db.refresh(existing)
         return existing
-    appointment = Appointment(slot_id=slot_id, patient_id=patient_id)
+    appointment = Appointment(slot_id=slot_id, patient_id=patient_id, booked_org_id=booked_org_id)
     db.add(appointment)
     try:
         db.commit()
@@ -368,8 +372,11 @@ def release_appointment(db: Session, appointment: Appointment) -> Appointment:
     status_code=201,
     dependencies=[Depends(require_roles("operator", "doctor"))],  # H2: 预约经办
 )
-def book(body: AppointmentCreate, db: Session = Depends(get_db)):
-    return book_slot(db, body.slot_id, body.patient_id)
+def book(
+    body: AppointmentCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user),
+):
+    # 代约机构取自经办人，不收请求体（P1-56 那条：校验的值必须是服务端事实）
+    return book_slot(db, body.slot_id, body.patient_id, booked_org_id=user.org_id)
 
 
 @router.get("", response_model=list[AppointmentOut])
@@ -391,10 +398,21 @@ def list_appointments(
     response_model=AppointmentOut,
     dependencies=[Depends(require_roles("operator", "doctor"))],  # H2
 )
-def cancel(appointment_id: int, db: Session = Depends(get_db)):
+def cancel(
+    appointment_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user),
+):
     appointment = db.get(Appointment, appointment_id)
     if appointment is None:
         raise HTTPException(status_code=404, detail="预约不存在")
+    # 代约机构或号源机构任一可取消（P1-59：原先谁都能取消别家约的号，号源被放回池里
+    # 又被别人约走，患者到了医院才知道号没了）。代约机构为空的——居民自助预约、
+    # 补列前的存量——照旧不判：只拦得住号源机构一方，会把当初代约的乡镇关在门外
+    if appointment.booked_org_id is not None:
+        slot = db.get(AppointmentSlot, appointment.slot_id)
+        assert_any_org_writable(
+            db, user, (appointment.booked_org_id, slot.org_id if slot else None),
+            "仅代约机构与号源机构可取消该预约",
+        )
     return release_appointment(db, appointment)
 
 
@@ -410,8 +428,8 @@ def fulfill(
     if appointment is None:
         raise HTTPException(status_code=404, detail="预约不存在")
     # 到诊核销发生在**号源所属机构**：人到了那家医院才谈得上核销（P1-58：别家经办
-    # 曾能把甲院的预约核销成"已就诊"，爽约率就此失真）。取消不在此列——代约方
-    # 常是另一家机构（乡镇替患者约县医院的号），而代约方没有落库，无从判定
+    # 曾能把甲院的预约核销成"已就诊"，爽约率就此失真）。代约机构不能核销——
+    # 人到没到，只有号源机构说了算
     slot = db.get(AppointmentSlot, appointment.slot_id)
     if slot is not None:
         assert_org_writable(db, user, slot.org_id)

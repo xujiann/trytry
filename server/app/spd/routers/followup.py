@@ -34,6 +34,7 @@ from ..models import (
     SpdTask,
 )
 from ..reporting import compose_section, default_period_label
+from ..service import assert_program_config_writable
 from ..rules import RuleError, grade_abnormal, validate_conditions
 from ...visibility import assert_org_writable, assert_patient_visible, visible_org_ids
 
@@ -361,7 +362,8 @@ class HealthCalendarOut(BaseModel):
 
 @router.post("/followup-rules", response_model=FollowupRuleOut, status_code=201,
              dependencies=[Depends(require_roles("director", "doctor"))])
-def create_followup_rule(body: FollowupRuleIn, db: Session = Depends(get_db)):
+def create_followup_rule(body: FollowupRuleIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    assert_program_config_writable(db, user, body.program_code)
     if not body.points:
         raise HTTPException(status_code=422, detail="随访方案至少要有一个随访时间点")
     if any(p < 0 or p > 3650 for p in body.points):
@@ -406,10 +408,15 @@ def list_followup_rules(
 
 @router.patch("/followup-rules/{rule_id}", response_model=FollowupRuleOut,
               dependencies=[Depends(require_roles("director", "doctor"))])
-def update_followup_rule(rule_id: int, body: dict, db: Session = Depends(get_db)):
+def update_followup_rule(
+    rule_id: int, body: dict, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     rule = db.get(SpdFollowupRule, rule_id)
     if rule is None:
         raise HTTPException(status_code=404, detail="随访方案不存在")
+    # 挂在病种下的随访方案归病种牵头机构；请求体可改 `program_code`，新旧都要过（P1-59）
+    assert_program_config_writable(db, user, rule.program_code, body.get("program_code", ""))
     for key in ("name", "dept", "program_code", "diagnosis_keywords", "surgery_keywords",
                 "order_keywords", "points", "questionnaire_code", "executor_role",
                 "allow_depts", "allow_roles", "active"):
