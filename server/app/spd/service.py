@@ -104,7 +104,8 @@ def build_facts(db: Session, patient_id: int, extra: dict | None = None, *, answ
         latest = (
             db.query(SpdMeasurement)
             .filter(SpdMeasurement.patient_id == patient_id, SpdMeasurement.metric == metric)
-            .order_by(SpdMeasurement.measured_at.desc())
+            # 同一测定时刻的多条（批量导入 / 设备上传）取后录的那条，与监测清单排第一的是同一条（P2-707）
+            .order_by(SpdMeasurement.measured_at.desc(), SpdMeasurement.id.desc())
             .first()
         )
         if latest is not None:

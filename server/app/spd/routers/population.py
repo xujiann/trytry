@@ -2142,7 +2142,7 @@ def patient_profile(
     measurements = (
         db.query(SpdMeasurement)
         .filter(SpdMeasurement.patient_id == patient_id)
-        .order_by(SpdMeasurement.measured_at.desc())
+        .order_by(SpdMeasurement.measured_at.desc(), SpdMeasurement.id.desc())   # 同一时刻并列时截断要有尾键（P2-707）
         .limit(50)
         .all()
     )

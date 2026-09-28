@@ -198,7 +198,7 @@ def home(
         row = (
             db.query(SpdMeasurement)
             .filter(SpdMeasurement.patient_id == patient.id, SpdMeasurement.metric == metric)
-            .order_by(SpdMeasurement.measured_at.desc())
+            .order_by(SpdMeasurement.measured_at.desc(), SpdMeasurement.id.desc())   # 同一时刻取后录的（P2-707）
             .first()
         )
         if row is not None:
