@@ -2817,7 +2817,7 @@ async function renderInpatient() {
   const AS = { admitted: ["在院", "orange"], discharged: ["已出院", "green"] };
   const wardName = Object.fromEntries(wards.map((w) => [w.id, w.name]));
   $("#page-body").innerHTML = `
-    ${stats.length ? panel("床位效率", table(["机构", "床位", "占用", "使用率", "在院", "累计出院"], stats, (s) =>
+    ${stats.length ? panel("床位效率", table(["机构", "床位", "占用", "当前占床率", "在院", "累计出院"], stats, (s) =>
       `<tr><td>${esc(s.org_name)}</td><td>${s.beds_total}</td><td>${s.beds_occupied}</td>
        <td>${s.occupancy_pct}%</td><td>${s.in_hospital}</td><td>${s.discharged_total}</td></tr>`)) : ""}
     ${panel("病区/床位建档（admin）与入院登记", `
