@@ -453,19 +453,19 @@ async function renderConsents() {
     // P2-38：原先"通过"弹审核意见框，点取消照样通过——**通过即改写患者主索引，注销申请则直接
     // 注销档案**。表单里取消就是不审；通过前把这一下会改什么写在表单上方。拒绝不填意见由后端报人话。
     const r = correctionRows[id] || {};
-    const form = await spdModal(approve ? "通过申请" : "拒绝申请", [
+    // 框自己提交（P2-607）：拒绝没写意见、意见写超了（后端 256 字），报错写在框里、框不关，写好的意见不用重填
+    const done = await spdModal(approve ? "通过申请" : "拒绝申请", [
       { name: "comment", label: approve ? "审核意见（可空）" : "拒绝意见（必填）", type: "textarea" },
     ], { intro: approve
       ? (r.request_type === "deactivate"
         ? "通过后该档案即注销：患者检索与居民端绑定入口不再出现（医疗记录照常保留）。"
         : `通过后按申请改写患者档案：${r.changes || "—"}`)
-      : "" });
-    if (!form) return;
-    try {
-      await api(`/api/consents/corrections/${id}/review`, { method: "POST",
-        body: JSON.stringify({ approve, comment: form.comment }) });
-      await drawCorrections(); setMsg("#cr-msg", "已处理", true);
-    } catch (err) { setMsg("#cr-msg", err.message, false); }
+      : "",
+    submit: (form) => api(`/api/consents/corrections/${id}/review`, { method: "POST",
+      body: JSON.stringify({ approve, comment: form.comment }) }) });
+    if (!done) return;
+    try { await drawCorrections(); setMsg("#cr-msg", "已处理", true); }
+    catch (err) { setMsg("#cr-msg", err.message, false); }
   };
   // 取数放最后：监听已与 innerHTML 同一同步块挂好，窗口为零（P2-31 根修，样板见 pages-spd.js renderSpdPath）
   await drawConsents(); await drawCorrections(); await drawTexts("", false);
@@ -715,16 +715,19 @@ async function renderTelemedicine() {
   $("#page-body").onclick = async (e) => {
     const { reply, close } = e.target.dataset;
     if (reply) {
-      const v = await spdModal(`回复咨询 ${reply}`, [
+      // 框自己提交（P2-607）：处方号不对、回复写超了（后端 2048 字）报错写在框里、框不关，写好的回复不用重填
+      const done = await spdModal(`回复咨询 ${reply}`, [
         { name: "reply", label: "回复内容（必填）", type: "textarea" },
         { name: "doctor_name", label: "回复医师姓名", required: true },
         { name: "prescription_id", label: "关联处方ID（续方时填写，须是该患者已通过审方的处方；可空）" },
-      ]);
-      if (!v) return;
-      const rx = v.prescription_id;
-      return postAction(`/api/telemedicine/consults/${reply}/reply`, {
-        reply: v.reply, doctor_name: v.doctor_name,
-        prescription_id: rx === "" ? null : (Number.isNaN(Number(rx)) ? rx : Number(rx)) }, "#tm-msg");
+      ], { submit: (v) => {
+        const rx = v.prescription_id;
+        return api(`/api/telemedicine/consults/${reply}/reply`, { method: "POST", body: JSON.stringify({
+          reply: v.reply, doctor_name: v.doctor_name,
+          prescription_id: rx === "" ? null : (Number.isNaN(Number(rx)) ? rx : Number(rx)) }) });
+      } });
+      if (done) route();
+      return;
     }
     if (close) {
       // P2-43：原先点一下就结束；「已回复 → 已结束」页面上没有撤回入口
@@ -1014,12 +1017,13 @@ async function renderInsurance() {
     if (no) postAction(`/api/insurance/special-diseases/${no}/review?approve=false`, null, "#ins-msg");
     if (dualok || dualno) {
       // P2-38：原先意见框点"取消"照样批准 / 驳回（意见记空）。表单里取消就是不审。
+      // 框自己提交（P2-607）：意见写超了（后端 512 字）报错写在框里、框不关，写好的意见不用重填
       const approve = Boolean(dualok);
-      const form = await spdModal(approve ? "批准双通道申报" : "驳回双通道申报",
-        [{ name: "comment", label: approve ? "审核意见" : "驳回理由", type: "textarea" }]);
-      if (!form) return;
-      postAction(`/api/insurance/dual-channel/${dualok || dualno}/review?approve=${approve}`
-        + `&comment=${encodeURIComponent(form.comment)}`, null, "#ins-msg");
+      const done = await spdModal(approve ? "批准双通道申报" : "驳回双通道申报",
+        [{ name: "comment", label: approve ? "审核意见" : "驳回理由", type: "textarea" }],
+        { submit: (form) => api(`/api/insurance/dual-channel/${dualok || dualno}/review?approve=${approve}`
+          + `&comment=${encodeURIComponent(form.comment)}`, { method: "POST" }) });
+      if (done) route();
     }
   };
 }
@@ -1105,15 +1109,18 @@ async function renderEducation() {
   $("#page-body").onclick = async (e) => {
     const d = e.target.dataset;
     if (d.liveok || d.liveno) {
+      // 框自己提交（P2-607）：意见写超了（后端 256 字）报错写在框里、框不关，写好的意见不用重填
       const approve = Boolean(d.liveok);
-      const form = await spdModal(approve ? "排期审核" : "驳回直播申请", [
+      const done = await spdModal(approve ? "排期审核" : "驳回直播申请", [
         { name: "comment", label: approve ? "审核意见" : "驳回理由", type: "textarea" },
-      ]);
-      if (!form) return;
-      const comment = form.comment || (approve ? "同意排期" : "");
-      return postAction(
-        `/api/education/live-sessions/${d.liveok || d.liveno}/review?approve=${approve}&comment=${encodeURIComponent(comment)}`,
-        null, "#edu-msg");
+      ], { submit: (form) => {
+        const comment = form.comment || (approve ? "同意排期" : "");
+        return api(
+          `/api/education/live-sessions/${d.liveok || d.liveno}/review?approve=${approve}&comment=${encodeURIComponent(comment)}`,
+          { method: "POST" });
+      } });
+      if (done) route();
+      return;
     }
     if (d.livefin) return postAction(`/api/education/live-sessions/${d.livefin}/finish`, null, "#edu-msg");
     if (d.cstats) {
@@ -1133,17 +1140,14 @@ async function renderEducation() {
         { recording_url: form.recording_url }, "#edu-msg");
     }
     if (d.livefb) {
-      const form = await spdModal("直播评价（一人一场一条，再评即覆盖）", [
+      // 框自己提交（P2-607）：评价写超了（后端 512 字）报错写在框里、框不关，写好的评价不用重填
+      const r = await spdModal("直播评价（一人一场一条，再评即覆盖）", [
         { name: "rating", label: "评分", type: "select", value: "5",
           options: [5, 4, 3, 2, 1].map((n) => ({ value: String(n), label: `${n} 分` })) },
         { name: "comment", label: "评价", type: "textarea" },
-      ]);
-      if (!form) return;
-      try {
-        const r = await api(`/api/education/live-sessions/${d.livefb}/feedback`, { method: "POST",
-          body: JSON.stringify({ rating: Number(form.rating), comment: form.comment || "" }) });
-        setMsg("#edu-msg", r.updated ? "已更新你的评价" : "评价已提交");
-      } catch (err) { setMsg("#edu-msg", err.message, false); }
+      ], { submit: (form) => api(`/api/education/live-sessions/${d.livefb}/feedback`, { method: "POST",
+        body: JSON.stringify({ rating: Number(form.rating), comment: form.comment || "" }) }) });
+      if (r) setMsg("#edu-msg", r.updated ? "已更新你的评价" : "评价已提交");
       return;
     }
     if (d.livefbs) {
@@ -1600,12 +1604,14 @@ async function renderVaccineSupply() {
     }
     if (d.unfreeze) return postAction(`/api/vaccine-supply/batches/${d.unfreeze}/unfreeze`, {}, "#vb-msg");
     if (d.handle) {
-      const picked = await spdModal("超温处置", [
+      // 框自己提交（P2-607）：处置说明写超了（后端 512 字）报错写在框里、框不关；原先留空就关框、什么也不发生，
+      // 现在由后端说不能留空（后端本就必填）
+      const done = await spdModal("超温处置", [
         { name: "handle_note", label: "处置说明（处置后这一格印的就是它）", type: "textarea", value: "" },
-      ]);
-      if (!picked || !picked.handle_note) return;
-      return postAction(`/api/vaccine-supply/cold-chain/${d.handle}/handle`,
-        { handle_note: picked.handle_note }, "#cc-msg");
+      ], { submit: (picked) => api(`/api/vaccine-supply/cold-chain/${d.handle}/handle`,
+        { method: "POST", body: JSON.stringify({ handle_note: picked.handle_note }) }) });
+      if (done) route();
+      return;
     }
     if (d.recipients) {
       let r;   // 查失败要说出来（P2-378）：原先 api() 抛错没人接，点了没反应

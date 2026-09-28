@@ -17,14 +17,8 @@ from test_frontend_api_calls_resolve import _call_args
 
 STATIC = Path(__file__).resolve().parents[1] / "app" / "static"
 
-#: 带多行文本、还是「点确定就关框」的模态框（2026-09-27 量：妇幼页迁走 5 张后余 51，任务中心 4 张再迁走后余 47；2026-09-28 转诊 3 张迁走后余 44，随访 3 张再迁走后余 41，统筹调度 3 张再迁走后余 38，慢专病页余下 4 张迁走后余 34，core.js 8 张再迁走后余 26，pages-mgmt.js 8 张迁走后余 18，pages-public.js 6 张再迁走后余 12）。只减不增。
+#: 带多行文本、还是「点确定就关框」的模态框（2026-09-27 量：妇幼页迁走 5 张后余 51，任务中心 4 张再迁走后余 47；2026-09-28 转诊 3 张迁走后余 44，随访 3 张再迁走后余 41，统筹调度 3 张再迁走后余 38，慢专病页余下 4 张迁走后余 34，core.js 8 张再迁走后余 26，pages-mgmt.js 8 张迁走后余 18，pages-public.js 6 张再迁走后余 12，pages-clinical.js 6 张迁走后余 6）。只减不增。
 KNOWN: set[tuple[str, str, str]] = {
-    ('pages-clinical.js', 'renderConsents', 'approve ? "通过申请" : "拒绝申请"'),
-    ('pages-clinical.js', 'renderTelemedicine', '`回复咨询 ${reply}`'),
-    ('pages-clinical.js', 'renderInsurance', 'approve ? "批准双通道申报" : "驳回双通道申报"'),
-    ('pages-clinical.js', 'renderEducation', 'approve ? "排期审核" : "驳回直播申请"'),
-    ('pages-clinical.js', 'renderEducation', '"直播评价（一人一场一条，再评即覆盖）"'),
-    ('pages-clinical.js', 'renderVaccineSupply', '"超温处置"'),
     ('pages-clinical.js', 'renderResources', '`编辑资源 ${r ? r.code : d.rsedit}`'),
     ('pages-clinical.js', 'renderHrFinance', '"登记人员变动"'),
     ('pages-clinical.js', 'renderHrFinance', '`物资出入库：${asset ? asset.name : d.assetmv}`'),

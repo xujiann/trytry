@@ -499,10 +499,10 @@ def test_更正注销申请的审核在页内表单里填_取消即不审(page, 
     expect(modal).to_have_count(0)
     assert status(deact_id) == "pending", "点了取消却照样注销了"
     page.click(button(deact_id, "rejected"))
-    _spd_modal(page, {"comment": ""})
-    expect(page.locator("#cr-msg")).to_contain_text("拒绝申请必须填写审核意见")
+    # P2-607 第十批：框自己提交——没写意见的报错写在框里、框不关（原先报在页面消息行、框已关）
+    form = _spd_modal_rejected(page, {"comment": ""})
+    expect(form.locator("[data-modal-msg]")).to_contain_text("拒绝申请必须填写审核意见")
     assert status(deact_id) == "pending"
-    page.click(button(deact_id, "rejected"))
     _spd_modal(page, {"comment": "核实非重复建档，不予注销"})
     expect(page.locator("#cr-msg")).to_contain_text("已处理")
     assert status(deact_id) == "rejected"
@@ -553,6 +553,10 @@ def test_双通道申报审核在页内表单里填_取消即不审(page, base_u
         expect(modal).to_have_count(0)
         assert app(aid)["status"] == "pending", f"{attr}：点了取消却照样审了"
         page.click(f'button[data-{attr}="{aid}"]')
+        # P2-607 第十批：框自己提交——意见写超了（后端 512 字）报错写在框里、框不关、写的还在，申报不动
+        form = _spd_modal_rejected(page, {"comment": "审" * 513})
+        expect(form.locator('[name="comment"]')).to_have_value("审" * 513)
+        assert app(aid)["status"] == "pending"
         _redrawn(page, lambda: _spd_modal(page, {"comment": comment}))
         row = app(aid)
         assert (row["status"], row["review_comment"]) == (status, comment), row
@@ -2296,6 +2300,60 @@ def test_申请单行上直接打印本单的报告_不用照申请单号去填�
         page.locator("tr", has_text="E2E报告号甲").locator("button[data-printreport]").click()   # 修前这一行没有这个按钮
     expect(popup.value.locator("body")).to_contain_text("E2E 报告号甲单的结论")
     expect(popup.value.locator("body")).not_to_contain_text("E2E 报告号乙单的结论")
+
+
+def test_直播排期审核与直播评价由框自己提交_写超了框不关(page, base_url, admin_read, admin_call):
+    """P2-607 第十批：直播「排期」与「评价」原先点确定就关框、再发请求——审核意见写超了（后端 256 字）、评价写超了
+    （后端 512 字）报错落在页面消息行，写好的一段随框一起没了。现在框自己提交：失败留框、报错写在框里、填的都在、
+    库里不动；改好再交才落库。"""
+    pending = admin_call("POST", "/api/education/live-sessions", {"title": "E2E框内提交直播排期", "speaker": "E2E讲者"})
+    done = admin_call("POST", "/api/education/live-sessions", {"title": "E2E框内提交直播评价", "speaker": "E2E讲者"})
+    admin_call("POST", f"/api/education/live-sessions/{done['id']}/review?approve=true&comment=E2E")
+    admin_call("POST", f"/api/education/live-sessions/{done['id']}/finish")
+
+    def session(sid):
+        return next(x for x in admin_read("/api/education/live-sessions") if x["id"] == sid)
+
+    _login(page, base_url)
+    _open_page(page, "education", "远程医学教育")
+    page.click(f'button[data-liveok="{pending["id"]}"]')
+    form = _spd_modal_rejected(page, {"comment": "排" * 257})
+    expect(form.locator('[name="comment"]')).to_have_value("排" * 257)   # 修前框关，写的意见没了
+    assert session(pending["id"])["status"] == "pending"
+    _redrawn(page, lambda: _spd_modal(page, {"comment": "E2E 同意排期，周五下午"}))
+    assert (session(pending["id"])["status"], session(pending["id"])["review_comment"]) == (
+        "approved", "E2E 同意排期，周五下午")
+
+    page.click(f'button[data-livefb="{done["id"]}"]')
+    form = _spd_modal_rejected(page, {"rating": "4", "comment": "评" * 513})
+    expect(form.locator('[name="comment"]')).to_have_value("评" * 513)
+    assert admin_read(f"/api/education/live-sessions/{done['id']}/feedback")["count"] == 0
+    _spd_modal(page, {"comment": "E2E 讲得清楚"})
+    expect(page.locator("#edu-msg")).to_contain_text("评价已提交")
+    (fb,) = admin_read(f"/api/education/live-sessions/{done['id']}/feedback")["feedbacks"]
+    assert (fb["rating"], fb["comment"]) == (4, "E2E 讲得清楚"), fb
+
+
+def test_冷链超温处置由框自己提交_写超了框不关(page, base_url, seed, admin_read, admin_call):
+    """P2-607 第十批：「超温处置」原先点确定就关框、再发请求——处置说明写超了（后端 512 字）报错落在页面消息行，写好的
+    处置经过随框一起没了；留空则关框、什么也不发生。现在框自己提交：失败留框、报错写在框里、写的都在、记录不动。"""
+    rec = admin_call("POST", "/api/vaccine-supply/cold-chain", {
+        "org_id": seed["org"]["id"], "device_name": "E2E框内提交冰箱", "temperature": 12.5,
+        "recorded_at": "2026-09-01 10:00:00"})
+    assert rec["exceeded"] is True, rec
+
+    def record():
+        return next(x for x in admin_read("/api/vaccine-supply/cold-chain?exceeded_only=true") if x["id"] == rec["id"])
+
+    _login(page, base_url)
+    _open_page(page, "vaccinesupply", "疫苗批次与冷链")
+    page.click(f'button[data-handle="{rec["id"]}"]')
+    form = _spd_modal_rejected(page, {"handle_note": "处" * 513})
+    expect(form.locator('[name="handle_note"]')).to_have_value("处" * 513)   # 修前框关，写的处置经过没了
+    assert record()["handled"] is False
+    _redrawn(page, lambda: _spd_modal(page, {"handle_note": "E2E 疫苗已转移至备用冰箱，报修压缩机"}))
+    got = record()
+    assert (got["handled"], got["handle_note"]) == (True, "E2E 疫苗已转移至备用冰箱，报修压缩机"), got
 
 
 def test_编辑慢病病种由框自己提交_分级规则JSON写错框不关(page, base_url, admin_read, admin_call):
@@ -4485,12 +4543,11 @@ def test_互联网诊疗回复在页内表单里录入_医师必填_处方号写
     _open_page(page, "telemedicine", "互联网+诊疗")
 
     page.click(f'button[data-reply="{cid}"]')
-    _spd_modal(page, {"reply": "E2E可续方", "doctor_name": "E2E全科医生", "prescription_id": "三十一"})
-    expect(page.locator("#tm-msg")).to_contain_text("prescription_id")
-
-    page.click(f'button[data-reply="{cid}"]')
-    _redrawn(page, lambda: _spd_modal(page, {"reply": "E2E可续方，按原剂量", "doctor_name": "E2E全科医生",
-                                             "prescription_id": str(rx_id)}))
+    # P2-607 第十批：框自己提交——处方号写错报错写在框里、框不关，写好的回复还在（原先报在页面消息行、框已关）
+    form = _spd_modal_rejected(page, {"reply": "E2E可续方", "doctor_name": "E2E全科医生", "prescription_id": "三十一"})
+    expect(form.locator("[data-modal-msg]")).to_contain_text("prescription_id")
+    expect(form.locator('[name="reply"]')).to_have_value("E2E可续方")
+    _redrawn(page, lambda: _spd_modal(page, {"reply": "E2E可续方，按原剂量", "prescription_id": str(rx_id)}))
     consults = page.evaluate("async () => await api('/api/telemedicine/consults')")
     got = next(c for c in consults if c["id"] == cid)
     assert (got["status"], got["doctor_name"], got["prescription_id"]) == ("replied", "E2E全科医生", rx_id), got
