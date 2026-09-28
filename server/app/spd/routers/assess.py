@@ -748,8 +748,10 @@ def collect_metrics_batch(
             for oid in ids
         }
         union = set().union(*patients.values()) if patients else set()
+        # 按病种跑分时评估也按病种取（P2-690）：同时管高血压与糖尿病的患者，只做过高血压评估，按糖尿病跑分原先
+        # 也算「已评估」——与任务、转诊、上报、建档、目标池同一个 prog()，与专家工作台的评估人次同一个判据（P2-552）
         assessed = {
-            pid for (pid,) in db.query(SpdAssessment.patient_id)
+            pid for (pid,) in prog(SpdAssessment, db.query(SpdAssessment.patient_id))
             .filter(
                 SpdAssessment.patient_id.in_(union or [0]),
                 SpdAssessment.created_at >= f"{start} 00:00:00",
@@ -793,7 +795,8 @@ def collect_metrics_batch(
     }
     union = set().union(*patients.values()) if patients else set()
     rows = (
-        db.query(SpdMeasurement.patient_id, SpdMeasurement.level)
+        # 按病种跑分时监测值也按病种取（P2-690）：原先糖尿病的达标率拿血压读数算
+        prog(SpdMeasurement, db.query(SpdMeasurement.patient_id, SpdMeasurement.level))
         .filter(
             SpdMeasurement.patient_id.in_(union or [0]),
             SpdMeasurement.measured_at >= f"{start} 00:00:00",
