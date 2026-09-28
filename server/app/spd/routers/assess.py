@@ -704,8 +704,11 @@ def collect_metrics_batch(
     if source == "enrollment":
         from ..models import SpdCandidate
 
+        # 分母与分子同一个期末（P2-688）：分子只数期末之前建的档，分母原先不设上界——补跑往期时，期末之后才入池的人
+        # 全进了分母，越晚跑分越低、同一期永远复现不出来（机构绩效的存量分母同一条：必须设上界，performance.py）。
+        # 入池之后状态怎么变（排除、签约）仍按现在的状态算，那是 P2-670 待裁定的另一半
         cand_query = prog(SpdCandidate, db.query(SpdCandidate).filter(
-            SpdCandidate.status.in_(["target", "enrolled"])))
+            SpdCandidate.status.in_(["target", "enrolled"]), through_day(SpdCandidate.created_at, end)))
         if object_type == "org":
             cand_rows = dict(
                 cand_query.filter(SpdCandidate.org_id.in_(ids))
