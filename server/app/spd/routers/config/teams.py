@@ -508,7 +508,14 @@ def update_village_doctor(
     if record is None:
         raise HTTPException(status_code=404, detail="村医档案不存在")
     assert_org_writable(db, user, record.org_id)
-    for key, value in body.model_dump(exclude_unset=True).items():
+    changes = body.model_dump(exclude_unset=True)
+    # 恢复启用与建档同一道（第十五批 S1-4，照 P2-313 恢复团队成员）：账号停用了的村医不再回到启用状态——
+    # 回来了出绑定码、进考核对象，人却登录不了
+    if changes.get("active") is True and not record.active:
+        state = unusable_user(db, record.user_id)
+        if state:
+            raise HTTPException(status_code=409, detail=f"村医账号{state}，不能恢复启用")
+    for key, value in changes.items():
         setattr(record, key, value)
     db.commit()
     return _vd_out(record)

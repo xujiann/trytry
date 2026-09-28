@@ -50,6 +50,7 @@ from ..models import (
     SpdServicePackage,
     SpdTask,
     SpdTeam,
+    SpdVillageDoctor,
 )
 from ..rules import RuleError, as_validated, evaluate, is_suspect_risk, score_scale
 from ..service import (MEASUREMENT_SOURCE_NAMES, TASK_OPEN_STATUSES, actively_enrolled, award_points, build_facts,
@@ -976,6 +977,13 @@ def _check_enroll_refs(db: Session, values: dict, current: SpdEnrollment | None 
         state = unusable_user(db, value)
         if state:
             raise HTTPException(status_code=404, detail=f"{label}{state}（{field}={value}）")
+    # 村医档案停用了也不收（第十五批 S1-4）：账号还在用、村医档案已停用的人，别处一律当「已回收」——不出绑定码、不进
+    # 考核对象、工作台不数；建档照挂、照记签约积分。没有村医档案的账号不强求（存量档案里有），只看有档案且停用的
+    vd_user = values.get("village_doctor_id")
+    if vd_user is not None and not (current is not None and current.village_doctor_id == vd_user):
+        profile = db.query(SpdVillageDoctor).filter(SpdVillageDoctor.user_id == vd_user).first()
+        if profile is not None and not profile.active:
+            raise HTTPException(status_code=404, detail=f"村医已停用（village_doctor_id={vd_user}）")
 
 
 def _enroll_out(e: SpdEnrollment, brief: dict | None = None) -> dict:
