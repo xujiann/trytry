@@ -52,9 +52,10 @@ from .routers.medwaste import overdue_condition as medwaste_overdue_condition
 # 与合同到期提醒接口同源的口径（P2-207：已续签、离职的不算）
 from .routers.admin_mgmt import contract_expiring_condition
 
-# 合同/制剂的提前提醒窗口
+# 合同/制剂的提前提醒窗口：与各自页面上的预警同一个窗口（人事页「60 天内到期合同」、中药制剂页「60 天内到期 /
+# 已过期」）。制剂原先是 30——页面列着 45 天后到期的批次，每日扫描与告警却不算它（P2-694）
 CONTRACT_NOTICE_DAYS = 60
-PREPARATION_NOTICE_DAYS = 30
+PREPARATION_NOTICE_DAYS = 60
 
 #: PII 索引自检的抽样行数上限（每列）。抽样而非全表：真要全量校对得把整列解密一遍，
 #: 百万级患者库会把自检本身变成一次全库解密——抽样只为**发现**破损，修复靠
@@ -226,7 +227,8 @@ def contract_expiry_scan(db: Session) -> tuple[int, str]:
 
 @register("preparation_expiry_scan", "中药制剂效期提醒", 86400)
 def preparation_expiry_scan(db: Session) -> tuple[int, str]:
-    """口径与 GET /api/tcm/preparation-batches/expiring 一致（默认 30 天窗口）。"""
+    """口径与 GET /api/tcm/preparation-batches/expiring 一致：N 天内到期或已过期的未召回批次，窗口与页面同为 60 天
+    （页面按 days=60 取；接口不带 days 时缺省 30，没改）。"""
     cutoff = (clock.today() + timedelta(days=PREPARATION_NOTICE_DAYS)).isoformat()
     count = (
         db.query(TcmPreparationBatch)
@@ -238,7 +240,8 @@ def preparation_expiry_scan(db: Session) -> tuple[int, str]:
         .count()
     )
     _alert("preparation_expiring", "中药制剂临期", count)
-    return count, f"{PREPARATION_NOTICE_DAYS} 天内到期制剂 {count} 批"
+    # 已过期未召回的也在数里（与接口同一个判据），摘要照实说（P2-694）：原先写「30 天内到期制剂 N 批」
+    return count, f"{PREPARATION_NOTICE_DAYS} 天内到期或已过期制剂 {count} 批"
 
 
 @register("followup_overdue_scan", "随访任务超期扫描", 3600)
