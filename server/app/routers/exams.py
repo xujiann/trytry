@@ -20,7 +20,7 @@ from ..visibility import (
     scope_org_list,
 )
 from ..database import get_db
-from ..deps import get_current_user, paginate, require_admin, require_roles, resolve_business_date
+from ..deps import get_current_user, paginate, require_admin, require_roles, resolve_business_date, row_dict
 from ..models import (
     CriticalAction,
     ExamReport,
@@ -318,7 +318,12 @@ def list_requests(
         query = query.filter(ExamRequest.center_type == center_type)
     if status:
         query = query.filter(ExamRequest.status == status)
-    return paginate(query.order_by(ExamRequest.id.desc()), response, offset, limit)
+    rows = paginate(query.order_by(ExamRequest.id.desc()), response, offset, limit)
+    # 带上报告号（第十六批 T1-6）：报告打印、附件、修订史都按报告号取，清单原先只给申请单号——两套编号各自递增、
+    # 先出报告的未必是先开的单，照着申请单号填进「报告ID」打出来的是别人的报告
+    report_of = row_dict(db.query(ExamReport.request_id, ExamReport.id)
+                         .filter(ExamReport.request_id.in_([r.id for r in rows] or [0])).all())
+    return [{**ExamRequestOut.model_validate(r).model_dump(), "report_id": report_of.get(r.id)} for r in rows]
 
 
 @router.post(

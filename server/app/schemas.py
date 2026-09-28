@@ -138,6 +138,9 @@ class ExamRequestOut(BaseModel):
     recognition_declined_reason: str
     sample_status: str = ""
     claimed_by: str = ""
+    # 已出报告的报告号（第十六批 T1-6，只在清单里给）：报告打印、附件、修订史都按报告号取，清单原先只给申请单号——
+    # 照着申请单号填进「报告ID」，打出来的是另一位患者的报告
+    report_id: int | None = None
 
     model_config = {"from_attributes": True}
 

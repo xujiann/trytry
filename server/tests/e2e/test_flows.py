@@ -2277,6 +2277,27 @@ def test_修订危急值报告由框自己提交_理由写超了框不关(page, 
     assert (rev["prev_conclusion"], rev["reason"]) == ("E2E 高钾血症（危急）", "E2E 复核后改结论"), rev
 
 
+def test_申请单行上直接打印本单的报告_不用照申请单号去填报告ID(page, base_url, seed, admin_call):
+    """P2-678（第十六批 T1-6）：打印 / 修订史按报告号取，申请单清单原先只给申请单号——两套编号各自递增，后开的单先出报告，
+    照申请单号填「报告ID」打出来的是另一张单的报告。修后已出报告的申请单行直接给「打印报告」，打的是这一行的报告。"""
+    reqs = {}
+    for tag in ("甲", "乙"):
+        reqs[tag] = admin_call("POST", "/api/exams", {
+            "patient_id": seed["patient"]["id"], "from_org_id": seed["org"]["id"], "center_type": "imaging",
+            "item_code": "E2E-T16", "item_name": f"E2E报告号{tag}"})["id"]
+    for tag in ("乙", "甲"):   # 后开的单先出报告
+        admin_call("POST", f"/api/exams/{reqs[tag]}/claim")
+        admin_call("POST", f"/api/exams/{reqs[tag]}/report", {
+            "finding": "", "conclusion": f"E2E 报告号{tag}单的结论", "critical": False, "reported_by": "影像科"})
+
+    _login(page, base_url)
+    _open_page(page, "exams", "共享诊断中心")
+    with page.expect_popup() as popup:
+        page.locator("tr", has_text="E2E报告号甲").locator("button[data-printreport]").click()   # 修前这一行没有这个按钮
+    expect(popup.value.locator("body")).to_contain_text("E2E 报告号甲单的结论")
+    expect(popup.value.locator("body")).not_to_contain_text("E2E 报告号乙单的结论")
+
+
 def test_编辑慢病病种由框自己提交_分级规则JSON写错框不关(page, base_url, admin_read, admin_call):
     """P2-607 第七批：编辑病种原先点确定就关框，分级规则 JSON 写错一个括号，报错落在页面消息行，改了一半的规则与指导要点
     全丢。现在框自己提交：JSON 解析不了、写超了都在框里说、框不关；改好再交才落库。"""

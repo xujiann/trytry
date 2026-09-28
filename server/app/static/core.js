@@ -1444,12 +1444,18 @@ async function renderExams() {
          <td><button class="btn secondary" data-printreport="${r.id}">打印报告</button>
              <button class="btn secondary" data-amend="${r.id}" data-conclusion="${esc(r.conclusion)}">修订</button>
              <button class="btn secondary" data-revs="${r.id}">修订史</button></td></tr>`)) : ""}
-    ${panel("申请单", table(["ID", "患者", "中心", "项目", "状态", "样本", "操作"], requests, (r) => {
+    ${panel("申请单", table(["ID", "患者", "中心", "项目", "状态", "样本", "报告ID", "操作"], requests, (r) => {
       let actions = r.status === "pending"
         ? `<button class="btn secondary" data-claim="${r.id}">领取</button>`
         : r.status === "diagnosing"
         ? `<button class="btn secondary" data-report="${r.id}">出报告</button>` : "";
       actions += ` <button class="btn secondary" data-printreq="${r.id}">打印申请单</button>`;
+      // 已出报告的这一行直接给报告的打印与修订史（第十六批 T1-6）：下方几张表单要填的是「报告ID」，清单原先只给
+      // 申请单号——照着申请单号填，打出来的是另一位患者的报告
+      if (r.report_id) {
+        actions += ` <button class="btn secondary" data-printreport="${esc(r.report_id)}">打印报告</button>`
+          + ` <button class="btn secondary" data-revs="${esc(r.report_id)}">修订史</button>`;
+      }
       // 样本物流只有检验类有，且只在出报告前走（后端两处分别 422 / 409）；已核收即到头
       const flow = r.center_type === "lab" && ["pending", "diagnosing"].includes(r.status)
         && SAMPLE_NEXT[r.sample_status || ""]
@@ -1457,7 +1463,7 @@ async function renderExams() {
       return `<tr><td>${r.id}</td><td>${r.patient_id}</td><td>${esc(CENTER_NAMES[r.center_type] || r.center_type)}</td>
         <td>${esc(r.item_name)}</td><td>${statusTag(EXAM_STATUS, r.status)}</td>
         <td>${r.center_type === "lab" ? esc(SAMPLE_STATUS[r.sample_status || ""] || r.sample_status) : "—"}</td>
-        <td>${actions}${flow}</td></tr>`;
+        <td>${r.report_id ?? "—"}</td><td>${actions}${flow}</td></tr>`;
     }))}
     ${panel("报告模板（管理员维护，出报告时照着写）", `
       <form class="inline" id="tpl-form">
