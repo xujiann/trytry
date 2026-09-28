@@ -3003,7 +3003,8 @@ async function renderSpdFollowup() {
       </form>
       <form class="inline" id="spd-fuplan-form" style="margin-top:8px">
         <input name="patient_id" type="number" placeholder="患者ID" required>
-        <select name="rule_id">${rules.map((r) => `<option value="${r.id}">${esc(r.name)}</option>`).join("")}</select>
+        <select name="rule_id">${rules.filter((r) => r.active !== false).map((r) =>
+          `<option value="${r.id}">${esc(r.name)}</option>`).join("")}</select>
         <input name="base_date" placeholder="基准日 YYYY-MM-DD（出院/手术日）">
         <button>生成随访计划</button>
       </form>

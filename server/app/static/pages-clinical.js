@@ -3238,17 +3238,20 @@ async function renderLabQc() {
     const [lj, measurements] = await Promise.all([
       api(`/api/labqc/lots/${lotId}/levey-jennings`), api(`/api/labqc/lots/${lotId}/measurements`)]);
     const detail = Object.fromEntries(measurements.map((m) => [m.id, m]));
+    // 停用的批号不再摆录入表单（第十五批 S1-7）：后端对它 409「批号已停用，不可继续录入测定值」，原先照摆、填完才被拒
+    const lotInactive = (lots.find((l) => String(l.id) === String(lotId)) || {}).active === false;
     const panel = $("#lot-detail");
     panel.classList.remove("hidden");
     panel.innerHTML = `
       <h3>${esc(lj.item_name)} · 批号 ${esc(lj.lot_no)}（靶值 ${lj.target_value} ± SD ${lj.sd}）</h3>
       <p>L-J 参考线：均值 ${lj.lines.mean} ｜ ±1SD [${lj.lines.sd1_lower}, ${lj.lines.sd1_upper}]
         ｜ ±2SD [${lj.lines.sd2_lower}, ${lj.lines.sd2_upper}] ｜ ±3SD [${lj.lines.sd3_lower}, ${lj.lines.sd3_upper}]</p>
+      ${lotInactive ? '<p class="desc">该批号已停用，不再录入测定值；历史测定与失控处理照常查看。</p>' : `
       <form class="inline" id="meas-form">
         <input name="value" placeholder="测得值" required style="width:100px">
         <label style="font-size:13px">测定时间（留空按录入时刻） <input name="measured_at" type="datetime-local"></label>
         <input name="operator" placeholder="操作者（可空）">
-        <button>录入测定值</button></form>
+        <button>录入测定值</button></form>`}
       <p class="msg" id="meas-msg"></p>
       ${table(["ID", "测得值", "z", "测定时间", "操作者", "判定", "处理", "操作"], lj.points, (p) => {
         const m = detail[p.id] || {};
@@ -3260,7 +3263,8 @@ async function renderLabQc() {
          <td>${p.out_of_control ? (p.handled ? `<span class="tag green">已处理</span>${handledNote}` : '<span class="tag orange">未处理</span>') : "—"}</td>
          <td>${p.out_of_control && !p.handled ? `<button class="btn secondary" data-handle="${p.id}">失控处理</button>` : "—"}</td></tr>`;
       })}`;
-    $("#meas-form").onsubmit = async (e) => {
+    const measForm = $("#meas-form");
+    if (measForm) measForm.onsubmit = async (e) => {
       e.preventDefault();
       const body = formJson(e.target, ["value"]);
       try {

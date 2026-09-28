@@ -2181,12 +2181,15 @@ async function renderDiseasePrograms() {
     `)}
 
     ${picked && current ? panel(`${current.name} · 入组管理`, `
-      <form class="inline" id="dp-enroll">
+      ${current.active === false
+        // 停用的专病目录不再摆入组表单（第十五批 S1-7）：后端入组对它 409「该专病目录已停用」，原先照摆、填完才被拒
+        ? '<p class="desc">该专病目录已停用，不再入组；已入组的病例照常查看、记录节点。</p>'
+        : `<form class="inline" id="dp-enroll">
         <input name="patient_id" type="number" placeholder="患者ID" required>
         <select name="org_id">${orgs.map((o) =>
           `<option value="${o.id}">${esc(o.name)}</option>`).join("")}</select>
         <button>入组</button>
-      </form>
+      </form>`}
       <div class="cards">
         <div class="card"><span class="k">累计</span><b>${stats.total}</b></div>
         ${Object.entries(stats.by_status).map(([k, v]) =>
@@ -2231,8 +2234,9 @@ async function renderDiseasePrograms() {
     if (bad.length) return setMsg("#dp-msg", `路径节点要写成「键:名称」：${bad.join("、")}`, false);
     postAction("/api/disease-programs", body, "#dp-msg");
   };
-  if (picked) {
-    $("#dp-enroll").onsubmit = (e) => { e.preventDefault();
+  const enrollForm = $("#dp-enroll");   // 停用的目录不摆这张表
+  if (picked && enrollForm) {
+    enrollForm.onsubmit = (e) => { e.preventDefault();
       postAction(`/api/disease-programs/${picked}/enrollments`,
         formJson(e.target, ["patient_id", "org_id"]), "#dp-msg"); };
   }

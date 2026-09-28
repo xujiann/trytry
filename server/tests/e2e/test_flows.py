@@ -714,6 +714,36 @@ def contract_seed(base_url, seed):
     return {"contract": contract, "read": lambda path: call(path, None, admin)}
 
 
+def test_停用的目录与批号不再摆出填了也交不上的表单(page, base_url, seed, admin_call):
+    """第十五批 S1-7：停用的对象，后端都拒（404 / 409），页面却照摆提交入口——填完才被拒。
+    ①专病目录停用后「打开」仍摆入组表单；②检验质控停用的批号仍摆「录入测定值」；③「生成随访计划」的方案下拉含停用方案。
+    修后前两处换成一句说明（历史照看），第三处只列启用的。"""
+    program = admin_call("POST", "/api/disease-programs", {"code": "E2E_S17_DP", "name": "E2E 停用专病"})
+    admin_call("PATCH", f"/api/disease-programs/{program['id']}", {"active": False})
+    lot = admin_call("POST", "/api/labqc/lots", {"org_id": seed["org"]["id"], "item_code": "E2E-S17", "item_name": "E2E停用批号",
+                                                 "lot_no": "E2E-S17-LOT", "target_value": 5.0, "sd": 0.2})
+    admin_call("PATCH", f"/api/labqc/lots/{lot['id']}", {"active": False})
+    rule = admin_call("POST", "/api/spd/followup-rules", {"code": "E2E_S17_RULE", "name": "E2E 停用随访方案",
+                                                          "scene": "outpatient", "points": [7]})
+    admin_call("PATCH", f"/api/spd/followup-rules/{rule['id']}", {"active": False})
+    _login(page, base_url)
+
+    _open_page(page, "diseaseprograms", "专病管理")
+    _redrawn(page, lambda: page.click(f'button[data-dppick="{program["id"]}"]'))
+    expect(page.locator("#page-body")).to_contain_text("该专病目录已停用，不再入组")
+    expect(page.locator("#dp-enroll")).to_have_count(0)                  # 修前照摆，入组 409「该专病目录已停用」
+
+    _open_page(page, "labqc", "检验室内质控")
+    page.click(f'button[data-lot="{lot["id"]}"]')
+    expect(page.locator("#lot-detail")).to_contain_text("该批号已停用，不再录入测定值")
+    expect(page.locator("#meas-form")).to_have_count(0)                  # 修前照摆，录入 409「批号已停用」
+
+    _open_page(page, "spdfollowup", "智能随访服务端")
+    options = page.locator('#spd-fuplan-form select[name="rule_id"] option')
+    expect(options.first).to_be_attached()
+    assert "E2E 停用随访方案" not in options.all_inner_texts()          # 修前列着，生成 404「随访方案不存在或已停用」
+
+
 def test_家医签约的履约与解约都在页内表单里_取消即不动(page, base_url, contract_seed):
     """P2-38：「记录履约」原先两连问，类型要手打英文代码、备注框点取消照样记；「解约」点一下就生效，
     没有任何确认。换成页内表单：类型从下拉里选，取消就是不记 / 不解（按接口核对），再走完并读回。"""
