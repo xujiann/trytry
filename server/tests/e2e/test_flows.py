@@ -420,6 +420,10 @@ def test_开单前互认在页内表单里选_取消即不开单(page, base_url,
     assert [r["id"] for r in orders()] == [source_id], "点了取消却照样开了单"
 
     page.click("#exam-form button")  # 取消不清表：原样再交一次
+    # 不互认理由写超了（后端 256 字）：框自己提交，报错写在框里、框不关、没开单（P2-607 第七批）
+    form = _spd_modal_rejected(page, {"decision": "decline", "reason": "理" * 257})
+    expect(form.locator('[name="reason"]')).to_have_value("理" * 257)
+    assert [r["id"] for r in orders()] == [source_id]
     _redrawn(page, lambda: _spd_modal(page, {"decision": "decline", "reason": "患者要求本院复查"}))
     declined = orders()[-1]
     assert declined["id"] != source_id and declined["status"] == "pending", declined
@@ -762,6 +766,9 @@ def test_家医签约的履约与解约都在页内表单里_取消即不动(pag
     expect(modal).to_have_count(0)
     assert read(f"/api/contracts/{cid}/services") == [], "点了取消却照样记了履约"
     page.click(f'button[data-svc="{cid}"]')
+    form = _spd_modal_rejected(page, {"service_type": "visit", "note": "履" * 513})   # 备注写超了：框不关（P2-607 第七批）
+    expect(form.locator('[name="note"]')).to_have_value("履" * 513)
+    assert read(f"/api/contracts/{cid}/services") == []
     _spd_modal(page, {"service_type": "visit", "note": "上门测血压，嘱低盐饮食"})
     expect(page.locator("#ct-msg")).to_contain_text("履约已记录")
     assert [(x["service_type"], x["note"]) for x in read(f"/api/contracts/{cid}/services")] \
@@ -2199,6 +2206,69 @@ def test_成员端办结干预与处置上报由框自己提交_写超了框不�
     assert case_report()["status"] == "pending"
     _redrawn(page, lambda: _spd_modal(page, {"handle_note": "E2E 已电话嘱其急诊"}))
     assert (case_report()["status"], case_report()["handle_note"]) == ("done", "E2E 已电话嘱其急诊")
+
+
+def test_出具会诊意见由框自己提交_写超了框不关(page, base_url, seed, admin_read, admin_call):
+    """P2-607 第七批：「出意见」原先点确定就关框、再发请求——意见写超了（后端 2048 字）报错落在页面消息行，写好的会诊意见
+    全丢；留空则框关了什么也不发生。现在框自己提交：失败留框、报错写在框里、写的还在；成功才关框、整页重画。"""
+    other = admin_call("POST", "/api/organizations", {"name": "E2E会诊意见受邀院", "org_type": "township", "level": "township"})
+    patient = admin_call("POST", "/api/patients", {"name": "E2E会诊意见患者", "id_card": "320981199305052286"})
+    consult = admin_call("POST", "/api/consultations", {
+        "patient_id": patient["id"], "from_org_id": seed["org"]["id"], "to_org_id": other["id"], "question": "E2E 出意见"})
+    admin_call("POST", f"/api/consultations/{consult['id']}/accept", {"expert_name": "E2E专家"})
+
+    def status():
+        return next(c for c in admin_read("/api/consultations") if c["id"] == consult["id"])["status"]
+
+    _login(page, base_url)
+    _open_page(page, "consultations", "远程会诊")
+    page.click(f'button[data-act="complete"][data-id="{consult["id"]}"]')
+    form = _spd_modal_rejected(page, {"opinion": "会" * 2049})
+    expect(form.locator('[name="opinion"]')).to_have_value("会" * 2049)   # 修前框关，意见全丢
+    assert status() == "accepted"
+    _redrawn(page, lambda: _spd_modal(page, {"opinion": "E2E 建议上级医院进一步检查"}))
+    assert status() == "completed"
+
+
+def test_修订危急值报告由框自己提交_理由写超了框不关(page, base_url, seed, admin_read, admin_call):
+    """P2-607 第七批：「修订」原先点确定就关框、再发请求——修订理由写超了（后端 512 字）报错落在页面消息行，改好的结论
+    与理由全丢。现在框自己提交：失败留框、报错写在框里、填的都在、报告不动；成功才关框、留一条修订史。"""
+    req = admin_call("POST", "/api/exams", {"patient_id": seed["patient"]["id"], "from_org_id": seed["org"]["id"],
+                                            "center_type": "lab", "item_code": "E2E-AMD", "item_name": "E2E修订血钾"})
+    admin_call("POST", f"/api/exams/{req['id']}/claim")
+    report = admin_call("POST", f"/api/exams/{req['id']}/report", {
+        "finding": "E2E 血钾 6.8mmol/L", "conclusion": "E2E 高钾血症（危急）", "critical": True, "reported_by": "检验科"})
+
+    _login(page, base_url)
+    _open_page(page, "exams", "共享诊断中心")
+    page.click(f'button[data-amend="{report["id"]}"]')
+    form = _spd_modal_rejected(page, {"conclusion": "E2E 复核：高钾血症（危急）", "reason": "修" * 513})
+    expect(form.locator('[name="reason"]')).to_have_value("修" * 513)
+    expect(form.locator('[name="conclusion"]')).to_have_value("E2E 复核：高钾血症（危急）")
+    assert admin_read(f"/api/exams/reports/{report['id']}/revisions") == []
+    _redrawn(page, lambda: _spd_modal(page, {"reason": "E2E 复核后改结论"}))
+    (rev,) = admin_read(f"/api/exams/reports/{report['id']}/revisions")
+    assert (rev["prev_conclusion"], rev["reason"]) == ("E2E 高钾血症（危急）", "E2E 复核后改结论"), rev
+
+
+def test_编辑慢病病种由框自己提交_分级规则JSON写错框不关(page, base_url, admin_read, admin_call):
+    """P2-607 第七批：编辑病种原先点确定就关框，分级规则 JSON 写错一个括号，报错落在页面消息行，改了一半的规则与指导要点
+    全丢。现在框自己提交：JSON 解析不了、写超了都在框里说、框不关；改好再交才落库。"""
+    admin_call("POST", "/api/chronic/disease-types", {"code": "e2e_p2607", "name": "E2E 框内提交病种",
+                                                      "followup_interval_days": 90})
+
+    def saved():
+        return next(t for t in admin_read("/api/chronic/disease-types") if t["code"] == "e2e_p2607")
+
+    _login(page, base_url)
+    _open_page(page, "chronic", "慢病管理")
+    page.click(f'button[data-typeedit="{saved()["id"]}"]')
+    form = _spd_modal_rejected(page, {"guidance": "E2E 每日监测血压", "level_rules": "{坏的 JSON"})
+    expect(form.locator("[data-modal-msg]")).to_contain_text("分级规则 JSON 解析失败")
+    expect(form.locator('[name="guidance"]')).to_have_value("E2E 每日监测血压")   # 修前框关，写的指导要点也没了
+    assert saved()["guidance"] == ""
+    _redrawn(page, lambda: _spd_modal(page, {"level_rules": "{}"}))
+    assert saved()["guidance"] == "E2E 每日监测血压"
 
 
 def test_随访方案在界面上新建与改诊断关键词_自动匹配据此排随访(page, base_url, seed, admin_read, admin_call):
@@ -4228,15 +4298,18 @@ def test_集中审方的审方与点评都在页内表单里录入_取消即放�
     expect(page.locator("form.panel:has(button[data-cancel])")).to_have_count(0)
     assert status(to_review) == "pending_review"  # 取消就是放弃，没有退回
     page.click(f'button[data-approve="1"][data-id="{to_review}"]')
+    form = _spd_modal_rejected(page, {"comment": "意" * 257})   # 药师意见写超了：框不关、写的还在（P2-607 第七批）
+    expect(form.locator('[name="comment"]')).to_have_value("意" * 257)
+    assert status(to_review) == "pending_review"
     _redrawn(page, lambda: _spd_modal(page, {"comment": "E2E同意，已电话确认医师用意"}))
     assert status(to_review) == "approved"
 
     page.click(f'button[data-rxcomment="{to_comment}"]')
     expect(page.locator("form.panel:has(button[data-cancel])")).to_contain_text("点评要点")
-    _spd_modal(page, {"grade": "unreasonable"})  # 不合理却什么都没写
-    expect(page.locator("#rx-msg")).to_contain_text("不合理处方须注明问题类型或点评意见")
-    page.click(f'button[data-rxcomment="{to_comment}"]')
-    _redrawn(page, lambda: _spd_modal(page, {"grade": "unreasonable", "issues": "E2E重复用药"}))
+    # 不合理却什么都没写：框自己提交，后端的话写在框里、框不关（P2-607 第七批；修前框关、报错落到页面消息行）
+    form = _spd_modal_rejected(page, {"grade": "unreasonable"})
+    expect(form.locator("[data-modal-msg]")).to_have_text("不合理处方须注明问题类型或点评意见")
+    _redrawn(page, lambda: _spd_modal(page, {"issues": "E2E重复用药"}))
     reviews = page.evaluate("async () => await api('/api/prescriptions/comment-reviews')")
     mine = [r for r in reviews if r["prescription_id"] == to_comment]
     assert [(r["grade"], r["issues"]) for r in mine] == [("unreasonable", "E2E重复用药")], mine
@@ -4874,6 +4947,8 @@ def test_药房批次台账按批号查到那一批_召回回执报召回前的�
     expect(ledger).to_contain_text("E2E-BT-2")
     target = batch_seed[1]["id"]
     page.click(f'button[data-recall="{target}"]')
+    form = _spd_modal_rejected(page, {"reason": "召" * 257})   # 原因写超了（后端 256 字）：框不关、写的还在（P2-607 第七批）
+    expect(form.locator('[name="reason"]')).to_have_value("召" * 257)
     _spd_modal(page, {"reason": "E2E 厂家召回"})
     expect(page.locator("#batch-msg")).to_contain_text("退出可用汇总 7 → 0")
 

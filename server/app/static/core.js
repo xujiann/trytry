@@ -535,11 +535,13 @@ async function renderConsultations() {
       } else if (act === "decline") {
         await api(`/api/consultations/${id}/decline`, { method: "POST" });
       } else if (act === "complete") {
-        const picked = await spdModal("出具会诊意见", [
-          { name: "opinion", label: "会诊意见（后端上限 2048 字）", type: "textarea" }]);
-        if (!picked || !picked.opinion) return;
-        await api(`/api/consultations/${id}/complete`, { method: "POST",
-          body: JSON.stringify({ opinion: picked.opinion }) });
+        // 框自己提交（P2-607）：意见写超了、会诊已被别人出具（409）时报错写在框里、框不关，写好的意见不用重写；
+        // 留空由后端说「不能留空」（原先点确定就关框、什么也不发生）
+        const ok = await spdModal("出具会诊意见", [
+          { name: "opinion", label: "会诊意见（后端上限 2048 字）", type: "textarea" }],
+        { submit: (form) => api(`/api/consultations/${id}/complete`, { method: "POST",
+          body: JSON.stringify({ opinion: form.opinion }) }) });
+        if (!ok) return;
       } else if (act === "rate") {
         const picked = await spdModal("会诊评价", [
           { name: "rating", label: "评分", type: "select", value: "5",
@@ -610,13 +612,13 @@ async function renderContracts() {
       if (svc) {
         // P2-38：原先两连问——履约类型要手打英文代码（打错被后端 422 拒回），备注框点取消照样记。
         // 合成一个表单：类型从下拉里选，取消就是不记。
-        const form = await spdModal("记录履约", [
+        // 框自己提交（P2-607）：备注写超了、签约已解约（409）时报错写在框里、框不关，选的类型与备注都在
+        const ok = await spdModal("记录履约", [
           { name: "service_type", label: "履约类型", type: "select", value: "followup",
             options: Object.entries(SVC).map(([value, label]) => ({ value, label })) },
           { name: "note", label: "备注", type: "textarea" },
-        ]);
-        if (!form) return;
-        await api(`/api/contracts/${svc}/services`, { method: "POST", body: JSON.stringify(form) });
+        ], { submit: (form) => api(`/api/contracts/${svc}/services`, { method: "POST", body: JSON.stringify(form) }) });
+        if (!ok) return;
         setMsg("#ct-msg", "履约已记录", true);
         await drawServices(svc);   // 刚记的那条就在眼前
       }
@@ -1511,26 +1513,28 @@ async function renderExams() {
       // 中心类型与申请机构一并送去预检（P2-145）：建单侧按它们判能不能互认，预检不带，就会弹出一份建单时 422 的「可互认」
       const check = await api(`/api/exams/recognition-check?patient_id=${patientId}&item_code=${encodeURIComponent(itemCode)}`
         + `&center_type=${encodeURIComponent(f.get("center_type"))}&from_org_id=${Number(f.get("from_org_id"))}`);
-      let extra = {};
+      const body = {
+        patient_id: patientId, from_org_id: Number(f.get("from_org_id")),
+        center_type: f.get("center_type"), item_code: itemCode,
+        item_name: f.get("item_name"), clinical_info: f.get("clinical_info") };
       if (check.recognizable) {
         // P2-38：原先是 confirm「确定=互认」——取消就是"不互认"，接着弹理由框，理由框再点取消
         // 照样开单（理由记"未填写"）：想放弃开单的人连点两次取消，反而开出一张重复检查。
         // 表单里互认与否是显式选择，取消就是不开单。
-        const form = await spdModal("可互认：30 天内已有同项目报告", [
+        // 框自己提交（P2-607）：不互认理由写超了、建单被拒时报错写在框里、框不关，选的处理方式与理由都在
+        const ok = await spdModal("可互认：30 天内已有同项目报告", [
           { name: "decision", label: "处理方式", type: "select", value: "accept", options: [
             { value: "accept", label: "互认该结果，不再重复检查" },
             { value: "decline", label: "不互认，仍开新检查" }] },
           { name: "reason", label: "不互认理由（选「不互认」时填写，监管留痕）", type: "textarea" },
-        ], { intro: `已有报告结论：${check.conclusion || "—"}` });
-        if (!form) return;
-        extra = form.decision === "accept"
-          ? { accept_recognition_of: check.request_id }
-          : { recognition_declined_reason: form.reason || "未填写" };
+        ], { intro: `已有报告结论：${check.conclusion || "—"}`, submit: (form) => api("/api/exams", { method: "POST",
+          body: JSON.stringify({ ...body, ...(form.decision === "accept"
+            ? { accept_recognition_of: check.request_id }
+            : { recognition_declined_reason: form.reason || "未填写" }) }) }) });
+        if (ok) route();
+        return;
       }
-      await api("/api/exams", { method: "POST", body: JSON.stringify({
-        patient_id: patientId, from_org_id: Number(f.get("from_org_id")),
-        center_type: f.get("center_type"), item_code: itemCode,
-        item_name: f.get("item_name"), clinical_info: f.get("clinical_info"), ...extra }) });
+      await api("/api/exams", { method: "POST", body: JSON.stringify(body) });
       route();
     } catch (err) { setMsg("#exam-msg", err.message, false); }
   };
@@ -1571,19 +1575,21 @@ async function renderExams() {
         return;
       }
       if (amend) {
-        const form = await spdModal("修订报告（改前值会连同理由留痕）", [
+        // 框自己提交（P2-607）：修订理由写超了、结论只填了空格时报错写在框里、框不关，改好的结论与理由不用重填
+        const r = await spdModal("修订报告（改前值会连同理由留痕）", [
           { name: "conclusion", label: "新结论", value: e.target.dataset.conclusion, required: true },
           { name: "finding", label: "新所见（留空不改）" },
           { name: "critical", label: "危急值标记", type: "select", value: "keep",
             options: [{ value: "keep", label: "不改" }, { value: "1", label: "是危急值" }, { value: "0", label: "解除危急" }] },
           { name: "reason", label: "修订理由", type: "textarea" },
-        ]);
-        if (!form || !form.conclusion) return;
-        const body = { conclusion: form.conclusion, reason: form.reason || "" };
-        // finding/critical 是 `| None` 的可选项：不改就别送，送 null 会把所见清空
-        if (form.finding) body.finding = form.finding;
-        if (form.critical !== "keep") body.critical = form.critical === "1";
-        const r = await api(`/api/exams/reports/${amend}`, { method: "PATCH", body: JSON.stringify(body) });
+        ], { submit: (form) => {
+          const body = { conclusion: form.conclusion, reason: form.reason || "" };
+          // finding/critical 是 `| None` 的可选项：不改就别送，送 null 会把所见清空
+          if (form.finding) body.finding = form.finding;
+          if (form.critical !== "keep") body.critical = form.critical === "1";
+          return api(`/api/exams/reports/${amend}`, { method: "PATCH", body: JSON.stringify(body) });
+        } });
+        if (!r) return;
         setMsg("#exam-msg", `报告 ${r.id} 已修订${r.critical ? `（仍为危急值，闭环状态 ${r.critical_status_name}）` : "（非危急值）"}`);
         route();
         return;
@@ -1829,24 +1835,24 @@ async function renderRx() {
         const lines = rp.items.map((i) => `${i.drug_name}（${i.drug_code}）${i.dose_exceeded ? "【日剂量超限】" : ""}\n  要点：${i.review_points || "规则库未维护"}\n  肝肾：${i.renal_hepatic_note || "—"}`);
         intro = `点评要点（规则覆盖 ${rp.rule_coverage_pct}%）：\n${lines.join("\n")}`;
       } catch (err) { intro = `点评要点取不到：${err.message}`; }
-      const v = await spdModal(`处方点评（处方 ${rxcomment}）`, [
+      // 点评与审方都由框自己提交（P2-607）：意见写超了、不合理却没写问题（422）、处方已被别人审过（409）时
+      // 报错写在框里、框不关，照着要点写好的点评意见不用重写
+      const ok = await spdModal(`处方点评（处方 ${rxcomment}）`, [
         { name: "grade", label: "结论", type: "select",
           options: [{ value: "reasonable", label: "合理" }, { value: "unreasonable", label: "不合理" }] },
         { name: "issues", label: "问题类型（不合理时与点评意见至少填一项，如：用法用量不适宜）" },
         { name: "comment", label: "点评意见", type: "textarea" },
-      ], { intro });
-      if (!v) return;
-      return postAction(`/api/prescriptions/${rxcomment}/comment-review`, v, "#rx-msg");
+      ], { intro, submit: (v) => api(`/api/prescriptions/${rxcomment}/comment-review`, { method: "POST",
+        body: JSON.stringify(v) }) });
+      if (ok) route();
+      return;
     }
     if (approve === undefined || !id) return;
-    const v = await spdModal(approve === "1" ? `审方通过（处方 ${id}）` : `审方驳回（处方 ${id}）`, [
-      { name: "comment", label: approve === "1" ? "药师意见（可空）" : "驳回理由", type: "textarea" }]);
-    if (!v) return;
-    try {
-      await api(`/api/prescriptions/${id}/review`, { method: "POST",
-        body: JSON.stringify({ approve: approve === "1", comment: v.comment }) });
-      route();
-    } catch (err) { setMsg("#rx-msg", err.message, false); }
+    const ok = await spdModal(approve === "1" ? `审方通过（处方 ${id}）` : `审方驳回（处方 ${id}）`, [
+      { name: "comment", label: approve === "1" ? "药师意见（可空）" : "驳回理由", type: "textarea" }],
+    { submit: (v) => api(`/api/prescriptions/${id}/review`, { method: "POST",
+      body: JSON.stringify({ approve: approve === "1", comment: v.comment }) }) });
+    if (ok) route();
   };
 }
 
@@ -2025,13 +2031,13 @@ async function renderPharmacy() {
     try {
       if (recall) {
         const batch = batches.find((b) => b.id === Number(recall));
-        const picked = await spdModal(`召回批次 ${batch ? batch.batch_no : recall}`, [
+        // 框自己提交（P2-607）：原因写超了、留空、批次已召回（409）时报错写在框里、框不关，写好的原因不用重写
+        const done = await spdModal(`召回批次 ${batch ? batch.batch_no : recall}`, [
           { name: "reason", label: "召回原因（会随批次一起留存，后端必填）", type: "textarea" },
-        ]);
-        if (!picked || !picked.reason) return;
-        const done = await api(`/api/pharmacy/batches/${recall}/recall`, {
-          method: "POST", body: JSON.stringify({ reason: picked.reason }),
-        });
+        ], { submit: (form) => api(`/api/pharmacy/batches/${recall}/recall`, {
+          method: "POST", body: JSON.stringify({ reason: form.reason }),
+        }) });
+        if (!done) return;
         // 报出退出可用汇总的量：召回最要紧的后果是"账面上少了多少"，不是"状态翻了"。
         // 召回之后 available 已是 0，原先照印 done.available 永远是「0 → 0」；取召回前台账那一行的可发余量
         setMsg("#batch-msg", `已召回，退出可用汇总 ${batch ? batch.available : "—"} → 0，不可发余量 ${done.blocked_quantity}`, true);
@@ -2181,7 +2187,7 @@ async function renderChronic() {
       }
       if (typeedit) {
         const t = types.find((x) => x.id === Number(typeedit));
-        const picked = await spdModal(`编辑病种 ${t ? t.code : typeedit}`, [
+        const ok = await spdModal(`编辑病种 ${t ? t.code : typeedit}`, [
           { name: "name", label: "病种名称（留空不改）", type: "text", value: t ? t.name : "" },
           { name: "followup_interval_days", label: "随访周期（天，留空不改）", type: "number",
             value: t ? t.followup_interval_days : "" },
@@ -2190,20 +2196,22 @@ async function renderChronic() {
           { name: "guidance", label: "指导要点（留空不改）", type: "textarea", value: t ? t.guidance : "" },
           { name: "level_rules", label: "分级规则 JSON（留空不改；结构由目录数据决定，不要删自定义键）",
             type: "textarea", value: t ? JSON.stringify(t.level_rules || {}) : "" },
-        ]);
-        if (!picked) return;
-        // 后端 exclude_unset + `if value is not None`：**不送的键就是不改**。
-        // 所以留空的字段一律不放进 body，而不是送空串把人家的值清掉。
-        const body = { active: picked.active === "1" };
-        if (picked.name) body.name = picked.name;
-        if (picked.followup_interval_days) body.followup_interval_days = picked.followup_interval_days;
-        if (picked.guidance) body.guidance = picked.guidance;
-        if (picked.level_rules) {
-          try { body.level_rules = JSON.parse(picked.level_rules); }
-          catch (err) { return setMsg("#chronic-msg", `分级规则 JSON 解析失败：${err.message}`, false); }
-        }
-        await api(`/api/chronic/disease-types/${typeedit}`, { method: "PATCH", body: JSON.stringify(body) });
-        return route();
+        ], { submit: (picked) => {
+          // 后端 exclude_unset + `if value is not None`：**不送的键就是不改**。
+          // 所以留空的字段一律不放进 body，而不是送空串把人家的值清掉。
+          const body = { active: picked.active === "1" };
+          if (picked.name) body.name = picked.name;
+          if (picked.followup_interval_days) body.followup_interval_days = picked.followup_interval_days;
+          if (picked.guidance) body.guidance = picked.guidance;
+          if (picked.level_rules) {
+            // 框自己提交（P2-607）：JSON 写错、指导要点写超了时报错写在框里、框不关——原先框一关，改了一半的规则 JSON 就没了
+            try { body.level_rules = JSON.parse(picked.level_rules); }
+            catch (err) { throw new Error(`分级规则 JSON 解析失败：${err.message}`); }
+          }
+          return api(`/api/chronic/disease-types/${typeedit}`, { method: "PATCH", body: JSON.stringify(body) });
+        } });
+        if (ok) route();
+        return;
       }
       if (risk) {
         const r = await api(`/api/chronic/${risk}/risk`);
