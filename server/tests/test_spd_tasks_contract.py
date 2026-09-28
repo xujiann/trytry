@@ -448,7 +448,8 @@ def test_导出行是int与str混型单元格(client, auth, world):
          r["urged_count"],
          # 创建时间写本地时刻（P2-567）；清单的 created_at 是落库的 naive UTC
          clock.to_local(datetime.fromisoformat(r["created_at"])).strftime("%Y-%m-%d %H:%M")]
-        for r in sorted(rows, key=lambda r: r["id"], reverse=True)
+        # 与清单同一个排序（第十六批 T1-2）：原先按编号倒序，截断时留下的不是表格上的前 N 条
+        for r in rows
     ]
     assert body == {
         "columns": ["任务ID", "患者", "病种", "任务类型", "标题", "状态", "优先级",

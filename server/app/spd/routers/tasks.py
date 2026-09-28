@@ -761,10 +761,7 @@ def list_tasks(
         # 先校验再比：`2026/09/30` 这种写法按字符串去比 YYYY-MM-DD 列，筛出来的是错的而不报错（P1-87）
         due_before = require_date(due_before, field="due_before")
         query = query.filter(SpdTask.due_date != "", SpdTask.due_date <= due_before)
-    rows = paginate(
-        query.order_by(SpdTask.priority.desc(), SpdTask.due_date, SpdTask.id.desc()),
-        response, offset, limit,
-    )
+    rows = paginate(query.order_by(*TASK_LIST_ORDER), response, offset, limit)
     briefs = {
         p.id: {"name": p.name, "phone": p.phone}
         for p in db.query(Patient).filter(Patient.id.in_([r.patient_id for r in rows] or [0]))
@@ -837,6 +834,10 @@ def get_task(task_id: int, db: Session = Depends(get_db), user: User = Depends(g
     assert_patient_visible(db, user, task.patient_id, resource="spd_task")
     patient = db.get(Patient, task.patient_id)
     return _task_out(task, {"name": patient.name, "phone": patient.phone} if patient else None)
+
+
+#: 任务中心清单的排序：优先级高的在前、截止早的在前、同级同日新建的在前。导出截断时按同一个顺序取「前 N 条」
+TASK_LIST_ORDER = (SpdTask.priority.desc(), SpdTask.due_date, SpdTask.id.desc())
 
 
 def _assignee_outside_org(db: Session, assignee_id: int, org_id: int | None) -> bool:
@@ -1338,7 +1339,9 @@ def export_tasks(
         if value is not None and value != "":
             query = query.filter(column == value)
     matched = query.count()
-    rows = query.order_by(SpdTask.id.desc()).limit(min(max(limit, 1), 5000)).all()
+    # 与清单同一个排序（第十六批 T1-2）：原先按编号倒序截取——截断时留下的是最新建的，而表格排在前面的特急、快到期的
+    # 被截掉；「与表格同一口径」「只导出了前 N 条」的「前」得是表格上的前
+    rows = query.order_by(*TASK_LIST_ORDER).limit(min(max(limit, 1), 5000)).all()
     briefs = {
         p.id: p.name
         for p in db.query(Patient).filter(Patient.id.in_([r.patient_id for r in rows] or [0]))
