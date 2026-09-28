@@ -781,8 +781,11 @@ def advance_path(db: Session, instance: SpdPathInstance) -> dict:
     if not allowed:
         instance.status = "paused"
         # 通知主管医生与路径负责人（P2-503）：原先只通知主管医生——档案没配主管医生时一条都不发，正是上面说的「停在那里
-        # 且没人知道为什么」；启动路径、在路径页调整它的负责人也不知道。两人是同一个的只发一条
-        for recipient in dict.fromkeys(uid for uid in (enrollment.doctor_user_id, instance.owner_user_id) if uid):
+        # 且没人知道为什么」；启动路径、在路径页调整它的负责人也不知道。两人是同一个的只发一条。
+        # 停用的账号不发（第十六批 T2-2，与派任务的 `usable_or_none` 同一口径）：原先照发，消息落进一个登不上的收件箱，
+        # 在岗的人照样不知道路径停了；两人都停用时一个都不剩，该回落给谁另行裁定
+        recipients = (usable_or_none(db, uid) for uid in (enrollment.doctor_user_id, instance.owner_user_id))
+        for recipient in dict.fromkeys(uid for uid in recipients if uid):
             notify_user(
                 db, recipient, category="spd_path",
                 title="专病路径已暂停",
