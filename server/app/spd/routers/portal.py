@@ -11,6 +11,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field, FiniteFloat
+from sqlalchemy import ColumnElement, or_, select
 from sqlalchemy.orm import Session
 
 from ... import clock
@@ -477,6 +478,15 @@ class SpdScaleOut(BaseModel):
     items: list[dict[str, Any]]
 
 
+def _program_open() -> ColumnElement[bool]:
+    """量表挂的病种还收新筛查：通用量表（不挂病种）照列，挂了病种的只列启用的（第十五批 S1-8）。
+
+    居民自查提交按 `unknown_program(active_only=True)` 拒停用病种（P1-89）——清单与扫码入口原先照列这些病种的量表，
+    居民答完一提交就 404「专病档案不存在或已停用」。管理端筛查表单的病种下拉早已只列启用的。"""
+    return or_(SpdScale.program_code == "",
+               SpdScale.program_code.in_(select(SpdProgram.code).where(SpdProgram.active.is_(True))))
+
+
 @router.get("/scales", response_model=list[SpdScaleOut])
 def list_screen_scales(
     response: Response,
@@ -491,7 +501,7 @@ def list_screen_scales(
     翻页给的是"第 51 个量表也能看到"，不是把匿名单次可取量抬高十倍。
     """
     query = db.query(SpdScale).filter(
-        SpdScale.status == "published", SpdScale.category == "screen"
+        SpdScale.status == "published", SpdScale.category == "screen", _program_open()
     )
     if program_code:
         query = query.filter(SpdScale.program_code == program_code)
@@ -515,7 +525,7 @@ def scale_by_token(qr_token: str, db: Session = Depends(get_db)):
     """扫码进入评估问卷（#5）。令牌无效一律 404，不透露量表是否存在。"""
     scale = (
         db.query(SpdScale)
-        .filter(SpdScale.qr_token == qr_token, SpdScale.status == "published")
+        .filter(SpdScale.qr_token == qr_token, SpdScale.status == "published", _program_open())
         .first()
     )
     if scale is None:
