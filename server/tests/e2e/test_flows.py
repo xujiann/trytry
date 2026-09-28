@@ -2137,6 +2137,70 @@ def test_统筹调度的拒绝申请_改目标池状态_召回进度由框自己
     assert admin_read(f"/api/spd/enrollments/{enrollment['id']}")["status"] == "active"   # 召回成功恢复在管
 
 
+def test_服务项目扣减登记由框自己提交_备注写超了框不关(page, base_url, seed, admin_read, admin_call):
+    """P2-607 第六批：「记用量」原先点确定就关框、再发请求——备注写超了（后端 256 字）、次数超了余量，报错落在页面消息行，
+    选好的项目与写的备注全丢。现在框自己提交：失败留框、报错写在框里；成功才关框、刷新档案明细并报「扣减已登记」。"""
+    pkg = admin_call("POST", "/api/spd/service-packages", {
+        "code": "E2E_P2607_PKG", "name": "E2E扣减服务包", "program_code": "hypertension",
+        "items": [{"code": "visit", "name": "上门随访", "times": 2}]})
+    patient = admin_call("POST", "/api/patients", {"name": "E2E扣减登记患者", "id_card": "320981199103032260"})
+    enrollment = admin_call("POST", "/api/spd/enrollments", {
+        "patient_id": patient["id"], "program_code": "hypertension", "org_id": seed["org"]["id"]})
+    binding = admin_call("POST", f"/api/spd/enrollments/{enrollment['id']}/packages", {"package_id": pkg["id"]})
+
+    def remaining():
+        return admin_read(f"/api/spd/enrollments/{enrollment['id']}")["packages"][0]["remaining"]
+
+    _login(page, base_url)
+    _open_page(page, "spdpatients", "筛查建档与纳管")
+    search = page.locator("#spd-enroll-filter")
+    search.locator('[name="keyword"]').fill("E2E扣减登记患者")
+    search.locator("button").click()
+    page.click(f'button[data-enr-detail="{enrollment["id"]}"]')
+    page.click(f'button[data-bind-use="{binding["id"]}"]')
+    form = _spd_modal_rejected(page, {"note": "注" * 257})
+    expect(form.locator('[name="note"]')).to_have_value("注" * 257)   # 修前框关，备注全丢
+    assert remaining() == 2
+    _spd_modal(page, {"note": "E2E 上门测血压"})
+    expect(page.locator("#spd-enroll-msg")).to_have_text("扣减已登记")
+    assert remaining() == 1
+
+
+def test_成员端办结干预与处置上报由框自己提交_写超了框不关(page, base_url, seed, admin_read, admin_call):
+    """P2-607 第六批：成员端「办结干预」「处置异常上报」原先点确定就关框、再发请求——患者反馈、处置意见写超了（后端 512 字）
+    报错落在页面消息行，写好的一段全丢。现在框自己提交：失败留框、报错写在框里、填的都在；成功才关框、整页重画。"""
+    patient = admin_call("POST", "/api/patients", {"name": "E2E成员端办结患者", "id_card": "320981199204042273"})
+    admin_call("POST", "/api/spd/enrollments", {
+        "patient_id": patient["id"], "program_code": "hypertension", "org_id": seed["org"]["id"]})
+    (intv_id,) = admin_call("POST", "/api/spd/interventions", {
+        "patient_ids": [patient["id"]], "program_code": "hypertension", "goal": "E2E 控盐",
+        "content": "E2E 每日食盐 5 克以下", "create_task": False})["ids"]
+    report = admin_call("POST", "/api/spd/case-reports", {
+        "patient_id": patient["id"], "program_code": "hypertension", "content": "E2E 血压 190/115"})
+
+    def intervention():
+        return next(i for i in admin_read(f"/api/spd/interventions?patient_id={patient['id']}") if i["id"] == intv_id)
+
+    def case_report():
+        return next(r for r in admin_read("/api/spd/case-reports?limit=50") if r["id"] == report["id"])
+
+    _login(page, base_url)
+    _open_page(page, "spdmember", "服务团队成员端·日常服务")
+    page.click(f'button[data-intv="{intv_id}"][data-s="done"]')
+    form = _spd_modal_rejected(page, {"feedback": "反" * 513})
+    expect(form.locator('[name="feedback"]')).to_have_value("反" * 513)   # 修前框关，反馈全丢
+    assert intervention()["status"] == "planned"
+    _redrawn(page, lambda: _spd_modal(page, {"feedback": "E2E 已按要求控盐"}))
+    assert (intervention()["status"], intervention()["feedback"]) == ("done", "E2E 已按要求控盐")
+
+    page.click(f'button[data-crpt="{report["id"]}"]')
+    form = _spd_modal_rejected(page, {"status": "done", "handle_note": "处" * 513})
+    expect(form.locator('[name="handle_note"]')).to_have_value("处" * 513)
+    assert case_report()["status"] == "pending"
+    _redrawn(page, lambda: _spd_modal(page, {"handle_note": "E2E 已电话嘱其急诊"}))
+    assert (case_report()["status"], case_report()["handle_note"]) == ("done", "E2E 已电话嘱其急诊")
+
+
 def test_随访方案在界面上新建与改诊断关键词_自动匹配据此排随访(page, base_url, seed, admin_read, admin_call):
     """P2-92：随访方案面板原先没有新建入口、编辑不给诊断关键词，三套预置方案又都没配关键词——出院即派生随访与「按患者
     特征自动匹配」从界面上一个人都匹配不到；没有可用方案时回执照样弹「扫描 undefined 人」，原因被吞掉。"""
@@ -2433,6 +2497,10 @@ def test_运行中枢编辑与改规则_按点击这一刻的病种预填(page, 
     modal = _modal(page)
     expect(modal.locator('[name="name"]')).to_have_value("E2E 预填病种（改名）")   # 修前：进页面时的旧名
     expect(modal.locator('[name="description"]')).to_have_value("E2E 原说明")   # 修前：恒空
+    # 说明写超了（后端 512 字）：框自己提交，报错写在框里、框不关、写的还在（P2-607 第六批）
+    form = _spd_modal_rejected(page, {"description": "说" * 513})
+    expect(form.locator('[name="description"]')).to_have_value("说" * 513)
+    assert admin_read(f"/api/spd/programs/{prog['id']}")["description"] == "E2E 原说明"
     _redrawn(page, lambda: _spd_modal(page, {"description": ""}))
     saved = admin_read(f"/api/spd/programs/{prog['id']}")
     assert (saved["name"], saved["description"], saved["include_rules"][0]["value"]) == (

@@ -597,15 +597,18 @@ async function renderSpdAdmin() {
       let cur;
       try { cur = await api(`/api/spd/programs/${progEdit.dataset.progEdit}`); }
       catch (err) { return setMsg("#spd-program-msg", err.message, false); }
-      const form = await spdModal("编辑病种（纳入 / 排除规则用该行的「改规则」，保存即升一版）", [
+      // 框自己提交（P2-607）：说明写超了、名称撞了时报错写在框里、框不关，改了一半的说明不用重敲
+      const ok = await spdModal("编辑病种（纳入 / 排除规则用该行的「改规则」，保存即升一版）", [
         { name: "name", label: "名称", value: cur.name, required: true },
         { name: "lead_dept", label: "牵头科室", value: cur.lead_dept },
         { name: "description", label: "说明", type: "textarea", value: cur.description },
-      ]);
-      if (!form) return;
-      const body = { lead_dept: form.lead_dept || "", description: form.description || "" };
-      if (form.name) body.name = form.name;
-      return postAction(`/api/spd/programs/${cur.id}`, body, "#spd-program-msg", "PATCH");
+      ], { submit: (form) => {
+        const body = { lead_dept: form.lead_dept || "", description: form.description || "" };
+        if (form.name) body.name = form.name;
+        return api(`/api/spd/programs/${cur.id}`, { method: "PATCH", body: JSON.stringify(body) });
+      } });
+      if (ok) route();
+      return;
     }
     // 改已有病种的纳入 / 排除规则（P2-173）：接口「改规则即升版本并留快照」，页面原先没有入口——编辑对话框叫人
     // 「用下方编辑器新建版本」，下方那两个编辑器挂在「新建病种」表单上：同编码提交 409，换个编码就多出一个病种
@@ -1703,19 +1706,17 @@ async function renderSpdPatients() {
       let items = [];
       try { items = JSON.parse(bindUse.dataset.items || "[]"); } catch (err) { items = []; }
       if (!items.length) { setMsg("#spd-enroll-msg", "该服务包没有可扣减的项目", false); return; }
-      const form = await spdModal("服务项目扣减登记", [
+      // 框自己提交（P2-607）：次数超了余量（409）、备注写超了时报错写在框里、框不关，选的项目与写的备注都在
+      const ok = await spdModal("服务项目扣减登记", [
         { name: "item_code", label: "项目", type: "select", value: items[0].code,
           options: items.map((i) => ({ value: i.code, label: i.name || i.code })) },
         { name: "qty", label: "次数", type: "number", value: 1 },
         { name: "note", label: "备注（可留空）", type: "textarea" },
-      ]);
-      if (!form) return;
-      try {
-        await api(`/api/spd/package-bindings/${bindUse.dataset.bindUse}/usages`, { method: "POST",
-          body: JSON.stringify({ item_code: form.item_code, qty: form.qty || 1, note: form.note || "" }) });
-        await showEnrollment(bindUse.dataset.enr);
-        setMsg("#spd-enroll-msg", "扣减已登记");
-      } catch (err) { setMsg("#spd-enroll-msg", err.message, false); }
+      ], { submit: (form) => api(`/api/spd/package-bindings/${bindUse.dataset.bindUse}/usages`, { method: "POST",
+        body: JSON.stringify({ item_code: form.item_code, qty: form.qty || 1, note: form.note || "" }) }) });
+      if (!ok) return;
+      await showEnrollment(bindUse.dataset.enr);
+      setMsg("#spd-enroll-msg", "扣减已登记");
       return;
     }
     if (bindUnbind) {
@@ -3787,27 +3788,30 @@ async function renderSpdMember() {
   $("#page-body").addEventListener("click", async (e) => {
     const intv = e.target.closest("[data-intv]");
     const crpt = e.target.closest("[data-crpt]");
+    // 办结干预 / 处置异常上报两张框由框自己提交（P2-607）：反馈、处置意见写超了（后端 512 字）或单子已被别人办结（409）时
+    // 报错写在框里、框不关，写好的一段不用重填
     if (intv) {
       const status = intv.dataset.s;
-      const body = { status };
-      if (status === "done") {
-        const form = await spdModal("办结干预", [
-          { name: "feedback", label: "患者反馈（可空）", type: "textarea" }]);
-        if (!form) return;
-        if (form.feedback) body.feedback = form.feedback;
+      if (status !== "done") {
+        return postAction(`/api/spd/interventions/${intv.dataset.intv}`, { status }, "#spd-intv-msg", "PATCH");
       }
-      return postAction(`/api/spd/interventions/${intv.dataset.intv}`, body,
-        "#spd-intv-msg", "PATCH");
+      const ok = await spdModal("办结干预", [
+        { name: "feedback", label: "患者反馈（可空）", type: "textarea" }],
+      { submit: (form) => api(`/api/spd/interventions/${intv.dataset.intv}`, { method: "PATCH",
+        body: JSON.stringify(form.feedback ? { status, feedback: form.feedback } : { status }) }) });
+      if (ok) route();
+      return;
     }
     if (crpt) {
-      const form = await spdModal("处置异常上报", [
+      const ok = await spdModal("处置异常上报", [
         { name: "status", label: "处置结果", type: "select", options: [
           { value: "handling", label: "开始处置" }, { value: "done", label: "处置完成" },
           { value: "closed", label: "关闭（无需处理）" }] },
-        { name: "handle_note", label: "处置意见", type: "textarea" }]);
-      if (!form) return;
-      return postAction(`/api/spd/case-reports/${crpt.dataset.crpt}/handle`, form,
-        "#spd-report-msg");
+        { name: "handle_note", label: "处置意见", type: "textarea" }],
+      { submit: (form) => api(`/api/spd/case-reports/${crpt.dataset.crpt}/handle`, { method: "POST",
+        body: JSON.stringify(form) }) });
+      if (ok) route();
+      return;
     }
   });
 }
