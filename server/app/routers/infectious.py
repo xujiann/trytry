@@ -209,6 +209,14 @@ def _timeliness(
     return report_hours, days_late, days_late * 24 > report_hours
 
 
+def _timeliness_text(late: bool | None, report_hours: int | None) -> str:
+    """报告卡导出「及时性」一栏，与报告卡页面同一套说法（P2-686）：原先判不了的留空，页面却写「无法定时限」——
+    目录外病种确实没有法定时限；发病日期非法时时限照给、只是算不出迟没迟，要写「无法判定」。"""
+    if late is None:
+        return "无法定时限" if report_hours is None else "无法判定"
+    return "迟报" if late else "及时"
+
+
 def _case_card(case: InfectiousCase, org_names: dict, meta_by_code: dict) -> dict:
     meta = meta_by_code.get(case.disease_code)
     report_hours, days_late, late = _timeliness(case, meta)
@@ -271,7 +279,7 @@ def export_case_report_cards_csv(
             c["category_name"], c["onset_date"], clock.local_iso(case.reported_at),
             c["report_hours"] if c["report_hours"] is not None else "",
             c["days_late"] if c["days_late"] is not None else "",
-            "迟报" if c["late"] else ("" if c["late"] is None else "及时"),
+            _timeliness_text(c["late"], c["report_hours"]),
         ]
         for case, c in cards
     ]

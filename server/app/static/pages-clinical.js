@@ -1,7 +1,9 @@
 /* 管理端 · 页面（一）：驾驶舱、共享诊断、会诊转诊、预约、处方药事等。 */
 
-// 及时性是三态：目录外病种或发病日期非法时后端给 null，不能当成"及时"
-const CASE_TIMELY = { late: ["迟报", "red"], ontime: ["及时", "green"], unknown: ["无法定时限", ""] };
+// 及时性后端是三态：目录外病种或发病日期非法时给 null，不能当成"及时"；null 再按有没有法定时限分两种说法（P2-686）
+const CASE_TIMELY = {
+  late: ["迟报", "red"], ontime: ["及时", "green"], unknown: ["无法定时限", ""], undetermined: ["无法判定", ""],
+};
 
 async function renderInfectious() {
   $("#page-desc").textContent =
@@ -62,8 +64,10 @@ async function renderInfectious() {
     if (!card) return;
     try {
       const c = await api(`/api/infectious/cases/${card}/report-card`);
-      // late 是 bool | null：null 表示目录外病种或发病日期非法，**不是"及时"**
-      const timely = c.late === null ? "unknown" : c.late ? "late" : "ontime";
+      // late 是 bool | null：null 表示目录外病种或发病日期非法，**不是"及时"**。两种要分开说（P2-686）：目录外病种没有
+      // 法定时限；发病日期非法时时限照给（目录里有）、只是算不出迟没迟——原先一律写「无法定时限」，卡上同时印着
+      // 「法定时限 24 小时」，自相矛盾
+      const timely = c.late === null ? (c.report_hours === null ? "unknown" : "undetermined") : c.late ? "late" : "ontime";
       $("#card-panel").classList.remove("hidden");
       $("#card-body").innerHTML = `<div class="cards">
         <div class="card"><span class="k">病例ID</span><b>${c.case_id}</b></div>
