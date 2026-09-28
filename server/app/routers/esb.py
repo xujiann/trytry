@@ -895,6 +895,11 @@ def run_flow(code: str, message_id: int, db: Session = Depends(get_db)):
     if message.status in {"succeeded", "dead"}:
         raise HTTPException(status_code=409, detail=f"消息当前状态 {MSG_STATUS.get(message.status, message.status)} 不可再消费")
     endpoint = db.get(EsbEndpoint, message.endpoint_id)
+    # 与手工消费同一句（P2-180，第十五批 S1-2）：「对消息执行编排」原先只看流程启用、不看消息所属的出站接入方——停用
+    # 端点的积压照样被执行，路由到它的失败三次进死信、启用后再也投不出去，只有校验步的流程直接把它记成已成功。
+    # 拦在改状态之前，消息原样留在队里；入站积压停用后能不能手工消化随 P2-180 待裁定，此处同样不拦
+    if endpoint is not None and endpoint.direction == "outbound" and not endpoint.active:
+        raise HTTPException(status_code=409, detail="出站接入方已停用，不投递——启用后再消费")
 
     if not _claim(db, message, _as_read(message)):
         _claim_lost(db, message)
