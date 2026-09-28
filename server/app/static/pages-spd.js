@@ -2048,6 +2048,9 @@ async function renderSpdPath() {
           ${Object.entries(SPD_TASK_TYPES).map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join("")}</select>
         <select name="status"><option value="">全部状态</option>
           ${Object.entries(SPD_TASK_STATUS).map(([k, v]) => `<option value="${k}">${esc(v[0])}</option>`).join("")}</select>
+        <input name="org_id" type="number" placeholder="机构ID" style="width:90px">
+        <select name="team_id"><option value="">全部团队</option>
+          ${catalog.teams.map((t) => `<option value="${t.id}">${esc(t.name)}</option>`).join("")}</select>
         <label style="font-size:13px"><input type="checkbox" name="mine" value="true"> 只看我的</label>
         <button class="secondary">查询</button>
         <button type="button" class="btn secondary" data-task-export>导出 CSV</button>

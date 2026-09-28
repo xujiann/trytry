@@ -1312,6 +1312,7 @@ def export_tasks(
     program_code: str | None = None,
     status: str | None = None,
     org_id: int | None = None,
+    team_id: int | None = None,
     task_type: str | None = None,
     mine: bool = False,
     limit: int = 2000,
@@ -1332,9 +1333,10 @@ def export_tasks(
         query = query.filter(SpdTask.org_id.in_(orgs))
     if mine:
         query = query.filter(SpdTask.assignee_id == user.id)
+    # 按团队筛与清单同一个判据（P2-685）：任务中心的筛选栏补了机构 / 团队，导出跟着表格走
     for column, value in (
         (SpdTask.program_code, program_code), (SpdTask.status, status),
-        (SpdTask.org_id, org_id), (SpdTask.task_type, task_type),
+        (SpdTask.org_id, org_id), (SpdTask.team_id, team_id), (SpdTask.task_type, task_type),
     ):
         if value is not None and value != "":
             query = query.filter(column == value)

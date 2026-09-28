@@ -38,7 +38,7 @@ def world(client, admin):
                 "org_id": org, "assignee_id": doctors[key], "due_days": 7})
             assert resp.status_code == 201, resp.text
             tasks[key].append(resp.json()["id"])
-    return {"org": org, "doctors": doctors, "tasks": tasks,
+    return {"org": org, "doctors": doctors, "tasks": tasks, "patient": patient,
             "h_a": login(client, "p2526_doc_a", "passw0rd1")}
 
 
@@ -73,3 +73,26 @@ def test_页面不再删掉只看我的_并按matched明说截断():
     handler = src[start:src.index("return;", start)]
     assert "delete filters.mine" not in handler
     assert "d.matched > d.total" in handler
+
+
+def test_按团队筛_导出与清单同一个判据(client, admin, world):
+    """P2-685：任务中心筛选栏补了机构 / 团队（中心调度手册写「按机构 / 团队 / 类型筛出超期任务」，原先只有类型、状态、
+    只看我的）。清单本就收 team_id，导出原先不收——按团队筛了再导出，拿到的是全机构的。"""
+    team = client.post("/api/spd/teams", headers=admin, json={"name": "P2685 甲组", "org_id": world["org"]})
+    assert team.status_code == 201, team.text
+    in_team = []
+    for i in range(2):
+        created = client.post("/api/spd/tasks", headers=admin, json={
+            "patient_id": world["patient"], "title": f"P2685 团队任务{i}", "task_type": "followup",
+            "org_id": world["org"], "team_id": team.json()["id"], "due_days": 7})
+        assert created.status_code == 201, created.text
+        in_team.append(created.json()["id"])
+    listed = client.get("/api/spd/tasks", headers=admin, params={"team_id": team.json()["id"], "limit": 500}).json()
+    exported = client.get("/api/spd/tasks-export", headers=admin, params={"team_id": team.json()["id"]}).json()
+    assert {t["id"] for t in listed} == _ids(exported) == set(in_team)   # 修前导出不认 team_id，全机构 7 条都在
+
+
+def test_筛选栏有机构与团队两项():
+    src = (STATIC / "pages-spd.js").read_text(encoding="utf-8")
+    form = src[src.index('<form class="inline" id="spd-task-filter">'):src.index("</form>", src.index('id="spd-task-filter"'))]
+    assert 'name="org_id"' in form and 'name="team_id"' in form   # 修前只有类型、状态、只看我的

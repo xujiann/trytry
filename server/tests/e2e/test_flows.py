@@ -5214,6 +5214,21 @@ def test_慢专病页面的推送频率与病种显示中文(page, base_url, spd
     expect(detail).not_to_contain_text("hypertension")   # 修前「病种 / 类型：hypertension / 宣教」
 
 
+def test_任务中心按团队筛选(page, base_url, spd_seed, admin_call):
+    """P2-685：中心调度手册写「任务中心按机构 / 团队 / 类型筛出超期任务」，筛选栏原先只有类型、状态、只看我的。
+    补上机构、团队两项（清单接口本就收），导出跟着同一组筛选走。"""
+    team = admin_call("POST", "/api/spd/teams", {"name": "E2E筛选团队", "org_id": spd_seed["org"]["id"]})
+    admin_call("POST", "/api/spd/tasks", {
+        "patient_id": spd_seed["patient"]["id"], "title": "E2E团队筛选任务", "task_type": "followup",
+        "org_id": spd_seed["org"]["id"], "team_id": team["id"], "due_days": 7})
+    _login(page, base_url)
+    _open_page(page, "spdpath", "标准路径与任务中心")
+    page.select_option("#spd-task-filter select[name=team_id]", str(team["id"]))   # 修前没有这一栏
+    page.click("#spd-task-filter button.secondary")
+    expect(page.locator("#spd-task-list")).to_contain_text("E2E团队筛选任务")
+    expect(page.locator("#spd-task-list")).not_to_contain_text("E2E随访任务")   # 同机构、不在这个团队的
+
+
 @pytest.fixture(scope="module")
 def batch_seed(base_url, seed):
     """同一个药两个批号入库：台账按批号查只剩那一批（P1-148）。"""
