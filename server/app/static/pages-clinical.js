@@ -1657,7 +1657,8 @@ async function renderSurveillance() {
   $("#page-body").innerHTML = `
     ${panel(`多点触发预警（近 ${alerts.window.days} 天）`, `
       <p class="hint">两路信号分列，不做综合评分：症候群异常查接诊，病原阳性抬头查实验室。</p>
-      <h4>症候群超阈值</h4>
+      <h4>症候群达到阈值</h4>
+      <p class="hint">口径：${esc(alerts.caliber.syndrome)}</p>
       ${table(["机构", "症候群", "例数", "阈值", "日期"], alerts.syndrome_alerts, (r) =>
         `<tr><td>${r.org_id}</td><td>${esc(r.syndrome_name)}</td><td><b>${r.case_count}</b></td><td>${r.threshold}</td><td>${esc(r.record_date)}</td></tr>`)}
       <h4>病原阳性率抬头</h4>
@@ -1675,7 +1676,8 @@ async function renderSurveillance() {
       <p class="msg" id="syn-msg"></p>
       ${table(["机构", "症候群", "例数", "阈值", "日期", "预警"], syndromes.slice(0, 50), (r) =>
         `<tr><td>${r.org_id}</td><td>${esc(r.syndrome_name)}</td><td>${r.case_count}</td><td>${r.threshold || "不设"}</td>` +
-        `<td>${esc(r.record_date)}</td><td>${r.alert ? '<span class="tag danger">超阈值</span>' : "—"}</td></tr>`)}
+        // 例数等于阈值就报，与接口口径「达到阈值即列出」同一个说法（P2-695）：原先写「超阈值」，8 例对阈值 8 也标超
+        `<td>${esc(r.record_date)}</td><td>${r.alert ? '<span class="tag danger">达到阈值</span>' : "—"}</td></tr>`)}
     `)}
     ${panel("病原监测", `
       <form class="inline" id="pat-form">

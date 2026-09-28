@@ -10,7 +10,7 @@
    村卫生室 5 人就该看一眼。写死一个数只会让大机构天天报警、小机构从不报警。
 2. **同机构同症候群同日只有一条**，重复上报按覆盖。日报是要反复核对的，
    累加会算出虚高的病例数（与基金预结同一条教训）。
-3. **预警只提示不定性**。超阈值给出的是"值得看一眼"，不是"发生疫情"——
+3. **预警只提示不定性**。达到阈值给出的是"值得看一眼"，不是"发生疫情"——
    平台不替疾控下判断。
 """
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -75,7 +75,7 @@ def _syndrome_out(r: SyndromeMonitor) -> dict:
         "case_count": r.case_count,
         "threshold": r.threshold,
         "record_date": r.record_date,
-        # 阈值为 0 即不参与预警，而不是"任何数都超阈值"
+        # 阈值为 0 即不参与预警，而不是"任何数都达到阈值"
         "alert": bool(r.threshold) and r.case_count >= r.threshold,
         "note": r.note,
     }
@@ -94,7 +94,7 @@ class SyndromeOut(BaseModel):
     case_count: int
     threshold: int
     record_date: str
-    # 阈值为 0 即不参与预警，而不是"任何数都超阈值"
+    # 阈值为 0 即不参与预警，而不是"任何数都达到阈值"
     alert: bool
     note: str
 
@@ -348,7 +348,7 @@ def multi_point_alerts(
     group_id: int | None = None,
     db: Session = Depends(get_db),
 ):
-    """多点触发预警：症候群超阈值 + 病原阳性率抬头，一屏给出。
+    """多点触发预警：症候群达到阈值（例数 ≥ 阈值）+ 病原阳性率抬头，一屏给出。
 
     这里刻意**不做综合评分**。把两路信号压成一个分数，看的人就再也说不清
     是哪一路在响——而处置动作恰恰取决于此：症候群异常查的是接诊，
