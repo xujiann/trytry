@@ -47,8 +47,10 @@ def test_前端拼CSV前换成清单同一套文案():
     source = (STATIC / "pages-spd.js").read_text(encoding="utf-8")
     handler = source[source.index("const d = await api(`/api/spd/tasks-export?${qs}`);"):]
     handler = handler[:handler.index("spdDownloadCsv(")]
-    # 与清单行（drawTasks）同一套表：类型、状态、优先级；病种按目录换成名称
-    for piece in ("SPD_TASK_TYPES[r[3]]", "SPD_TASK_STATUS[r[5]]", "spdPriorityLabel(r[6])", "catalog.programs"):
+    # 与清单行（drawTasks）同一套表：类型、状态、优先级；病种按目录换成名称——换算函数 programOf 提到了页面函数里，
+    # 任务详情与导出共用（P2-684），这里核它确实按病种目录换算
+    for piece in ("SPD_TASK_TYPES[r[3]]", "SPD_TASK_STATUS[r[5]]", "spdPriorityLabel(r[6])", "programOf(r[2])"):
         assert piece in handler, piece
+    assert "const programOf = (code) => (catalog.programs.find((p) => p.code === code) || {}).name || code;" in source
     call = source[source.index("spdDownloadCsv(`spd_tasks_"):]
     assert re.match(r"spdDownloadCsv\(`spd_tasks_\$\{localToday\(\)\}\.csv`, d\.columns, rows\)", call)   # 修前传 d.rows
