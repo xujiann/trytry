@@ -1926,8 +1926,10 @@ function spdPriorityLabel(p) {
 function spdTaskDetailHtml(t) {
   const kv = (k, v) => `<div><b>${k}</b>：${v}</div>`;
   const json = (o) => `<pre style="white-space:pre-wrap;margin:4px 0">${esc(JSON.stringify(o || {}, null, 1))}</pre>`;
+  // 不另起文件名（P2-683）：原先写死 task-{任务号}-evidence-{附件号}，没有扩展名、上传原名丢了，照片 / PDF 下下来打不开；
+  // 不给名字，downloadAttachment 用后端回的上传原名（与附件清单的下载同名）
   const evidence = (t.evidence_urls || []).map((e) =>
-    `<button class="btn secondary" data-attdl="${e.attachment_id}" data-fn="task-${t.id}-evidence-${e.attachment_id}">佐证 #${e.attachment_id}</button>`
+    `<button class="btn secondary" data-attdl="${e.attachment_id}">佐证 #${e.attachment_id}</button>`
   ).join(" ") || "—";
   return panel(`任务详情 #${t.id}`, `
     ${kv("标题", esc(t.title))}

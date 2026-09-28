@@ -5168,6 +5168,29 @@ def test_医生移动端要佐证的任务_传了佐证才办得结(page, base_u
     assert [e["attachment_id"] for e in detail["evidence_urls"]] == detail["evidence"]   # 管理端审核页看得到这份佐证
 
 
+def test_任务详情里的佐证按上传时的文件名下载(page, base_url, spd_seed, admin_call, tmp_path):
+    """P2-683：任务详情的「佐证 #N」原先把下载文件名写死成 task-{任务号}-evidence-{附件号}——没有扩展名、上传时的原名
+    丢了，照片 / PDF 下到电脑上打不开；同一份附件在附件清单里下载用的是原名。修后不另起名字，用后端回的上传原名。"""
+    admin_call("POST", "/api/spd/tasks", {
+        "patient_id": spd_seed["patient"]["id"], "title": "E2E佐证原名下载", "task_type": "recall",
+        "org_id": spd_seed["org"]["id"], "due_days": 1, "priority": 3, "require_evidence": True})
+    photo = tmp_path / "E2E上门血压照片.jpg"
+    photo.write_bytes(b"\xff\xd8\xff\xe0e2e-p2683-evidence")
+    _login(page, base_url)
+    _open_page(page, "spdpath", "标准路径与任务中心")
+    page.select_option("#spd-task-filter select[name=task_type]", "recall")
+    page.click("#spd-task-filter button.secondary")
+    row = page.locator("#spd-task-list tr", has_text="E2E佐证原名下载")
+    with page.expect_file_chooser() as chooser:
+        row.locator("[data-task-evidence]").click()
+    chooser.value.set_files(str(photo))
+    expect(page.locator("#spd-task-msg")).to_contain_text("已挂到任务")
+    page.locator("#spd-task-list tr", has_text="E2E佐证原名下载").locator("[data-task-detail]").click()
+    with page.expect_download() as download:
+        page.locator("button[data-attdl]", has_text="佐证 #").first.click()
+    assert download.value.suggested_filename == "E2E上门血压照片.jpg"   # 修前 task-{id}-evidence-{附件号}
+
+
 @pytest.fixture(scope="module")
 def batch_seed(base_url, seed):
     """同一个药两个批号入库：台账按批号查只剩那一批（P1-148）。"""

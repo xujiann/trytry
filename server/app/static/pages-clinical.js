@@ -535,6 +535,17 @@ async function openPrintPage(path) {
   } catch (err) { win.close(); throw err; }
 }
 
+/* 响应头 Content-Disposition 里的文件名（RFC 6266：带编码的 `filename*=` 优先，其次 `filename=`）；没有给空串 */
+function dispositionFilename(resp) {
+  const cd = resp.headers.get("Content-Disposition") || "";
+  const star = /filename\*=utf-8''([^;]+)/i.exec(cd);
+  if (star) {
+    try { return decodeURIComponent(star[1].trim()); } catch (err) { /* 编码坏了，退回下一种写法 */ }
+  }
+  const plain = /filename="?([^";]+)"?/i.exec(cd);
+  return plain ? plain[1].trim() : "";
+}
+
 async function downloadAttachment(id, filename) {
   const resp = await fetch(`/api/attachments/${id}`, {
     credentials: "same-origin",
@@ -548,7 +559,8 @@ async function downloadAttachment(id, filename) {
   const url = URL.createObjectURL(await resp.blob());
   const a = document.createElement("a");
   a.href = url;
-  a.download = filename || `attachment-${id}`;
+  // 调用方没给名字就用后端回的上传原名（P2-683）：原先落到 attachment-{id}，没有扩展名，照片 / PDF 下下来打不开
+  a.download = filename || dispositionFilename(resp) || `attachment-${id}`;
   a.click();
   URL.revokeObjectURL(url);
 }
