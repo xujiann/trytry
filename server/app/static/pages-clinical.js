@@ -2683,9 +2683,11 @@ async function renderCritical() {
     api("/api/exams/critical"), api("/api/exams/critical/unacknowledged")]);
   $("#page-body").innerHTML = `
     ${unacked.length ? panel(`⚠ 超时未确认催办（${unacked.length}）`, `${
-      table(["报告ID", "申请单", "结论", "报告人", "报告时间"], unacked, (r) =>
+      // 「最近通知」是超时的起算点（第十五批 S3-2）：修订改判为危急值的，报告时间是首次出具、通知是修订那一刻
+      table(["报告ID", "申请单", "结论", "报告人", "报告时间", "最近通知"], unacked, (r) =>
         `<tr><td>${r.report_id}</td><td>${r.request_id}</td><td><span class="tag red">${esc(r.conclusion)}</span></td>
-         <td>${esc(r.reported_by)}</td><td>${esc(r.reported_at.slice(0, 16).replace("T", " "))}</td></tr>`)}`, { accent: "#c62828" }) : ""}
+         <td>${esc(r.reported_by)}</td><td>${esc(r.reported_at.slice(0, 16).replace("T", " "))}</td>
+         <td>${esc(r.notified_at.slice(0, 16).replace("T", " "))}</td></tr>`)}`, { accent: "#c62828" }) : ""}
     ${panel("危急值清单", `<p class="msg" id="crit-msg"></p>${
       table(["报告ID", "申请单", "结论", "闭环状态", "操作"], critical, (r) => {
         const actions = (r.critical_status === "notified" || r.critical_status === "")

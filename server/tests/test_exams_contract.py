@@ -25,9 +25,10 @@ from conftest import reset_database
 
 from app.database import SessionLocal
 from app.main import app
-from app.models import ExamReport
+from app.models import CriticalAction, ExamReport
 
-UNACK_ROW_KEYS = ["report_id", "request_id", "conclusion", "reported_by", "reported_at", "critical_status"]
+UNACK_ROW_KEYS = ["report_id", "request_id", "conclusion", "reported_by", "reported_at", "critical_status",
+                  "notified_at"]   # 第十五批 S3-2 新增：最近一次危急值通知（超时的起算点），只加不改
 STATS_KEYS = ["recognized_total", "reported_total", "recognition_ratio_pct", "saved_exams", "by_item"]
 
 
@@ -171,6 +172,8 @@ def test_催办清单精确_reported_at回绑DB(client, admin, critical):
     assert [list(r.keys()) for r in rows] == [UNACK_ROW_KEYS]
     with SessionLocal() as db:
         db_iso = db.get(ExamReport, critical["rep3"]["id"]).reported_at.isoformat()
+        notified_iso = max(a.created_at for a in db.query(CriticalAction).filter(
+            CriticalAction.report_id == critical["rep3"]["id"])).isoformat()
     assert rows == [{
         "report_id": critical["rep3"]["id"],
         "request_id": critical["rq3"]["id"],
@@ -178,6 +181,7 @@ def test_催办清单精确_reported_at回绑DB(client, admin, critical):
         "reported_by": "检验师",
         "reported_at": db_iso,  # handler 手工 isoformat 的字符串，逐字符回绑
         "critical_status": "notified",
+        "notified_at": notified_iso,   # 出具即危急：最近一次通知就是出具那条留痕
     }]
     assert client.get(
         "/api/exams/critical/unacknowledged?today=bad", headers=admin

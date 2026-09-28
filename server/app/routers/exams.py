@@ -195,6 +195,7 @@ class UnackedCriticalOut(BaseModel):
     reported_by: str
     reported_at: str
     critical_status: str
+    notified_at: str   # 最近一次危急值通知的时刻（出具或修订复位），超时从它起算（第十五批 S3-2）
 
 
 class RecognitionStatsItemOut(BaseModel):
@@ -615,19 +616,31 @@ def list_unacknowledged_critical(
     """超时未确认危急值清单：报告发布后医师超时未确认接收的（催办用）。
 
     - 缺省按服务端当前时间与 timeout_minutes 比对（L-2：服务端注入当前日期）；
-    - today 覆盖参数（YYYY-MM-DD）仅限测试/管理排查用途：报告日期早于 today
+    - today 覆盖参数（YYYY-MM-DD）仅限测试/管理排查用途：最近一次通知早于 today
       的未确认危急值均计入（粗略按天），格式非法返回 422。
     """
     # M-1 整改：存量危急报告（critical_status=''）同样计入催办清单
     query = db.query(ExamReport).filter(
         ExamReport.critical.is_(True), ExamReport.critical_status.in_(["notified", ""])
     )
+    candidates = query.all()
+    # 超时从「最近一次通知」起算（第十五批 S3-2）：修订改判为危急值、或改了危急值报告的结论，闭环复位为「已通知」并重新
+    # 通知（P2-129）——原先仍按首次出具时刻计时，改判当场就排在催办清单最前。处于已通知 / 存量空状态的危急报告，最后
+    # 一条留痕就是那次通知（确认、反馈都会把状态移走；修订复位、出具都会写一条）；存量没有留痕的按出具时刻
+    last_action = {
+        report_id: at
+        for report_id, at in db.query(CriticalAction.report_id, func.max(CriticalAction.created_at))
+        .filter(CriticalAction.report_id.in_([r.id for r in candidates] or [0]))
+        .group_by(CriticalAction.report_id)
+        .all()
+    }
+    notified_at = {r.id: last_action.get(r.id) or r.reported_at for r in candidates}
     if today is not None:
         deadline = datetime.combine(resolve_business_date(today), datetime.min.time())
-        rows = [r for r in query.all() if r.reported_at < deadline]
+        rows = [r for r in candidates if notified_at[r.id] < deadline]
     else:
         cutoff = now_naive() - timedelta(minutes=timeout_minutes)
-        rows = [r for r in query.all() if r.reported_at < cutoff]
+        rows = [r for r in candidates if notified_at[r.id] < cutoff]
     return [
         {
             "report_id": r.id,
@@ -636,8 +649,9 @@ def list_unacknowledged_critical(
             "reported_by": r.reported_by,
             "reported_at": r.reported_at.isoformat(),
             "critical_status": r.critical_status,
+            "notified_at": notified_at[r.id].isoformat(),
         }
-        for r in sorted(rows, key=lambda r: r.reported_at)
+        for r in sorted(rows, key=lambda r: notified_at[r.id])
     ]
 
 
