@@ -61,6 +61,7 @@ from ..platform import (
     current_resident,
     org_names,
     store_attachment,
+    usable_or_none,
     valid_task_evidence,
 )
 
@@ -1484,7 +1485,8 @@ def start_consult(
         enrollment = enrollment_for(db, patient.id, body.program_code)[1] if body.program_code else None
         consult = SpdConsult(
             patient_id=patient.id, program_code=body.program_code,
-            doctor_id=enrollment.doctor_user_id if enrollment else None, status="open",
+            # 主管医生已停用的不派给他（第十五批 S1-1）：落成空，本机构医护在会话清单里照样看得见、接得起
+            doctor_id=usable_or_none(db, enrollment.doctor_user_id) if enrollment else None, status="open",
         )
         if not insert_if_absent(db, consult):
             # 并发抢输：另一路刚建出同病种的开放会话（撞 uq_spd_consult_open_patient_program）。

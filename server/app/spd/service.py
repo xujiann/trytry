@@ -21,7 +21,7 @@ from .. import clock
 from ..clock import now_naive
 from ..concurrency import add_amount, ensure_present, insert_if_absent
 from ..numtypes import non_finite_path
-from .platform import diagnosis_codes, diagnosis_names, notify_user, patient_of
+from .platform import diagnosis_codes, diagnosis_names, notify_user, patient_of, usable_or_none
 from .models import (
     SpdCallTask,
     SpdEnrollment,
@@ -483,6 +483,8 @@ def spawn_task(
     责任人缺省顺序：显式指定 > 节点执行角色对应的团队成员 > 纳管档案的主管医生。
     找不到人也照样建任务，落成待接收（`pending`）而不是报错——
     "没人认领的任务"在中心端待办里看得见，"没建出来的任务"谁也看不见。
+    停用的账号同样算「找不到人」（第十五批 S1-1）：主管医生后来停用了、转诊发起人离开了，任务照旧挂给他，别人认领
+    409、中心端「未分配」不数它，就没人办了——落成待接收，谁都认领得了。
     """
     due = clock.today() + timedelta(days=max(due_days, 0))
     task = SpdTask(
@@ -495,7 +497,7 @@ def spawn_task(
         title=title,
         org_id=org_id or (enrollment.org_id if enrollment else None),
         team_id=team_id or (enrollment.team_id if enrollment else None),
-        assignee_id=assignee_id or (enrollment.doctor_user_id if enrollment else None),
+        assignee_id=usable_or_none(db, assignee_id or (enrollment.doctor_user_id if enrollment else None)),
         exec_role=node.exec_role if node else "",
         status="pending",
         priority=priority,

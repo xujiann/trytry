@@ -29,7 +29,7 @@ from ...deps import (
     row_dict,
     through_day,
 )
-from ..platform import Patient, User, id_card_variants, pii_filter, unusable_user
+from ..platform import Patient, User, id_card_variants, pii_filter, unusable_user, usable_or_none
 from ..models import (
     SpdAssessment,
     SpdCaseReport,
@@ -702,7 +702,7 @@ def _auto_intervene(db: Session, enrollment: SpdEnrollment, risk_level: str) -> 
                         goal=f"{risk_level}风险自动干预", content=template.content,
                         measures=template.measures, frequency=template.frequency,
                         next_at=(clock.today() + timedelta(days=7)).isoformat(),
-                        owner_id=enrollment.doctor_user_id, status="planned",
+                        owner_id=usable_or_none(db, enrollment.doctor_user_id), status="planned",
                     )
                 )
         already = (
@@ -720,7 +720,7 @@ def _auto_intervene(db: Session, enrollment: SpdEnrollment, risk_level: str) -> 
                 SpdRevisit(
                     patient_id=enrollment.patient_id, program_code=enrollment.program_code,
                     plan_date=(clock.today() + timedelta(days=14)).isoformat(),
-                    doctor_user_id=enrollment.doctor_user_id, items="高危复诊评估",
+                    doctor_user_id=usable_or_none(db, enrollment.doctor_user_id), items="高危复诊评估",
                     source="high_risk", status="planned",
                 )
             )

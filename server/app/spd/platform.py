@@ -98,6 +98,18 @@ def unusable_user(db: Session, user_id: int) -> str:
     return "已停用" if user.status == "disabled" else ""
 
 
+def usable_or_none(db: Session, user_id: int | None) -> int | None:
+    """系统替人挑责任人（取档案上的主管医生、转诊发起人）时用：能承接新业务就原样返回，停用或已不存在的落成 None。
+
+    落成 None 的工作是「待接收 / 未分配」：中心端待办里数得到、别人认领得了。原先照挂停用账号——认领要么是空着要么
+    是本人，别人认领 409，中心端「未分配」也不数它，新派生的处置任务进了一个没人登得上的待办箱（第十五批 S1-1）。
+    显式指定的人仍由各写接口经 `unusable_user` 拒掉（P1-106）；已经挂在停用账号名下的存量怎么转交另行裁定。
+    """
+    if user_id is None or unusable_user(db, user_id):
+        return None
+    return user_id
+
+
 def diagnosis_codes(db: Session, patient_id: int) -> list[str]:
     """患者**全部历史就诊**的诊断编码（含 ICD-10 父目）。
 
