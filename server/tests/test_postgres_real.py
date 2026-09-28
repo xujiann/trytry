@@ -609,6 +609,51 @@ def test_JSON列临界区追加_八路并发八条都在(pg_engine):
     assert notes == sorted(f"第{i}路" for i in range(8)), f"八条日志必须全在，实际：{notes}"
 
 
+def test_超期扫描置逾期_不盖掉载入之后护士记下的复诊日志(pg_engine):
+    """`sweep_overdue` 置复诊逾期时的 JSON 日志追加与 `update_revisit` 同一把 `serialized_on` 行锁（P2-708）。
+
+    扫描先把复诊整批载入（会话里的对象带着载入时的旧日志），护士随即走同一个临界区记下一条并提交，扫描才逐条写回——
+    修前拼的是载入时的旧列表，护士那条被盖掉；修后进锁（FOR UPDATE）、重读、再追加。截止日取在 2020 年初，别的用例
+    建的复诊不受这一轮扫描影响。
+    """
+    from datetime import date
+
+    from sqlalchemy.orm import sessionmaker
+
+    from app.concurrency import serialized_on
+    from app.models import Patient
+    from app.spd.models import SpdRevisit
+    from app.spd.service import sweep_overdue
+
+    Session = sessionmaker(bind=pg_engine)
+    with Session() as db:
+        patient = Patient(name="PG复诊扫描患者", id_card="330900199303037082", gender="男",
+                          birth_date="1993-03-03", ehc_no="PG-EHC-REV2")
+        db.add(patient)
+        db.flush()
+        revisit = SpdRevisit(patient_id=patient.id, plan_date="2020-01-05", status="planned")
+        db.add(revisit)
+        db.commit()
+        revisit_id = revisit.id
+
+    with Session() as sweeper:
+        loaded = sweeper.get(SpdRevisit, revisit_id)   # 扫描载入整批（留住引用：身份映射是弱引用）
+        assert loaded is not None and not loaded.log
+        with Session() as nurse:
+            row = nurse.get(SpdRevisit, revisit_id)
+            with serialized_on(nurse, SpdRevisit, revisit_id):
+                nurse.refresh(row)
+                row.log = (row.log or []) + [{"at": "2020-01-05", "note": "电话邀约：患者说周五来"}]
+                nurse.commit()
+        assert sweep_overdue(sweeper, date(2020, 1, 6))["revisits"] == 1
+        sweeper.commit()
+    with Session() as db:
+        row = db.get(SpdRevisit, revisit_id)
+        assert row is not None and row.status == "overdue"
+        notes = [entry["note"] for entry in row.log]
+    assert notes == ["电话邀约：患者说周五来", "超期扫描：计划日期已过，置为逾期"], f"护士那条不能被盖掉，实际：{notes}"
+
+
 def test_首次标高危条件更新_八路并发恰一路标上(pg_engine):
     """`maternal._mark_high_risk` 的 PG 直测：八次高血压产检同时到达，只有一路标上、因素只记一条。
 

@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from .. import clock
 from ..clock import now_naive
-from ..concurrency import add_amount, ensure_present, insert_if_absent
+from ..concurrency import add_amount, ensure_present, insert_if_absent, serialized_on
 from ..numtypes import non_finite_path
 from .platform import diagnosis_codes, diagnosis_names, notify_user, patient_of, usable_or_none
 from .models import (
@@ -968,9 +968,13 @@ def close_open_work(db: Session, enrollment: SpdEnrollment, reason: str) -> dict
         .all()
     )
     for revisit in revisits:
-        if _move_row(db, SpdRevisit, revisit.id, REVISIT_OPEN_STATUSES, status="removed",
-                     log=(revisit.log or []) + [{"at": clock.today().isoformat(), "note": reason}]):
-            stats["revisits"] += 1
+        # 日志是 JSON 列整体覆写（P2-708，与 `update_revisit` 同一处理）：锁住这一行、重读、再追加——原先拼的是整批载入时
+        # 读到的旧日志，这期间护士刚记下的「已联系」那条被盖掉
+        with serialized_on(db, SpdRevisit, revisit.id):
+            db.refresh(revisit)
+            if _move_row(db, SpdRevisit, revisit.id, REVISIT_OPEN_STATUSES, status="removed",
+                         log=(revisit.log or []) + [{"at": clock.today().isoformat(), "note": reason}]):
+                stats["revisits"] += 1
 
     followups = (
         db.query(SpdFollowupRecord)
@@ -1066,10 +1070,13 @@ def sweep_overdue(db: Session, today: date | None = None) -> dict:
     )
     revisits_marked = 0
     for revisit in overdue_revisits:
-        # 条件翻转（P2-114 同一族）：扫描期间做完的复诊别被改回「逾期」
-        if _move_row(db, SpdRevisit, revisit.id, "planned", status="overdue",
-                     log=(revisit.log or []) + [{"at": cutoff, "note": "超期扫描：计划日期已过，置为逾期"}]):
-            revisits_marked += 1
+        # 条件翻转（P2-114 同一族）：扫描期间做完的复诊别被改回「逾期」。日志是 JSON 列整体覆写（P2-708，与 `update_revisit`
+        # 同一处理）：锁住这一行、重读、再追加——原先拼的是整批载入时读到的旧日志，扫描期间护士刚记下的「已联系」那条被盖掉
+        with serialized_on(db, SpdRevisit, revisit.id):
+            db.refresh(revisit)
+            if _move_row(db, SpdRevisit, revisit.id, "planned", status="overdue",
+                         log=(revisit.log or []) + [{"at": cutoff, "note": "超期扫描：计划日期已过，置为逾期"}]):
+                revisits_marked += 1
 
     # 随访：只动 planned；unreachable / removed / done 一律不碰
     overdue_followups = (
