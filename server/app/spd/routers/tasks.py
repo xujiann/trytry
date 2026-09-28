@@ -670,6 +670,11 @@ def create_task(
         raise HTTPException(status_code=422, detail="纳管档案不是这位患者的")
     if enrollment is not None and body.program_code and body.program_code != enrollment.program_code:
         raise HTTPException(status_code=422, detail="纳管档案的病种与任务不一致")
+    # 显式带档案号的同样只挂在管的（第十五批 S1-3）：下面按病种隐式挂档案只取在管的，显式带号的原先只查在不在——
+    # 登记死亡 / 排除 / 迁出的档案照挂新任务、派给原主管医生，结案收尾（`close_open_work`）已经跑过，之后没人收。
+    # 与改档、绑服务包、启动路径对非在管档案一律 409 同一口径
+    if enrollment is not None and enrollment.status != "active":
+        raise HTTPException(status_code=409, detail="非在管状态的档案不可新建任务，请先恢复管理")
     if enrollment is None and body.program_code:
         # 选了病种、没填档案号的，挂这位患者这个病种在管的档案（P1-139 同一族）：原先病种写上了、档案不挂——随访类任务
         # 办结不回写档案的随访日期、不给档案上的村医计分，按档案也看不到它。没在管的（已结案的历史档案）不挂
