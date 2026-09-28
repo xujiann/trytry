@@ -1526,7 +1526,7 @@ async function renderSpdPatients() {
       ["ID", "患者", "病种", "来源", "得分", "风险", "结论", "复核", "操作"], rows, (s) =>
       `<tr><td>${s.id}</td><td>${esc(s.patient_name || s.patient_id)}</td>
        <td>${esc(s.program_code)}</td><td>${esc(s.source_name)}</td><td>${s.score}</td>
-       <td>${spdTag(SPD_RISK, s.risk_level)}</td>
+       <td>${spdTag(SPD_RISK, s.risk_level || "未分级")}</td>
        <td>${s.result === "suspect" ? '<span class="tag orange">疑似</span>'
           : s.result === "excluded" ? '<span class="tag">排除</span>'
           : '<span class="tag green">未见异常</span>'}</td>

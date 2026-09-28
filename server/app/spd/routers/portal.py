@@ -612,8 +612,9 @@ def self_screening(
     if body.draft:
         return {"draft": True, **graded}
     # graded 的两个来源（量表评分 / 无量表默认）拼出来是宽类型，
-    # 这里先收敛成 str，风险等级判定与入库用同一个值。
-    risk: str = str(graded["risk_level"] or "low")
+    # 这里先收敛成 str，风险等级判定与入库用同一个值。得分没落进任何分段就是「未分级」（空串），与筛查登记、
+    # 量表评估同一个记法（P2-689）：原先补成「低危」，最高分落进分段缺口的居民被告知低危、不提示申请服务
+    risk: str = str(graded["risk_level"])
     record = SpdScreening(
         patient_id=patient.id, program_code=body.program_code, source="self",
         scale_code=body.scale_code, answers=body.answers, score=graded["score"],

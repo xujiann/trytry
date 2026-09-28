@@ -471,7 +471,7 @@ class SpdScreening(Base):
     scale_code: Mapped[str] = mapped_column(String(32), default="")
     answers: Mapped[dict] = mapped_column(JSON, default=dict)
     score: Mapped[float] = mapped_column(Float, default=0)
-    # low=低危, mid=中危, high=高危
+    # low=低危, mid=中危, high=高危, very_high=极高危, ""=未分级（量表得分没落进任何评分分段，P2-689）
     risk_level: Mapped[str] = mapped_column(String(16), default="low", index=True)
     # suspect=疑似, excluded=排除, normal=未见异常
     result: Mapped[str] = mapped_column(String(16), default="normal", index=True)

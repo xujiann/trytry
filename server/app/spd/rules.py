@@ -305,12 +305,17 @@ def score_scale(items: list[dict], answers: dict, scoring: dict) -> dict:
         else:
             total += float(options.get(str(value), 0) or 0)
 
-    risk, advice = "", ""
-    for rng in (scoring or {}).get("ranges", []):
+    risk, advice, banded = "", "", False
+    ranges = (scoring or {}).get("ranges", [])
+    for rng in ranges:
         low, high = _as_number(rng.get("min")), _as_number(rng.get("max"))
         if (low is None or total >= low) and (high is None or total <= high):
-            risk, advice = rng.get("risk", ""), rng.get("advice", "")
+            risk, advice, banded = rng.get("risk", ""), rng.get("advice", ""), True
             break
+    if ranges and not banded:
+        # 得分没落进任何分段（分段之间有缺口、上限封了顶、选项分值带小数）：就是「未分级」，说出来（P2-689）——
+        # 筛查登记与居民自查原先把它补成「低危」，最高分落进缺口也记低危、不进目标池、不提示申请服务
+        advice = f"得分 {round(total, 2)} 没有落在量表的任何评分分段里，未能按量表分级，请复核量表的评分分段"
     return {
         "score": round(total, 2),
         "risk_level": risk,

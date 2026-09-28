@@ -494,7 +494,8 @@ def create_screening(
         if scale_problem:
             raise HTTPException(status_code=422, detail=scale_problem)
         graded = score_scale(scale.items or [], body.answers, scale.scoring or {})
-        score, risk, advice = graded["score"], graded["risk_level"] or "low", graded["advice"]
+        # 没落进任何分段就是「未分级」，与量表评估同一个记法（P2-689）：原先补成「低危」
+        score, risk, advice = graded["score"], graded["risk_level"], graded["advice"]
 
     # 问卷答案只补库里推不出来的事实，量表得分记成事实 `score`（P2-368）：原先答案整个盖在事实上（题目键名叫 age 的，
     # 年龄成了「是」），规则字段表列着的「量表得分」又从来没人填——按得分写的纳入规则永远不命中
