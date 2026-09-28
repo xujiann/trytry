@@ -1874,6 +1874,11 @@ async function renderPharmacy() {
   // 按编码 / 批号查一遍就能找到那一批——原先第 201 个起的批次在页面上召不回、也查不出发给了谁（P1-148）
   let batches = batchRows;
   const alertIds = new Set(alerts.map((a) => a.id));
+  // 库存状态（P2-706）：缺药按阈值判，阈值 0 是没配预警、永远不触发（P1-146）。原先不在缺药名单里的一律绿色「正常」——
+  // 库存 0、阈值 0 的也「正常」；批次入库 / 调入 / 验收新建的库存阈值都是 0，整张表几乎全是没人判过的「正常」
+  const stockTag = (s) => alertIds.has(s.id) ? '<span class="tag red">缺药</span>'
+    : s.quantity <= 0 ? '<span class="tag orange">无库存</span>'
+    : s.threshold ? '<span class="tag green">正常</span>' : '<span class="tag">未设预警</span>';
   // 取值真源是 models/pharmacy.py:DrugBatch.status——只有这两个值，
   // 且它只表达"人决定召回"，过没过期是按效期现算的另一回事（见该列的注释）
   const BATCH_STATUS = { normal: ["正常", "green"], recalled: ["已召回", "red"] };
@@ -1941,7 +1946,7 @@ async function renderPharmacy() {
     <div class="panel"><h3>库存${alerts.length ? `（<span style="color:#c62828">${alerts.length} 项缺药预警</span>）` : ""}</h3>
       ${table(["机构ID", "药品", "数量", "阈值", "状态"], stocks, (s) =>
         `<tr><td>${s.org_id}</td><td>${esc(s.drug_name)}（${esc(s.drug_code)}）</td><td>${s.quantity}</td><td>${s.threshold}</td>
-         <td>${alertIds.has(s.id) ? '<span class="tag red">缺药</span>' : '<span class="tag green">正常</span>'}</td></tr>`)}
+         <td>${stockTag(s)}</td></tr>`)}
       <h3 style="margin-top:14px">近效期批次（90 天）</h3>
       ${table(["机构ID", "药品", "批号", "效期", "余量", "剩余天数"], expiring, (b) =>
         `<tr><td>${b.org_id}</td><td>${esc(b.drug_name)}（${esc(b.drug_code)}）</td><td>${esc(b.batch_no)}</td>
