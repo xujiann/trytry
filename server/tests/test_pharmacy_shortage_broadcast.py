@@ -70,3 +70,16 @@ def test_没配阈值不推(client, admin, pushes):
     org, _ = _setup(client, admin, "无阈值院", quantity=20, threshold=0)
     _dispense(client, admin, org, 20, 4)
     assert _shortages(pushes, org) == []
+
+
+def test_盘点盘亏扣到阈值以下也推_盘盈不推(client, admin, pushes):
+    """第十六批 T2-4：盘点把账面调成实盘数，盘亏同样是库存下降——原先一条不推（修前 []）。盘盈是上升，不推。"""
+    org, _ = _setup(client, admin, "盘点院", quantity=100, threshold=50)
+    take = client.post("/api/pharmacy/stock-takes", headers=admin, json={
+        "org_id": org, "drug_code": CODE, "actual_qty": 10, "note": "T2-4 盘亏"})
+    assert take.status_code == 201 and take.json()["diff"] == -90, take.text
+    assert _shortages(pushes, org) == [(10, 50)]   # 修前 []
+    take = client.post("/api/pharmacy/stock-takes", headers=admin, json={
+        "org_id": org, "drug_code": CODE, "actual_qty": 60, "note": "T2-4 盘盈"})
+    assert take.status_code == 201 and take.json()["diff"] == 50, take.text
+    assert _shortages(pushes, org) == [(10, 50)]

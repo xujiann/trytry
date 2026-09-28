@@ -1115,6 +1115,10 @@ def create_stock_take(
     )
     db.add(take)
     db.commit()
+    if diff < 0:
+        # 盘亏把库存扣到阈值以下，同样推缺药预警（第十六批 T2-4）：发药、召回、调拨都推（P2-504），盘点是漏掉的第四条下降路径
+        db.refresh(stock)
+        broadcast_if_crossed(stock, -diff)
     return {
         "id": take.id,
         "book_qty": take.book_qty,
