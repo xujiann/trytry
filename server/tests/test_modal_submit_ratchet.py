@@ -3,7 +3,7 @@
 `spdModal` 原先的约定是「点确定就关框、把填的值交回调用方」，调用方再发请求：请求被拒（写超了、日期写错、必填
 漏了），报错落在页面的消息行，框早关了——多行的服务记录、处置意见、会诊结论写了一大段，一个 422 全部重填。
 现在 `spdModal(title, fields, {submit})` 由框自己提交：失败留框、报错写在框里、填的都在；成功才关（端到端
-`_spd_modal_rejected` 驱动这一种）。167 处调用点逐页迁移，从多行文本多的页起——妇幼页（5 张）第一批，慢专病任务中心（4 张）第二批，逐级转诊（3 张）第三批，智能随访（3 张）第四批，统筹调度中枢（3 张）第五批，慢专病页余下的 4 张（运行中枢、筛查建档、成员端）第六批，core.js 的 8 张（会诊、履约、检查互认与修订、处方点评与审方、批次召回、慢病病种）第七批，pages-mgmt.js 的 8 张（术中记录、完成随访、到货验收、推进 / 终止流程、同意书模板、专病目录与路径节点）第八批，pages-public.js 的 6 张（体检总检、ESB 流程、录考核、整改进展与确认退回、上门服务）第九批。
+`_spd_modal_rejected` 驱动这一种）。167 处调用点逐页迁移，从多行文本多的页起——妇幼页（5 张）第一批，慢专病任务中心（4 张）第二批，逐级转诊（3 张）第三批，智能随访（3 张）第四批，统筹调度中枢（3 张）第五批，慢专病页余下的 4 张（运行中枢、筛查建档、成员端）第六批，core.js 的 8 张（会诊、履约、检查互认与修订、处方点评与审方、批次召回、慢病病种）第七批，pages-mgmt.js 的 8 张（术中记录、完成随访、到货验收、推进 / 终止流程、同意书模板、专病目录与路径节点）第八批，pages-public.js 的 6 张（体检总检、ESB 流程、录考核、整改进展与确认退回、上门服务）第九批，pages-clinical.js 的 6 张（更正审核、互联网诊疗回复、双通道审核、直播排期与评价、冷链超温处置）第十批，余下 6 张（编辑资源、人员变动、物资出入库、危急值处置反馈、病案首页、不良事件审核与整改）第十一批，全仓清零。
 
 本文件：带多行文本、却还没给 `submit` 的模态框登记在 `KNOWN`（文件、所在函数、标题），**只减不增**：
 新写一张这样的框即红；迁过的必须从名单划掉（不划也红）。只数带 `type: "textarea"` 的——只有单行字段、选择题的
@@ -17,15 +17,8 @@ from test_frontend_api_calls_resolve import _call_args
 
 STATIC = Path(__file__).resolve().parents[1] / "app" / "static"
 
-#: 带多行文本、还是「点确定就关框」的模态框（2026-09-27 量：妇幼页迁走 5 张后余 51，任务中心 4 张再迁走后余 47；2026-09-28 转诊 3 张迁走后余 44，随访 3 张再迁走后余 41，统筹调度 3 张再迁走后余 38，慢专病页余下 4 张迁走后余 34，core.js 8 张再迁走后余 26，pages-mgmt.js 8 张迁走后余 18，pages-public.js 6 张再迁走后余 12，pages-clinical.js 6 张迁走后余 6）。只减不增。
-KNOWN: set[tuple[str, str, str]] = {
-    ('pages-clinical.js', 'renderResources', '`编辑资源 ${r ? r.code : d.rsedit}`'),
-    ('pages-clinical.js', 'renderHrFinance', '"登记人员变动"'),
-    ('pages-clinical.js', 'renderHrFinance', '`物资出入库：${asset ? asset.name : d.assetmv}`'),
-    ('pages-clinical.js', 'renderCritical', '"处置反馈"'),
-    ('pages-clinical.js', 'renderInpatient', '`病案首页（住院 ${d.summary}）`'),
-    ('pages-clinical.js', 'renderQuality', 'rectify ? "登记整改措施" : "不良事件审核"'),
-}
+#: 带多行文本、还是「点确定就关框」的模态框（2026-09-27 量：妇幼页迁走 5 张后余 51，任务中心 4 张再迁走后余 47；2026-09-28 转诊 3 张迁走后余 44，随访 3 张再迁走后余 41，统筹调度 3 张再迁走后余 38，慢专病页余下 4 张迁走后余 34，core.js 8 张再迁走后余 26，pages-mgmt.js 8 张迁走后余 18，pages-public.js 6 张再迁走后余 12，pages-clinical.js 6 张迁走后余 6、余下 6 张再迁走后清零）。只减不增——清零之后新写一张即红。
+KNOWN: set[tuple[str, str, str]] = set()
 
 
 def textarea_modals_without_submit(sources: dict[str, str] | None = None) -> set[tuple[str, str, str]]:

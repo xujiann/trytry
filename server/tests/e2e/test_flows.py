@@ -355,6 +355,9 @@ def test_exam_order_report_and_critical_closed_loop(page, base_url, seed):
     _open_page(page, "critical", "危急值操作台")
     expect(page.locator("tr", has_text="血钾 7.2mmol/L")).to_contain_text("已确认")
     page.click("button[data-resolve]")
+    # P2-607 第十一批：框自己提交——反馈写超了（后端 512 字）报错写在框里、框不关、写的还在，危急值仍是已确认
+    form = _spd_modal_rejected(page, {"note": "处" * 513})
+    expect(form.locator('[name="note"]')).to_have_value("处" * 513)
     _spd_modal(page, {"note": "已联系患者急诊复查并降钾治疗"})
     expect(page.locator("#page-body")).to_contain_text("已处置")
 
@@ -2356,6 +2359,53 @@ def test_冷链超温处置由框自己提交_写超了框不关(page, base_url,
     assert (got["handled"], got["handle_note"]) == (True, "E2E 疫苗已转移至备用冰箱，报修压缩机"), got
 
 
+def test_编辑资源由框自己提交_备注写超了框不关(page, base_url, seed, admin_read, admin_call):
+    """P2-607 第十一批：「编辑资源」原先点确定就关框、再发请求——备注写超了（后端 512 字）报错落在页面消息行，改了的
+    位置、备注随框一起没了；五项都留空也是框关了才说。现在框自己提交：两种都在框里说、框不关、填的都在、资源不动。"""
+    rs = admin_call("POST", "/api/resources", {"org_id": seed["org"]["id"], "resource_type": "meeting_room",
+                                               "code": "E2E-RS-P2607", "name": "E2E框内提交会议室"})
+
+    def saved():
+        return next(x for x in admin_read("/api/resources") if x["id"] == rs["id"])
+
+    _login(page, base_url)
+    _open_page(page, "resources", "统一资源与排程")
+    page.click(f'button[data-rsedit="{rs["id"]}"]')
+    form = _spd_modal_rejected(page, {"name": "", "capacity": "", "location": "", "contact": "", "note": ""})
+    expect(form.locator("[data-modal-msg]")).to_contain_text("五项都留空了")
+    form = _spd_modal_rejected(page, {"name": "E2E框内提交会议室", "location": "E2E三楼东", "note": "备" * 513})
+    expect(form.locator('[name="location"]')).to_have_value("E2E三楼东")   # 修前框关，改的位置没了
+    assert (saved()["location"], saved()["note"]) == ("", "")
+    _redrawn(page, lambda: _spd_modal(page, {"note": "E2E 可容纳 20 人"}))
+    assert (saved()["location"], saved()["note"]) == ("E2E三楼东", "E2E 可容纳 20 人"), saved()
+
+
+def test_不良事件审核与整改由框自己提交_写超了框不关(page, base_url, seed, admin_read, admin_call):
+    """P2-607 第十一批：「不良事件审核」「登记整改措施」原先点确定就关框、再发请求——写超了（后端 1024 字）报错落在
+    页面消息行，写好的一段随框一起没了；留空则关框、什么也不发生。现在框自己提交：失败留框、报错写在框里、库里不动。"""
+    ev = admin_call("POST", "/api/quality/adverse-events", {
+        "org_id": seed["org"]["id"], "event_type": "fall", "level": "III", "description": "E2E框内提交：患者如厕跌倒"})
+
+    def event():
+        return next(x for x in admin_read("/api/quality/adverse-events") if x["id"] == ev["id"])
+
+    _login(page, base_url)
+    _open_page(page, "quality", "质量安全")
+    page.click(f'button[data-review="{ev["id"]}"]')
+    form = _spd_modal_rejected(page, {"note": "审" * 1025})
+    expect(form.locator('[name="note"]')).to_have_value("审" * 1025)   # 修前框关，写的意见没了
+    assert event()["status"] == "reported"
+    _redrawn(page, lambda: _spd_modal(page, {"note": "E2E 属实，护理组牵头整改"}))
+    assert (event()["status"], event()["review_note"]) == ("reviewed", "E2E 属实，护理组牵头整改")
+
+    page.click(f'button[data-rectify="{ev["id"]}"]')
+    form = _spd_modal_rejected(page, {"note": "整" * 1025})
+    expect(form.locator('[name="note"]')).to_have_value("整" * 1025)
+    assert event()["status"] == "reviewed"
+    _redrawn(page, lambda: _spd_modal(page, {"note": "E2E 卫生间加装扶手与防滑垫"}))
+    assert (event()["status"], event()["rectify_note"]) == ("rectified", "E2E 卫生间加装扶手与防滑垫")
+
+
 def test_编辑慢病病种由框自己提交_分级规则JSON写错框不关(page, base_url, admin_read, admin_call):
     """P2-607 第七批：编辑病种原先点确定就关框，分级规则 JSON 写错一个括号，报错落在页面消息行，改了一半的规则与指导要点
     全丢。现在框自己提交：JSON 解析不了、写超了都在框里说、框不关；改好再交才落库。"""
@@ -4092,10 +4142,11 @@ def test_人财物页的挂科室_变动_合同_出入库都在页内表单里�
     expect(page.locator("tr", has_text="E2E员工甲")).to_contain_text("E2E内科")
 
     page.locator("tr", has_text="E2E员工甲").locator("button[data-empchg]").click()
-    _spd_modal(page, {"change_type": "transfer"})  # 调动却没选调入机构
-    expect(page.locator("#hrf-msg")).to_contain_text("调动须指定调入机构")
-    page.locator("tr", has_text="E2E员工甲").locator("button[data-empchg]").click()
-    _spd_modal(page, {"change_type": "regularize", "effective_date": "2026-09-24", "detail": "试用期满"})
+    # P2-607 第十一批：框自己提交——调动却没选调入机构，报错写在框里、框不关，写好的说明还在（原先报在页面消息行、框已关）
+    form = _spd_modal_rejected(page, {"change_type": "transfer", "detail": "试用期满"})
+    expect(form.locator("[data-modal-msg]")).to_contain_text("调动须指定调入机构")
+    expect(form.locator('[name="detail"]')).to_have_value("试用期满")
+    _redrawn(page, lambda: _spd_modal(page, {"change_type": "regularize", "effective_date": "2026-09-24"}))
     expect(page.locator("#hrf-msg")).to_have_text("")
     page.locator("tr", has_text="E2E员工甲").locator("button[data-emphist]").click()
     expect(page.locator("#empchg-list")).to_contain_text("转正")
@@ -4115,9 +4166,12 @@ def test_人财物页的挂科室_变动_合同_出入库都在页内表单里�
     page.fill("#asset-form input[name=quantity]", "3")
     _submit(page, "#asset-form button")
     page.locator("tr", has_text="E2E打印机").locator("button[data-assetmv]").click()
+    # P2-607 第十一批：框自己提交——领用超过现存量（3 件领 5 件）报错写在框里、框不关，写好的备注还在
+    form = _spd_modal_rejected(page, {"movement_type": "issue", "quantity": "5", "note": "门诊领用"})
+    expect(form.locator('[name="note"]')).to_have_value("门诊领用")
     # 等整页重画完再点「记录」：提示行此前就是空的，`to_have_text("")` 当场就过，挡不住随后那次 route()
     # 把刚打开的出入库记录面板重画成空（CI run 703 实测，本地碰巧绿）
-    _redrawn(page, lambda: _spd_modal(page, {"movement_type": "issue", "quantity": "2", "note": "门诊领用"}))
+    _redrawn(page, lambda: _spd_modal(page, {"quantity": "2"}))
     expect(page.locator("#hrf-msg")).to_have_text("")
     page.locator("tr", has_text="E2E打印机").locator("button[data-assethist]").click()
     expect(page.locator("#assetmv-list")).to_contain_text("门诊领用")
@@ -4282,8 +4336,12 @@ def test_住院页的转床_开医嘱_病案首页都在页内表单里录入(pa
     expect(page.locator("#inp-orders tr", has_text="E2E呋塞米 20mg iv st")).to_contain_text("临时")
 
     page.click(f'button[data-summary="{adm_id}"]')
-    _redrawn(page, lambda: _spd_modal(page, {"discharge_diagnosis": "E2E慢性心力衰竭", "total_cost": "8888.5",
-                                             "drug_cost": "3000.25", "outcome": "死亡", "note": "E2E抢救无效"}))
+    # P2-607 第十一批：框自己提交——总费用填成负数报错写在框里、框不关，填好的诊断、转归、备注都在
+    form = _spd_modal_rejected(page, {"discharge_diagnosis": "E2E慢性心力衰竭", "total_cost": "-1",
+                                      "drug_cost": "3000.25", "outcome": "死亡", "note": "E2E抢救无效"})
+    expect(form.locator('[name="discharge_diagnosis"]')).to_have_value("E2E慢性心力衰竭")
+    expect(form.locator('[name="note"]')).to_have_value("E2E抢救无效")
+    _redrawn(page, lambda: _spd_modal(page, {"total_cost": "8888.5"}))
     summary = page.evaluate(
         "async (id) => await api(`/api/inpatient/admissions/${id}/case-summary`)", adm_id)
     assert (summary["outcome"], summary["total_cost"], summary["note"]) == ("死亡", 8888.5, "E2E抢救无效"), summary

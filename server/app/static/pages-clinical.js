@@ -2199,26 +2199,25 @@ async function renderResources() {
     if (d.publish) return postAction(`/api/resources/${d.publish}/publish`, {}, "#rs-msg");
     if (d.rsedit) {
       const r = resources.find((x) => x.id === Number(d.rsedit));
-      const picked = await spdModal(`编辑资源 ${r ? r.code : d.rsedit}`, [
+      // 框自己提交（P2-607）：名称只填了空格、备注写超了（后端 512 字）、五项都留空，报错写在框里、框不关，改好的几项不用重填
+      const done = await spdModal(`编辑资源 ${r ? r.code : d.rsedit}`, [
         { name: "name", label: "名称（留空不改）", type: "text", value: r ? r.name : "" },
         { name: "capacity", label: "容量（留空不改，最小 1）", type: "number", value: r ? r.capacity : 1 },
         { name: "location", label: "位置（留空不改）", type: "text", value: r ? r.location || "" : "" },
         { name: "contact", label: "联系方式（留空不改）", type: "text", value: r ? r.contact || "" : "" },
         { name: "note", label: "备注（留空不改）", type: "textarea", value: r ? r.note || "" : "" },
-      ]);
-      if (!picked) return;
-      // 后端 exclude_unset + `if value is not None`：留空的键不送，免得把备注清空
-      const body = {};
-      if (picked.name) body.name = picked.name;
-      if (picked.capacity) body.capacity = picked.capacity;
-      if (picked.location) body.location = picked.location;
-      if (picked.contact) body.contact = picked.contact;
-      if (picked.note) body.note = picked.note;
-      if (!Object.keys(body).length) return setMsg("#rs-msg", "五项都留空了，没有要改的", false);
-      try {
-        await api(`/api/resources/${d.rsedit}`, { method: "PATCH", body: JSON.stringify(body) });
-        route();
-      } catch (err) { setMsg("#rs-msg", err.message, false); }
+      ], { submit: (picked) => {
+        // 后端 exclude_unset + `if value is not None`：留空的键不送，免得把备注清空
+        const body = {};
+        if (picked.name) body.name = picked.name;
+        if (picked.capacity) body.capacity = picked.capacity;
+        if (picked.location) body.location = picked.location;
+        if (picked.contact) body.contact = picked.contact;
+        if (picked.note) body.note = picked.note;
+        if (!Object.keys(body).length) throw new Error("五项都留空了，没有要改的");
+        return api(`/api/resources/${d.rsedit}`, { method: "PATCH", body: JSON.stringify(body) });
+      } });
+      if (done) route();
       return;
     }
     if (d.withdraw) {
@@ -2577,19 +2576,22 @@ async function renderHrFinance() {
         route();
       }
       if (d.empchg) {
-        const v = await spdModal("登记人员变动", [
+        // 框自己提交（P2-607）：调动没选机构、生效日期写错、说明写超了（后端 256 字），报错写在框里、框不关，写好的说明不用重填
+        const done = await spdModal("登记人员变动", [
           { name: "change_type", label: "变动类型", type: "select",
             options: Object.entries(CHG_TYPES).map(([value, label]) => ({ value, label })) },
           { name: "to_org_id", label: "调入机构（仅调动时选）", type: "select",
             options: [{ value: "", label: "—" }, ...orgs.map((o) => ({ value: o.id, label: o.name }))] },
           { name: "effective_date", label: "生效日期（可空）", placeholder: "YYYY-MM-DD" },
           { name: "detail", label: "变动说明", type: "textarea" },
-        ]);
-        if (!v) return;
-        const body = { change_type: v.change_type, detail: v.detail, effective_date: v.effective_date };
-        // 调动没选机构就发 null：让后端报"调动须指定调入机构"，别在前端另抄一份规则
-        if (v.change_type === "transfer") body.to_org_id = v.to_org_id ? Number(v.to_org_id) : null;
-        return postAction(`/api/mgmt/employees/${d.empchg}/changes`, body, "#hrf-msg");
+        ], { submit: (v) => {
+          const body = { change_type: v.change_type, detail: v.detail, effective_date: v.effective_date };
+          // 调动没选机构就发 null：让后端报"调动须指定调入机构"，别在前端另抄一份规则
+          if (v.change_type === "transfer") body.to_org_id = v.to_org_id ? Number(v.to_org_id) : null;
+          return api(`/api/mgmt/employees/${d.empchg}/changes`, { method: "POST", body: JSON.stringify(body) });
+        } });
+        if (done) route();
+        return;
       }
       if (d.emphist) {
         const changes = await api(`/api/mgmt/employees/${d.emphist}/changes`);
@@ -2610,14 +2612,15 @@ async function renderHrFinance() {
       }
       if (d.assetmv) {
         const asset = assets.find((a) => a.id === Number(d.assetmv));
-        const v = await spdModal(`物资出入库：${asset ? asset.name : d.assetmv}`, [
+        // 框自己提交（P2-607）：出库超过现存量、归还超过已领未还、备注写超了（后端 256 字），报错写在框里、框不关
+        const done = await spdModal(`物资出入库：${asset ? asset.name : d.assetmv}`, [
           { name: "movement_type", label: "动作", type: "select",
             options: Object.entries(MV_TYPES).map(([value, label]) => ({ value, label })) },
           { name: "quantity", label: "数量", type: "number", required: true },
           { name: "note", label: "备注", type: "textarea" },
-        ]);
-        if (!v) return;
-        return postAction(`/api/mgmt/assets/${d.assetmv}/movements`, v, "#hrf-msg");
+        ], { submit: (v) => api(`/api/mgmt/assets/${d.assetmv}/movements`, { method: "POST", body: JSON.stringify(v) }) });
+        if (done) route();
+        return;
       }
       if (d.assetxfer) {
         const asset = assets.find((a) => a.id === Number(d.assetxfer));
@@ -2711,12 +2714,12 @@ async function renderCritical() {
       if (ack) { await api(`/api/exams/reports/${ack}/acknowledge`, { method: "POST" }); route(); }
       if (resolve) {
         // P2-38：原先弹窗输入框点"取消"照样提交——危急值就此"闭环"，处置说明一个字没有。
-        const form = await spdModal("处置反馈", [
+        // 框自己提交（P2-607）：反馈写超了（后端 512 字）、别人已先处置，报错写在框里、框不关，写好的反馈不用重填
+        const done = await spdModal("处置反馈", [
           { name: "note", label: "处置反馈说明", type: "textarea", placeholder: "如：已复查、已调整治疗" },
-        ]);
-        if (!form) return;
-        await api(`/api/exams/reports/${resolve}/resolve`, { method: "POST", body: JSON.stringify({ note: form.note }) });
-        route();
+        ], { submit: (form) => api(`/api/exams/reports/${resolve}/resolve`,
+          { method: "POST", body: JSON.stringify({ note: form.note }) }) });
+        if (done) route();
       }
       if (trail) {
         const actions = await api(`/api/exams/reports/${trail}/critical-actions`);
@@ -2896,7 +2899,8 @@ async function renderInpatient() {
           ].join("\n") });
         }
         // 出院诊断不预填入院诊断：入出院诊断符合率比的就是这两个，照抄过来它就只剩 100%
-        const v = await spdModal(`病案首页（住院 ${d.summary}）`, [
+        // 框自己提交（P2-607）：费用填成负数或多于两位小数、诊断或备注写超了，报错写在框里、框不关，填好的首页不用重填
+        const done = await spdModal(`病案首页（住院 ${d.summary}）`, [
           { name: "discharge_diagnosis", label: "出院诊断", required: true },
           { name: "operation", label: "手术名称（留空则从本次住院的术中记录带出）" },
           { name: "total_cost", label: "总费用（元）", type: "number" },
@@ -2904,10 +2908,9 @@ async function renderInpatient() {
           { name: "outcome", label: "转归", type: "select", value: "好转",
             options: ["治愈", "好转", "未愈", "死亡", "其他"].map((x) => ({ value: x, label: x })) },
           { name: "note", label: "备注", type: "textarea" },
-        ]);
-        if (!v) return;
-        await api(`/api/inpatient/admissions/${d.summary}/case-summary`, { method: "POST", body: JSON.stringify(v) });
-        route();
+        ], { submit: (v) => api(`/api/inpatient/admissions/${d.summary}/case-summary`,
+          { method: "POST", body: JSON.stringify(v) }) });
+        if (done) route();
       }
       if (d.discharge) { await api(`/api/inpatient/admissions/${d.discharge}/discharge`, { method: "POST" }); route(); }
       if (d.stopOrder) { await api(`/api/inpatient/orders/${d.stopOrder}/stop`, { method: "POST" }); route(); }
@@ -3479,16 +3482,18 @@ async function renderQuality() {
     try {
       if (d.review || d.rectify) {
         const rectify = Boolean(d.rectify);
-        const form = await spdModal(rectify ? "登记整改措施" : "不良事件审核", [
+        // 框自己提交（P2-607）：写超了（后端 1024 字）报错写在框里、框不关，写好的措施 / 意见不用重填；原先留空就关框、
+        // 什么也不发生，现在由后端说不能留空（后端本就必填）
+        const done = await spdModal(rectify ? "登记整改措施" : "不良事件审核", [
           { name: "note", label: rectify ? "整改措施" : "审核意见", type: "textarea", required: true },
-        ]);
-        if (!form || !form.note) return;
-        // 两条路径分开写而不是拼动作名：孤儿闸门按字面匹配，拼出来的地址它看不见——
-        // 第一版就是拼的，闸门当场把这两条**已接通**的端点判回孤儿（本轮第二次踩）
-        const body = JSON.stringify({ note: form.note });
-        if (rectify) await api(`/api/quality/adverse-events/${d.rectify}/rectify`, { method: "POST", body });
-        else await api(`/api/quality/adverse-events/${d.review}/review`, { method: "POST", body });
-        route();
+        ], { submit: (form) => {
+          // 两条路径分开写而不是拼动作名：孤儿闸门按字面匹配，拼出来的地址它看不见——
+          // 第一版就是拼的，闸门当场把这两条**已接通**的端点判回孤儿（本轮第二次踩）
+          const body = JSON.stringify({ note: form.note });
+          if (rectify) return api(`/api/quality/adverse-events/${d.rectify}/rectify`, { method: "POST", body });
+          return api(`/api/quality/adverse-events/${d.review}/review`, { method: "POST", body });
+        } });
+        if (done) route();
         return;
       }
       if (d.ruleedit) {
