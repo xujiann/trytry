@@ -98,8 +98,11 @@ def spd_report_push(db: Session) -> tuple[int, str]:
             org_ids: list[int | None] = [o for o in task.org_ids if o in live_orgs]
         else:
             org_ids = [None]
-        subscribers = task.subscriber_ids or []
-        live_users = {i for (i,) in db.query(User.id).filter(User.id.in_(subscribers))} if subscribers else set()
+        # 订阅人去重、只发在用的账号（第十六批 T2-6，与 `notify_staff` 的 P2-349 同一口径）：原先 [甲, 甲, 甲] 甲收三条
+        # 一模一样的「报告已生成」；订阅之后停用的照发，消息落进登不上的收件箱。名单本身照存原样（报告实例的「我的」按它筛）
+        subscribers = list(dict.fromkeys(task.subscriber_ids or []))
+        live_users = {i for (i,) in db.query(User.id).filter(
+            User.id.in_(subscribers), User.status == "active")} if subscribers else set()
         for org_id in org_ids:
             label = period_label if org_id is None else f"{period_label}·机构{org_id}"
             exists = (
