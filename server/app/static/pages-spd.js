@@ -2561,17 +2561,18 @@ async function renderSpdReferral() {
         auto_task: form.auto_task === "1", active: form.active === "1",
       }, "#spd-refrule-msg", "PATCH");
     }
+    // 审核通过 / 退回 / 随访接收三张框由框自己提交（P2-607）：意见写超了、单子状态已变（409）时报错写在框里、框不关，
+    // 写好的意见不用重填
+    const review = (id, action, title, label) => spdModal(title, [{ name: "opinion", label, type: "textarea" }], {
+      submit: (form) => api(`/api/spd/referrals/${id}/review`, { method: "POST",
+        body: JSON.stringify({ action, opinion: form.opinion }) }) });
     if (pass) {
-      const form = await spdModal("审核通过", [{ name: "opinion", label: "审核意见", type: "textarea" }]);
-      if (!form) return;
-      return postAction(`/api/spd/referrals/${pass.dataset.refPass}/review`,
-        { action: "pass", opinion: form.opinion }, "#spd-ref-msg");
+      if (await review(pass.dataset.refPass, "pass", "审核通过", "审核意见")) route();
+      return;
     }
     if (reject) {
-      const form = await spdModal("退回转诊", [{ name: "opinion", label: "退回理由", type: "textarea" }]);
-      if (!form) return;
-      return postAction(`/api/spd/referrals/${reject.dataset.refReject}/review`,
-        { action: "reject", opinion: form.opinion }, "#spd-ref-msg");
+      if (await review(reject.dataset.refReject, "reject", "退回转诊", "退回理由")) route();
+      return;
     }
     if (arrive) return postAction(`/api/spd/referrals/${arrive.dataset.refArrive}/arrive`,
       { effective_visit: true }, "#spd-ref-msg");
@@ -2584,10 +2585,11 @@ async function renderSpdReferral() {
         { target_org_id: form.target_org_id, stable: true }, "#spd-ref-msg");
     }
     if (recv) {
-      const form = await spdModal("下转随访接收", [{ name: "opinion", label: "接收意见", type: "textarea" }]);
-      if (!form) return;
-      return postAction(`/api/spd/referrals/${recv.dataset.refRecv}/receive-followup`,
-        { opinion: form.opinion }, "#spd-ref-msg");
+      const ok = await spdModal("下转随访接收", [{ name: "opinion", label: "接收意见", type: "textarea" }], {
+        submit: (form) => api(`/api/spd/referrals/${recv.dataset.refRecv}/receive-followup`, { method: "POST",
+          body: JSON.stringify({ opinion: form.opinion }) }) });
+      if (ok) route();
+      return;
     }
   };
   // P2-31 例外：下面的 onsubmit 闭包依赖 meta 构建的 condEditor，提前挂会把窗口期提交从

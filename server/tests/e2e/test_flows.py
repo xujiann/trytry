@@ -2617,6 +2617,45 @@ def test_发起转诊的病种改下拉_留空时只在管一个病种的挂上�
     assert (case["program_code"], case["enrollment_id"]) == ("hypertension", enrollment["id"]), case
 
 
+def test_转诊审核与随访接收由框自己提交_意见写超了框不关(page, base_url, seed, admin_call, admin_read):
+    """P2-607 第三批：逐级转诊页的「审核通过」「退回转诊」「下转随访接收」原先点确定就关框、再发请求——意见写超了
+    （后端 512 字）或单子状态已变，报错落在页面消息行，写好的意见全丢。现在由框自己提交：失败留框、报错写在框里、
+    意见还在；成功才关框、整页重画。"""
+    patient = admin_call("POST", "/api/patients", {"name": "E2E转诊框内提交", "id_card": "320981199509090607"})
+    # 挂上在管档案：管理员代录时发起机构从档案推（否则 422「推不出发起机构」）
+    admin_call("POST", "/api/spd/enrollments", {
+        "patient_id": patient["id"], "program_code": "hypertension", "org_id": seed["org"]["id"]})
+    reviewed = admin_call("POST", "/api/spd/referrals", {
+        "patient_id": patient["id"], "program_code": "hypertension", "target_org_id": seed["org"]["id"],
+        "reason": "E2E 框内提交·审核"})
+    down = admin_call("POST", "/api/spd/referrals", {
+        "patient_id": patient["id"], "program_code": "hypertension", "target_org_id": seed["org"]["id"],
+        "reason": "E2E 框内提交·随访接收"})
+    for _ in range(2):   # submitted → township_reviewed → accepted
+        admin_call("POST", f"/api/spd/referrals/{down['id']}/review", {"action": "pass"})
+    admin_call("POST", f"/api/spd/referrals/{down['id']}/down", {"target_org_id": seed["org"]["id"]})
+
+    def status(case_id):
+        return next(c for c in admin_read(f"/api/spd/referrals?patient_id={patient['id']}&open_only=false")
+                    if c["id"] == case_id)["status"]
+
+    assert status(down["id"]) == "down_referred"
+    _login(page, base_url)
+    _open_page(page, "spdreferral", "逐级转诊闭环")
+    page.click(f'button[data-ref-pass="{reviewed["id"]}"]')
+    form = _spd_modal_rejected(page, {"opinion": "长" * 513})        # 修前框关、报错落到页面消息行，意见全丢
+    expect(form.locator('[name="opinion"]')).to_have_value("长" * 513)
+    assert status(reviewed["id"]) == "submitted"
+    _redrawn(page, lambda: _spd_modal(page, {"opinion": "E2E 同意上转"}))
+    assert status(reviewed["id"]) == "township_reviewed"
+    _redrawn(page, lambda: page.click(f'button[data-ref-reject="{reviewed["id"]}"]') or
+             _spd_modal(page, {"opinion": "E2E 资料不全退回"}))
+    assert status(reviewed["id"]) == "rejected"
+    _redrawn(page, lambda: page.click(f'button[data-ref-recv="{down["id"]}"]') or
+             _spd_modal(page, {"opinion": "E2E 已接收随访"}))
+    assert status(down["id"]) == "closed"
+
+
 def test_规则试算的病种改下拉_留空时命中即开的上转单也挂上档案(page, base_url, seed, admin_call, admin_read):
     """P1-139 同一族：规则试算的病种原先是个「病种编码（可选）」文本框，留空时勾「命中即开上转单」开出的单子不挂纳管档案
     （管理员代录连发起机构都推不出、422）。现在是病种下拉；留空时患者只在管一个病种的按这份档案。"""
