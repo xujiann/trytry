@@ -1457,9 +1457,10 @@ def list_point_accounts(
 @router.post("/point-accounts/signin", response_model=SigninOut)
 def signin(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """每日签到积分。唯一约束保证一天只能签一次，重复签到返回 409 而不是静默。"""
-    rule = (
+    rule = (   # 几条启用的签到规则取编号最小的那条，与 award_points 同一个次序（P2-693）
         db.query(SpdPointRule)
         .filter(SpdPointRule.event == "signin", SpdPointRule.active.is_(True))
+        .order_by(SpdPointRule.id)
         .first()
     )
     if rule is None:

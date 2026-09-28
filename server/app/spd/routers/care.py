@@ -675,6 +675,8 @@ def _auto_intervene(db: Session, enrollment: SpdEnrollment, risk_level: str) -> 
     第二次评估完全一样：不报 409，接口照旧 201，只是不再多写一条。
     """
     with serialized_on(db, SpdEnrollment, enrollment.id):
+        # 同病种同等级几套自动模板取编号最小的那套（P2-693）：原先不排序，开哪套由库的返回次序决定；要不要几套都开
+        # 与随访方案「命中几套」同一个口径，见 P2-391
         template = (
             db.query(SpdInterventionTemplate)
             .filter(
@@ -682,6 +684,7 @@ def _auto_intervene(db: Session, enrollment: SpdEnrollment, risk_level: str) -> 
                 SpdInterventionTemplate.auto_risk_level == risk_level,
                 SpdInterventionTemplate.active.is_(True),
             )
+            .order_by(SpdInterventionTemplate.id)
             .first()
         )
         if template is not None:

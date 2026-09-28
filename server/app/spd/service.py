@@ -860,9 +860,12 @@ def award_points(
     """
     if user_id is None:
         return None
+    # 同一事件配了几条启用的规则时取编号最小的那条（P2-693）：原先不排序，PG 上改过的行排到堆尾（P2-304 实测），
+    # 改一下规则名称，同样的随访就从 3 分变成 5 分、每日上限也跟着换——与转诊规则试算、随访方案匹配同一个次序
     rule = (
         db.query(SpdPointRule)
         .filter(SpdPointRule.event == event, SpdPointRule.active.is_(True))
+        .order_by(SpdPointRule.id)
         .first()
     )
     if rule is None:
