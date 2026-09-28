@@ -931,10 +931,10 @@ def test_上门服务派单完成与取消都在页内表单里_取消即不动(
     assert (order(done_id)["status"], order(done_id)["assignee_name"]) == ("dispatched", "E2E护士李")
 
     page.click(f'button[data-hvdone="{done_id}"]')
-    _spd_modal(page, {"service_note": ""})
-    expect(page.locator("#hv-msg")).to_contain_text("service_note")
+    # 留空：框自己提交，后端的话写在框里、框不关（P2-607 第九批；修前框关、报错落到页面消息行）
+    form = _spd_modal_rejected(page, {"service_note": ""})
+    expect(form.locator("[data-modal-msg]")).to_contain_text("service_note")
     assert order(done_id)["status"] == "dispatched"
-    page.click(f'button[data-hvdone="{done_id}"]')
     note = "伤口换药，愈合良好\n嘱三日后复诊"
     _redrawn(page, lambda: _spd_modal(page, {"service_note": note}))
     assert (order(done_id)["status"], order(done_id)["service_note"]) == ("completed", note)
@@ -992,7 +992,10 @@ def test_实训考核在页内表单里录_学员从报名名单里选_取消即
     expect(modal).to_have_count(0)
     assert board()["total"] == 0, "点了取消却照样录了考核"
     page.click(f'button[data-assess="{pid}"]')
-    _redrawn(page, lambda: _spd_modal(page, {"score": "86.5", "comment": "进针角度规范"}))
+    form = _spd_modal_rejected(page, {"score": "101", "comment": "进针角度规范"})   # 分数越界：框不关、评语还在（P2-607 第九批）
+    expect(form.locator('[name="comment"]')).to_have_value("进针角度规范")
+    assert board()["total"] == 0
+    _redrawn(page, lambda: _spd_modal(page, {"score": "86.5"}))
     (item,) = board()["items"]
     assert (item["score"], item["passed"]) == (86.5, True), item
 
@@ -1349,6 +1352,29 @@ def test_集成平台对消息执行编排在页内表单里填消息号(page, b
     page.click('button[data-esbrun="e2e_flow_run"]')
     _spd_modal(page, {"message_id": "987654"})
     expect(page.locator("#esb-msg")).to_contain_text("消息不存在")
+
+
+def test_编辑编排流程由框自己提交_步骤写错框不关(page, base_url, admin_call, admin_read):
+    """P2-607 第九批：集成平台「编辑流程」原先点确定就关框——步骤 JSON 少个括号、步骤类型写错（后端只认四种），报错落在
+    页面消息行，改了一半的步骤全丢。现在框自己提交：写错都在框里说、框不关、流程不动；改好再交才落库。"""
+    flow = admin_call("POST", "/api/esb/flows", {"code": "e2e_p2607_flow", "name": "E2E框内提交编排",
+                                                 "steps": [{"type": "validate"}]})
+
+    def saved():
+        return next(f for f in admin_read("/api/esb/flows") if f["id"] == flow["id"])
+
+    _login(page, base_url)
+    _open_page(page, "esb", "集成平台")
+    page.click(f'button[data-esbflowedit="{flow["id"]}"]')
+    form = _spd_modal_rejected(page, {"name": "E2E框内提交编排（改）", "steps": '[{"type":"validate"},{坏的'})
+    expect(form.locator("[data-modal-msg]")).to_contain_text("步骤 JSON 解析失败")
+    expect(form.locator('[name="name"]')).to_have_value("E2E框内提交编排（改）")   # 修前框关，改的名字也没了
+    form.locator('[name="steps"]').fill('[{"type":"validate"},{"type":"shred"}]')
+    form.locator("button[type=submit]").click()
+    expect(form.locator("[data-modal-msg]")).to_contain_text("第 2 步")
+    assert (saved()["name"], [s["type"] for s in saved()["steps"]]) == ("E2E框内提交编排", ["validate"])
+    _redrawn(page, lambda: _spd_modal(page, {"steps": '[{"type":"validate"},{"type":"persist"}]'}))
+    assert (saved()["name"], [s["type"] for s in saved()["steps"]]) == ("E2E框内提交编排（改）", ["validate", "persist"])
 
 
 def _confirm_then(page, click, intro, before, after):
@@ -4299,6 +4325,9 @@ def test_绩效改进任务的进展_完成_退回都在页内表单里录入_�
     assert task()["status"] == "open"  # 取消就是放弃，没有落任何东西
 
     page.click(f'button[data-impprog="{tid}"]')
+    form = _spd_modal_rejected(page, {"measures": "措" * 1025})   # 写超了（后端 1024 字）：框不关、写的还在（P2-607 第九批）
+    expect(form.locator('[name="measures"]')).to_have_value("措" * 1025)
+    assert task()["status"] == "open"
     _redrawn(page, lambda: _spd_modal(page, {"measures": "E2E已组织专项培训"}))
     page.click(f'button[data-impdone="{tid}"]')
     _redrawn(page, lambda: _spd_modal(page, {"completion_note": "E2E整改完成，抽查复核达标"}))
@@ -4310,6 +4339,9 @@ def test_绩效改进任务的进展_完成_退回都在页内表单里录入_�
     assert task()["status"] == "completed"  # 原先点取消照样退回
 
     page.click(f'button[data-impno="{tid}"]')
+    form = _spd_modal_rejected(page, {"comment": "退" * 513})   # 理由写超了：框不关、没退回
+    expect(form.locator('[name="comment"]')).to_have_value("退" * 513)
+    assert task()["status"] == "completed"
     _redrawn(page, lambda: _spd_modal(page, {"comment": "E2E抽查样本不足，补充后再报"}))
     after = task()
     assert (after["status"], after["measures"]) == ("in_progress", "E2E已组织专项培训"), after
@@ -5103,6 +5135,9 @@ def test_体检没总检的排在最前_总检后这一行改标已总检(page, 
     state = page.locator(f'td[data-chkstate="{chk["id"]}"]')
     expect(state).to_contain_text("待总检")
     page.click(f'button[data-chkreview="{chk["id"]}"]')
+    form = _spd_modal_rejected(page, {"final_conclusion": "总" * 1025})   # 写超了（后端 1024 字）：框不关（P2-607 第九批）
+    expect(form.locator('[name="final_conclusion"]')).to_have_value("总" * 1025)
+    expect(state).to_contain_text("待总检")
     _spd_modal(page, {"final_conclusion": "E2E总检：未见明显异常"})
     expect(state).to_contain_text("已总检")
     expect(page.locator("#chk-detail-body")).to_contain_text("总检结论已保存")

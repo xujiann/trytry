@@ -442,12 +442,12 @@ async function renderCerts() {
       }
       if (chkitems) return await showItems(chkitems, null);
       if (chkreview) {
-        const picked = await spdModal(`体检 ${chkreview} 总检`, [
+        // 框自己提交（P2-607）：结论写超了、留空时报错写在框里、框不关，写好的总检结论不用重写（原先留空就关框、什么也不发生）
+        const r = await spdModal(`体检 ${chkreview} 总检`, [
           { name: "final_conclusion", label: "总检结论（必填，后端上限 1024 字）", type: "textarea" },
           { name: "final_doctor", label: "总检医师（留空则署当前登录医师）", type: "text" },
-        ]);
-        if (!picked || !picked.final_conclusion) return;
-        const r = await api(`/api/checkups/${chkreview}/review`, { method: "POST", body: JSON.stringify(picked) });
+        ], { submit: (picked) => api(`/api/checkups/${chkreview}/review`, { method: "POST", body: JSON.stringify(picked) }) });
+        if (!r) return;
         // 不走 route()：清单里没有结论全文，整页重画只会把下面这段回执冲掉；只把这一行的「总检」列改成已总检，
         // 回执连同分项摆进详情容器，人才看得见自己刚写的结论落成了什么
         const state = $(`[data-chkstate="${chkreview}"]`);
@@ -607,23 +607,25 @@ async function renderEsb() {
       if (esbruns) return await drawRuns(esbruns);
       if (esbflowedit) {
         const f = flows.find((x) => x.id === Number(esbflowedit));
-        const picked = await spdModal(`编辑流程 ${f ? f.code : esbflowedit}`, [
+        // 框自己提交（P2-607）：步骤 JSON 写错、步骤类型不认时报错写在框里、框不关——原先框一关，改了一半的步骤 JSON 就没了
+        const ok = await spdModal(`编辑流程 ${f ? f.code : esbflowedit}`, [
           { name: "name", label: "流程名称（留空不改）", type: "text", value: f ? f.name : "" },
           { name: "active", label: "启停", type: "select", value: f && f.active ? "1" : "0",
             options: [{ value: "1", label: "启用" }, { value: "0", label: "停用" }] },
           { name: "steps", label: "步骤 JSON 数组（留空不改；type 只认 transform/validate/route/persist）",
             type: "textarea", value: f ? JSON.stringify(f.steps || []) : "" },
-        ]);
-        if (!picked) return;
-        // 后端 exclude_unset + `if value is not None`：留空的键不送
-        const body = { active: picked.active === "1" };
-        if (picked.name) body.name = picked.name;
-        if (picked.steps) {
-          try { body.steps = JSON.parse(picked.steps); }
-          catch (err) { return setMsg("#esb-flow-msg", `步骤 JSON 解析失败：${err.message}`, false); }
-        }
-        await api(`/api/esb/flows/${esbflowedit}`, { method: "PATCH", body: JSON.stringify(body) });
-        return route();
+        ], { submit: (picked) => {
+          // 后端 exclude_unset + `if value is not None`：留空的键不送
+          const body = { active: picked.active === "1" };
+          if (picked.name) body.name = picked.name;
+          if (picked.steps) {
+            try { body.steps = JSON.parse(picked.steps); }
+            catch (err) { throw new Error(`步骤 JSON 解析失败：${err.message}`); }
+          }
+          return api(`/api/esb/flows/${esbflowedit}`, { method: "PATCH", body: JSON.stringify(body) });
+        } });
+        if (ok) route();
+        return;
       }
       if (esbproc) {
         const res = await api(`/api/esb/messages/${esbproc}/process`, { method: "POST" });
@@ -1071,15 +1073,16 @@ async function drawEduGaps() {
         const enrolled = (await api(`/api/education/training-plans/${assess}/enrollments`))
           .filter((r) => r.status === "enrolled");
         if (!enrolled.length) { setMsg("#tplan-msg", "该计划还没有在报名的学员，无人可录考核", false); return; }
-        const form = await spdModal("录考核（60 分及格；同一学员重录即更新成绩）", [
+        // 框自己提交（P2-607）：分数越界、评语写超了时报错写在框里、框不关，选的学员与写的评语都在
+        const ok = await spdModal("录考核（60 分及格；同一学员重录即更新成绩）", [
           { name: "user_id", label: "学员", type: "select", options: enrolled.map((r) =>
             ({ value: r.user_id, label: `${r.full_name || r.username}（${r.username}）` })) },
           { name: "score", label: "考核得分（0-100）", type: "number", required: true },
           { name: "comment", label: "评语", type: "textarea" },
-        ]);
-        if (!form) return;
-        return postAction(`/api/education/training-plans/${assess}/assessments`, {
-          user_id: Number(form.user_id), score: form.score, comment: form.comment }, "#tplan-msg");
+        ], { submit: (form) => api(`/api/education/training-plans/${assess}/assessments`, { method: "POST",
+          body: JSON.stringify({ user_id: Number(form.user_id), score: form.score, comment: form.comment }) }) });
+        if (ok) route();
+        return;
       }
       if (roster) {
         const [list, scores] = await Promise.all([
@@ -1192,10 +1195,13 @@ async function drawImprovementTasks() {
   holder.onclick = async (e) => {
     const { impprog, impdone, impok, impno } = e.target.dataset;
     try {
+      // 登记进展与确认 / 退回两张多行框由框自己提交（P2-607）：写超了、任务状态已变（409）时报错写在框里、框不关
       if (impprog) {
-        const v = await spdModal("登记整改进展", [{ name: "measures", label: "整改措施", type: "textarea" }]);
-        if (!v) return;
-        return postAction(`/api/performance/improvements/${impprog}/progress`, v, "#imp-msg");
+        const ok = await spdModal("登记整改进展", [{ name: "measures", label: "整改措施", type: "textarea" }],
+          { submit: (v) => api(`/api/performance/improvements/${impprog}/progress`, { method: "POST",
+            body: JSON.stringify(v) }) });
+        if (ok) route();
+        return;
       }
       if (impdone) {
         const v = await spdModal("提交整改完成", [
@@ -1204,11 +1210,12 @@ async function drawImprovementTasks() {
         return postAction(`/api/performance/improvements/${impdone}/progress`, { complete: true, ...v }, "#imp-msg");
       }
       if (impok || impno) {
-        const v = await spdModal(impok ? "确认关闭整改任务" : "退回整改", [
-          { name: "comment", label: impok ? "确认意见（可空）" : "退回理由", type: "textarea" }]);
-        if (!v) return;
-        return postAction(`/api/performance/improvements/${impok || impno}/verify`,
-          { approve: Boolean(impok), comment: v.comment }, "#imp-msg");
+        const ok = await spdModal(impok ? "确认关闭整改任务" : "退回整改", [
+          { name: "comment", label: impok ? "确认意见（可空）" : "退回理由", type: "textarea" }],
+        { submit: (v) => api(`/api/performance/improvements/${impok || impno}/verify`, { method: "POST",
+          body: JSON.stringify({ approve: Boolean(impok), comment: v.comment }) }) });
+        if (ok) route();
+        return;
       }
     } catch (err) { setMsg("#imp-msg", err.message, false); }
   };
@@ -1273,10 +1280,13 @@ async function drawHomeVisits() {
         return postAction(`/api/homevisits/${hvdis}/dispatch`, { assignee_name: form.assignee_name }, "#hv-msg");
       }
       if (hvdone) {
-        const form = await spdModal("完成上门服务", [
-          { name: "service_note", label: "服务记录（必填）", type: "textarea" }]);
-        if (!form) return;
-        return postAction(`/api/homevisits/${hvdone}/complete`, { service_note: form.service_note }, "#hv-msg");
+        // 框自己提交（P2-607）：服务记录写超了、留空、工单已被别人完成或取消时报错写在框里、框不关，写好的服务记录不用重写
+        const ok = await spdModal("完成上门服务", [
+          { name: "service_note", label: "服务记录（必填）", type: "textarea" }],
+        { submit: (form) => api(`/api/homevisits/${hvdone}/complete`, { method: "POST",
+          body: JSON.stringify({ service_note: form.service_note }) }) });
+        if (ok) route();
+        return;
       }
       if (hvcancel) {
         // 取消工单原先点一下就生效、没有任何确认：居民提的上门申请一次误点就作废了，页面上也恢复不了。

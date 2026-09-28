@@ -357,7 +357,7 @@ def _rows() -> list[tuple[str, str, str, str]]:
          "tests/test_frontend_fetch_error_detail.py"),
         ("功能完善", "直接 fetch 的失败分支按设计不报后端原话（逐条写明理由）", len(fetcherr.EXEMPT),
          "tests/test_frontend_fetch_error_detail.py"),
-        ("功能完善", "带多行文本、还是「点确定就关框」的模态框（422 后填的内容要重填，P2-607；妇幼页 5 张、慢专病任务中心 4 张、逐级转诊 3 张、智能随访 3 张、统筹调度中枢 3 张、慢专病页余下 4 张已迁成框内提交，慢专病页已清零；core.js 8 张已迁、清零；pages-mgmt.js 8 张已迁、清零）",
+        ("功能完善", "带多行文本、还是「点确定就关框」的模态框（422 后填的内容要重填，P2-607；妇幼页 5 张、慢专病任务中心 4 张、逐级转诊 3 张、智能随访 3 张、统筹调度中枢 3 张、慢专病页余下 4 张已迁成框内提交，慢专病页已清零；core.js 8 张已迁、清零；pages-mgmt.js 8 张已迁、清零；pages-public.js 6 张已迁、清零）",
          len(modalsubmit.KNOWN), "tests/test_modal_submit_ratchet.py"),
     ]
 
