@@ -510,24 +510,29 @@ async function uploadAttachment(ownerType, ownerId, fileInput) {
   return data;
 }
 
-/* 块1：报告打印——服务端渲染的打印页需带令牌拉取，取回后写入新窗口并唤起打印 */
+/* 块1：报告打印——服务端渲染的打印页需带令牌拉取，取回后写入新窗口并唤起打印。
+ * 开窗在点击手势里同步做、取回再写（P2-682，与 spdOpenSvg 同一口径）：原先 fetch 回来之后才 window.open——await 之后
+ * 已不在用户手势里，Safari 一律拦、Chrome 在打印页生成慢（临时激活过期）时拦，只剩一句「浏览器拦截了新窗口」。
+ * 取数失败就把先开的空窗关掉、照旧报后端的原话 */
 async function openPrintPage(path) {
-  const resp = await fetch(path, {
-    credentials: "same-origin",
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
-  });
-  if (!resp.ok) {
-    const data = await resp.json().catch(() => ({}));
-    throw new Error(errorText(data.detail, `打印页加载失败(${resp.status})`));
-  }
-  const html = await resp.text();
   const win = window.open("", "_blank");
   if (!win) throw new Error("浏览器拦截了新窗口，请允许弹出后重试");
-  win.document.open();
-  win.document.write(html);
-  win.document.close();
-  win.focus();
-  setTimeout(() => win.print(), 300);
+  try {
+    const resp = await fetch(path, {
+      credentials: "same-origin",
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!resp.ok) {
+      const data = await resp.json().catch(() => ({}));
+      throw new Error(errorText(data.detail, `打印页加载失败(${resp.status})`));
+    }
+    const html = await resp.text();
+    win.document.open();
+    win.document.write(html);
+    win.document.close();
+    win.focus();
+    setTimeout(() => win.print(), 300);
+  } catch (err) { win.close(); throw err; }
 }
 
 async function downloadAttachment(id, filename) {

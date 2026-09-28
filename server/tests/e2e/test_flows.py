@@ -2305,6 +2305,24 @@ def test_申请单行上直接打印本单的报告_不用照申请单号去填�
     expect(popup.value.locator("body")).not_to_contain_text("E2E 报告号乙单的结论")
 
 
+def test_打印先开窗再取数_取数失败先开的空窗关掉_报错照旧(page, base_url):
+    """P2-682：打印原先取回打印页之后才 window.open——await 之后已不在点击手势里，Safari 一律拦、Chrome 在打印页生成
+    慢时拦。改成点击时先开窗、取回再写；取数失败要把先开的空窗关掉，报错照旧写在页面上（端到端档的 Chromium 不拦弹窗，
+    「先开窗」本身由静态闸门 `test_window_open_before_await.py` 钉，这里钉失败分支）。"""
+    popups = []
+    page.on("popup", lambda p: popups.append(p))
+    _login(page, base_url)
+    _open_page(page, "exams", "共享诊断中心")
+    page.fill("#exam-print-form input[name=report_id]", "987654")
+    page.click("#exam-print-form button")
+    expect(page.locator("#exam-print-msg")).not_to_have_text("")   # 后端 404 的原话
+    for _ in range(50):
+        if popups and popups[0].is_closed():
+            break
+        page.wait_for_timeout(100)
+    assert len(popups) == 1 and popups[0].is_closed(), popups   # 修前根本不开窗；修后开了就得关
+
+
 def test_直播排期审核与直播评价由框自己提交_写超了框不关(page, base_url, admin_read, admin_call):
     """P2-607 第十批：直播「排期」与「评价」原先点确定就关框、再发请求——审核意见写超了（后端 256 字）、评价写超了
     （后端 512 字）报错落在页面消息行，写好的一段随框一起没了。现在框自己提交：失败留框、报错写在框里、填的都在、
