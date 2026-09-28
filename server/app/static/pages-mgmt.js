@@ -241,7 +241,8 @@ async function renderSurgery() {
           body: JSON.stringify({ ...v, room_id: Number(v.room_id) }) });
       } else if (d.record) {
         const req = requests.find((r) => r.id === Number(d.record));
-        const v = await spdModal("术中记录", [
+        // 框自己提交（P2-607）：术中所见写超了、单子状态已变时报错写在框里、框不关，填了一整张的术中记录不用重填
+        const ok = await spdModal("术中记录", [
           { name: "actual_surgery_name", label: "实际术式", value: req ? req.surgery_name : "", required: true },
           { name: "anesthetist_name", label: "麻醉医师" },
           // 麻醉方式与切口等级缺省带出申请时填的（P2-179）：原先麻醉恒缺省第一项、切口恒 II 类
@@ -256,9 +257,8 @@ async function renderSurgery() {
             options: ["治愈", "好转", "未愈", "死亡"].map((x) => ({ value: x, label: x })) },
           { name: "preop_diagnosis", label: "术前诊断（诊断符合率的数据源，可空）" },
           { name: "postop_diagnosis", label: "术后诊断（可空）" },
-        ]);
-        if (!v) return;
-        await api(`/api/surgery/requests/${d.record}/record`, { method: "POST", body: JSON.stringify(v) });
+        ], { submit: (v) => api(`/api/surgery/requests/${d.record}/record`, { method: "POST", body: JSON.stringify(v) }) });
+        if (!ok) return;
       } else if (d.view) {
         const rec = await api(`/api/surgery/requests/${d.view}/record`);
         $("#surg-detail").classList.remove("hidden");
@@ -314,9 +314,11 @@ async function renderFollowups() {
     try {
       if (d.done) {
         // P2-38：随访结果是一段话（症状、用药、下次安排），单行弹窗写不下也换不了行；留空由后端报人话。
-        const form = await spdModal("完成随访", [{ name: "result", label: "随访结果", type: "textarea" }]);
-        if (!form) return;
-        await api(`/api/followups/${d.done}/complete`, { method: "POST", body: JSON.stringify({ result: form.result }) });
+        // 框自己提交（P2-607）：写超了、留空、任务已被别人办了时报错写在框里、框不关，写好的随访结果不用重写
+        const ok = await spdModal("完成随访", [{ name: "result", label: "随访结果", type: "textarea" }],
+          { submit: (form) => api(`/api/followups/${d.done}/complete`, { method: "POST",
+            body: JSON.stringify({ result: form.result }) }) });
+        if (!ok) return;
       } else if (d.cancel) {
         // 取消原先点一下就生效、没有任何确认：误点一下，该随访的患者就从待随访清单里消失了。
         if (!await spdModal("取消随访任务", [], { intro: "取消后该任务不再出现在待随访清单里，不能恢复。" })) return;
@@ -699,13 +701,13 @@ async function renderMaterials() {
           body: JSON.stringify({ ...v, supplier_id: Number(v.supplier_id) }) });
       } else if (d.receive) {
         const p = purchases.find((x) => x.id === Number(d.receive));
-        const v = await spdModal(`到货验收：${p ? p.item_name : d.receive}`, [
+        // 框自己提交（P2-607）：验收数量超了采购数量、备注写超了时报错写在框里、框不关，填的都在
+        const ok = await spdModal(`到货验收：${p ? p.item_name : d.receive}`, [
           { name: "received_quantity", label: `验收数量（不得超过采购数量${p ? ` ${p.quantity}` : ""}）`,
             type: "number", value: p ? p.quantity : "", required: true },
           { name: "note", label: "验收备注", type: "textarea" },
-        ]);
-        if (!v) return;
-        await api(`/api/materials/purchases/${d.receive}/receive`, { method: "POST", body: JSON.stringify(v) });
+        ], { submit: (v) => api(`/api/materials/purchases/${d.receive}/receive`, { method: "POST", body: JSON.stringify(v) }) });
+        if (!ok) return;
       } else if (d.use) {
         const c = consumables.find((x) => x.barcode === d.use);
         const v = await spdModal(
@@ -959,17 +961,17 @@ async function renderWorkflows() {
     try {
       // P2-38：原先弹窗输入框点"取消"照样提交——推进照样推到下一节点（意见记空）；终止在确认框
       // 之后再问原因，原因框点取消照样终止。表单里取消就是不推进 / 不终止。
+      // 两张框都由框自己提交（P2-607）：意见 / 原因写超了、流程已被别人推进或终止时报错写在框里、框不关，写好的不用重写
       if (d.advance) {
-        const form = await spdModal("推进流程", [{ name: "comment", label: "处理意见", type: "textarea" }]);
-        if (!form) return;
-        await api(`/api/workflows/instances/${d.advance}/advance`, { method: "POST",
-          body: JSON.stringify({ comment: form.comment }) });
+        const ok = await spdModal("推进流程", [{ name: "comment", label: "处理意见", type: "textarea" }],
+          { submit: (form) => api(`/api/workflows/instances/${d.advance}/advance`, { method: "POST",
+            body: JSON.stringify({ comment: form.comment }) }) });
+        if (!ok) return;
       } else if (d.cancel) {
-        const form = await spdModal("终止流程", [{ name: "comment", label: "终止原因", type: "textarea" }],
-          { intro: "终止后该事项不再流转，不能恢复。" });
-        if (!form) return;
-        await api(`/api/workflows/instances/${d.cancel}/cancel`, { method: "POST",
-          body: JSON.stringify({ comment: form.comment }) });
+        const ok = await spdModal("终止流程", [{ name: "comment", label: "终止原因", type: "textarea" }],
+          { intro: "终止后该事项不再流转，不能恢复。", submit: (form) => api(`/api/workflows/instances/${d.cancel}/cancel`, {
+            method: "POST", body: JSON.stringify({ comment: form.comment }) }) });
+        if (!ok) return;
       }
       else if (d.history) {
         const rows = await api(`/api/workflows/instances/${d.history}/history`);
@@ -1670,24 +1672,24 @@ async function renderOutpatientDocs() {
     const { csign, crefuse, tpledit } = e.target.dataset;
     if (tpledit) {
       const t = templates.find((x) => x.id === Number(tpledit));
-      const picked = await spdModal(`编辑模板 ${t ? t.version : tpledit}`, [
+      // 框自己提交（P2-607）：正文写超了、版本号写超了时报错写在框里、框不关，改了一半的同意书正文不用重敲
+      const ok = await spdModal(`编辑模板 ${t ? t.version : tpledit}`, [
         { name: "title", label: "标题（留空不改）", type: "text", value: t ? t.title : "" },
         { name: "version", label: "版本号（留空不改；改版本是为了让已签的那份认得出依据哪版）",
           type: "text", value: t ? t.version : "" },
         { name: "active", label: "启停", type: "select", value: t && t.active ? "1" : "0",
           options: [{ value: "1", label: "启用" }, { value: "0", label: "停用" }] },
         { name: "body", label: "正文（留空不改）", type: "textarea", value: t ? t.body : "" },
-      ]);
-      if (!picked) return;
-      // 后端 exclude_unset + `if value is not None`：留空的键不送，别拿空串把正文清了
-      const body = { active: picked.active === "1" };
-      if (picked.title) body.title = picked.title;
-      if (picked.version) body.version = picked.version;
-      if (picked.body) body.body = picked.body;
-      try {
-        await api(`/api/outpatient/consent-templates/${tpledit}`, { method: "PATCH", body: JSON.stringify(body) });
-        return route();
-      } catch (err) { return setMsg("#od-tmsg", err.message, false); }
+      ], { submit: (picked) => {
+        // 后端 exclude_unset + `if value is not None`：留空的键不送，别拿空串把正文清了
+        const body = { active: picked.active === "1" };
+        if (picked.title) body.title = picked.title;
+        if (picked.version) body.version = picked.version;
+        if (picked.body) body.body = picked.body;
+        return api(`/api/outpatient/consent-templates/${tpledit}`, { method: "PATCH", body: JSON.stringify(body) });
+      } });
+      if (ok) route();
+      return;
     }
     // P2-38 / P1-70：签署两连问（关系要手打 self/spouse/…）、拒签两连问换成页内表单。
     // 拒签原先把关系**写死成"本人"**——家属或委托人代为拒签的，证据上记成了患者本人拒签。
@@ -2274,7 +2276,8 @@ async function renderDiseasePrograms() {
       if (dptrace) return await drawTrace(dptrace);
       if (dpedit) {
         const prog = programs.find((x) => x.id === Number(dpedit));
-        const picked = await spdModal(`编辑专病 ${prog ? prog.code : dpedit}`, [
+        // 框自己提交（P2-607）：路径节点 JSON 写错、键重复、说明写超了时报错写在框里、框不关——原先框一关，改了一半的节点 JSON 就没了
+        const ok = await spdModal(`编辑专病 ${prog ? prog.code : dpedit}`, [
           { name: "name", label: "专病名称（留空不改）", type: "text", value: prog ? prog.name : "" },
           { name: "description", label: "说明（留空不改）", type: "text",
             value: prog ? prog.description || "" : "" },
@@ -2282,24 +2285,26 @@ async function renderDiseasePrograms() {
             options: [{ value: "1", label: "启用" }, { value: "0", label: "停用" }] },
           { name: "path_nodes", label: "路径节点 JSON（留空不改；key 不得重复）", type: "textarea",
             value: prog ? JSON.stringify(prog.path_nodes || []) : "" },
-        ]);
-        if (!picked) return;
-        // 后端 exclude_unset + `if value is not None`：留空的键不送，免得把说明清空
-        const body = { active: picked.active === "1" };
-        if (picked.name) body.name = picked.name;
-        if (picked.description) body.description = picked.description;
-        if (picked.path_nodes) {
-          try { body.path_nodes = JSON.parse(picked.path_nodes); }
-          catch (err) { return setMsg("#dp-msg", `路径节点 JSON 解析失败：${err.message}`, false); }
-        }
-        await api(`/api/disease-programs/${dpedit}`, { method: "PATCH", body: JSON.stringify(body) });
-        return route();
+        ], { submit: (picked) => {
+          // 后端 exclude_unset + `if value is not None`：留空的键不送，免得把说明清空
+          const body = { active: picked.active === "1" };
+          if (picked.name) body.name = picked.name;
+          if (picked.description) body.description = picked.description;
+          if (picked.path_nodes) {
+            try { body.path_nodes = JSON.parse(picked.path_nodes); }
+            catch (err) { throw new Error(`路径节点 JSON 解析失败：${err.message}`); }
+          }
+          return api(`/api/disease-programs/${dpedit}`, { method: "PATCH", body: JSON.stringify(body) });
+        } });
+        if (ok) route();
+        return;
       }
       if (dpnode) {
         const nodes = (current.path_nodes || []);
         if (!nodes.length) return setMsg("#dp-msg", "本专病还没有配置路径节点，先在目录里「编辑」加上", false);
         // 节点键从目录里选：手打一个不在路径里的 key，后端 422，而完成度也永远算不对
-        const picked = await spdModal("记录路径节点", [
+        // 框自己提交（P2-607）：日期写错、备注写超了时报错写在框里、框不关，填的都在
+        const ok = await spdModal("记录路径节点", [
           { name: "node_key", label: "节点", type: "select", value: nodes[0].key,
             options: nodes.map((n) => ({ value: n.key,
               label: `${n.name}${n.required === false ? "（选做）" : ""}` })) },
@@ -2307,9 +2312,10 @@ async function renderDiseasePrograms() {
           { name: "operator_name", label: "经办人（可留空）", type: "text", value: "" },
           { name: "result", label: "执行结果（可留空）", type: "text", value: "" },
           { name: "note", label: "备注（可留空）", type: "textarea", value: "" },
-        ]);
-        if (!picked) return;
-        return postAction(`/api/disease-programs/enrollments/${dpnode}/records`, picked, "#dp-msg");
+        ], { submit: (picked) => api(`/api/disease-programs/enrollments/${dpnode}/records`, { method: "POST",
+          body: JSON.stringify(picked) }) });
+        if (ok) route();
+        return;
       }
       if (dpexit) {
         const picked = await spdModal("出组", [

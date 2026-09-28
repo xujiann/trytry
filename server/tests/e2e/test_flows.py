@@ -2271,6 +2271,62 @@ def test_编辑慢病病种由框自己提交_分级规则JSON写错框不关(pa
     assert saved()["guidance"] == "E2E 每日监测血压"
 
 
+def test_同意书模板编辑由框自己提交_版本号写超了框不关(page, base_url, admin_read, admin_call):
+    """P2-607 第八批：门急诊文书的「编辑模板」原先点确定就关框、再发请求——版本号写超了（后端 16 字）报错落在页面消息行，
+    改了一半的同意书正文全丢。现在框自己提交：失败留框、报错写在框里、正文还在、模板不动；改好再交才落库。"""
+    tpl = admin_call("POST", "/api/outpatient/consent-templates", {
+        "consent_type": "treatment", "title": "E2E 框内提交同意书", "version": "e2e-p2607-1", "body": "E2E 原正文"})
+
+    def saved():
+        return next(t for t in admin_read("/api/outpatient/consent-templates") if t["id"] == tpl["id"])
+
+    _login(page, base_url)
+    _open_page(page, "outpatientdocs", "门急诊文书")
+    page.click(f'button[data-tpledit="{tpl["id"]}"]')
+    form = _spd_modal_rejected(page, {"version": "v" * 17, "body": "E2E 改过的正文：治疗期间可能出现不适"})
+    expect(form.locator('[name="body"]')).to_have_value("E2E 改过的正文：治疗期间可能出现不适")   # 修前框关，正文全丢
+    assert (saved()["version"], saved()["body"]) == ("e2e-p2607-1", "E2E 原正文")
+    _redrawn(page, lambda: _spd_modal(page, {"version": "e2e-p2607-2"}))
+    assert (saved()["version"], saved()["body"]) == ("e2e-p2607-2", "E2E 改过的正文：治疗期间可能出现不适")
+
+
+def test_专病目录编辑与记录路径节点由框自己提交_写错框不关(page, base_url, seed, admin_read, admin_call):
+    """P2-607 第八批：专病管理的「编辑」与「记录节点」原先点确定就关框——路径节点 JSON 少个括号、节点键重复、完成日期写错，
+    报错落在页面消息行，改了一半的节点 JSON 与备注全丢。现在框自己提交：写错写超都在框里说、框不关；改好再交才落库。"""
+    program = admin_call("POST", "/api/disease-programs", {
+        "code": "E2E_P2607_DP", "name": "E2E 框内提交专病",
+        "path_nodes": [{"key": "apply", "name": "申请"}, {"key": "review", "name": "评估"}]})
+    patient = admin_call("POST", "/api/patients", {"name": "E2E专病节点患者", "id_card": "320981199406062299"})
+    enrollment = admin_call("POST", f"/api/disease-programs/{program['id']}/enrollments", {
+        "patient_id": patient["id"], "org_id": seed["org"]["id"]})
+
+    def saved():
+        return next(p for p in admin_read("/api/disease-programs") if p["id"] == program["id"])
+
+    _login(page, base_url)
+    _open_page(page, "diseaseprograms", "专病管理")
+    page.click(f'button[data-dpedit="{program["id"]}"]')
+    form = _spd_modal_rejected(page, {"description": "E2E 新说明", "path_nodes": "[{坏的"})
+    expect(form.locator("[data-modal-msg]")).to_contain_text("路径节点 JSON 解析失败")
+    expect(form.locator('[name="description"]')).to_have_value("E2E 新说明")   # 修前框关，说明也没了
+    form.locator('[name="path_nodes"]').fill('[{"key":"apply","name":"申请"},{"key":"apply","name":"重复"}]')
+    form.locator("button[type=submit]").click()
+    expect(form.locator("[data-modal-msg]")).to_contain_text("路径节点 key 不得重复")
+    assert saved()["description"] == ""
+    _redrawn(page, lambda: _spd_modal(page, {
+        "path_nodes": '[{"key":"apply","name":"申请"},{"key":"review","name":"评估"},{"key":"close","name":"结案"}]'}))
+    assert (saved()["description"], [n["key"] for n in saved()["path_nodes"]]) == ("E2E 新说明", ["apply", "review", "close"])
+
+    _redrawn(page, lambda: page.click(f'button[data-dppick="{program["id"]}"]'))
+    page.click(f'button[data-dpnode="{enrollment["id"]}"]')
+    form = _spd_modal_rejected(page, {"node_key": "review", "performed_at": "2026-13-45", "note": "E2E 评估完成"})
+    expect(form.locator('[name="note"]')).to_have_value("E2E 评估完成")
+    assert admin_read(f"/api/disease-programs/enrollments/{enrollment['id']}")["records"] == []
+    _redrawn(page, lambda: _spd_modal(page, {"performed_at": ""}))
+    (rec,) = admin_read(f"/api/disease-programs/enrollments/{enrollment['id']}")["records"]
+    assert (rec["node_key"], rec["note"]) == ("review", "E2E 评估完成"), rec
+
+
 def test_随访方案在界面上新建与改诊断关键词_自动匹配据此排随访(page, base_url, seed, admin_read, admin_call):
     """P2-92：随访方案面板原先没有新建入口、编辑不给诊断关键词，三套预置方案又都没配关键词——出院即派生随访与「按患者
     特征自动匹配」从界面上一个人都匹配不到；没有可用方案时回执照样弹「扫描 undefined 人」，原因被吞掉。"""
@@ -3197,9 +3253,12 @@ def test_surgery_full_flow(page, base_url, seed):
     # 术中记录：转归此前被写死成"好转"（P1-66），这里选"治愈"并填术前/术后诊断，
     # 然后在记录详情里读回来——证明选的值真的落了库
     page.click("button[data-record]")
-    _spd_modal(page, {"actual_surgery_name": "腹腔镜阑尾切除术", "anesthetist_name": "麻醉科周医生",
-                      "findings": "阑尾化脓", "blood_loss_ml": "20", "outcome": "治愈",
-                      "preop_diagnosis": "急性阑尾炎", "postop_diagnosis": "急性化脓性阑尾炎"})
+    # 术中所见写超了（后端 2048 字）：框自己提交，报错写在框里、框不关、填了一整张的记录都在（P2-607 第八批）
+    form = _spd_modal_rejected(page, {"actual_surgery_name": "腹腔镜阑尾切除术", "anesthetist_name": "麻醉科周医生",
+                                      "findings": "所" * 2049, "blood_loss_ml": "20", "outcome": "治愈",
+                                      "preop_diagnosis": "急性阑尾炎", "postop_diagnosis": "急性化脓性阑尾炎"})
+    expect(form.locator('[name="postop_diagnosis"]')).to_have_value("急性化脓性阑尾炎")
+    _spd_modal(page, {"findings": "阑尾化脓"})
     expect(page.locator("#page-body")).to_contain_text("已完成")
     page.click("button[data-view]")
     expect(page.locator("#surg-detail-body")).to_contain_text("治愈")
@@ -3275,6 +3334,9 @@ def test_followup_center_flow(page, base_url, seed, admin_read):
     assert status() == "pending", "点了取消 / 保留却照样动了任务"
 
     page.click(f'button[data-done="{tid}"]')
+    form = _spd_modal_rejected(page, {"result": "随" * 1025})   # 写超了（后端 1024 字）：框不关、写的还在（P2-607 第八批）
+    expect(form.locator('[name="result"]')).to_have_value("随" * 1025)
+    assert status() == "pending"
     # 等整页重画完再按接口读回（`_redrawn` 的 docstring 说的就是这个）：原先只等页面上出现「已完成」，
     # 可别的行本来就可能带这三个字，于是写请求还在路上就读回、读到 pending（CI run 689 实测红一次）
     _redrawn(page, lambda: _spd_modal(page, {"result": "切口愈合良好，无发热\n嘱两周后门诊复查"}))
@@ -4006,10 +4068,11 @@ def test_物资页的签合同_验收_使用登记都在页内表单里录入(pa
     assert amount == 12345.67, amount
 
     page.click(f'button[data-receive="{pid}"]')
-    _spd_modal(page, {"received_quantity": "11"})
-    expect(page.locator("#mat-msg")).to_contain_text("验收数量不得超过采购数量")
-    page.click(f'button[data-receive="{pid}"]')
-    _spd_modal(page, {"note": "E2E到货验收"})  # 数量默认就是采购量 10
+    # 验收数量超了：框自己提交，后端的话写在框里、框不关、备注还在（P2-607 第八批；修前框关、报错落到页面消息行）
+    form = _spd_modal_rejected(page, {"received_quantity": "11", "note": "E2E到货验收"})
+    expect(form.locator("[data-modal-msg]")).to_have_text("验收数量不得超过采购数量")
+    expect(form.locator('[name="note"]')).to_have_value("E2E到货验收")
+    _spd_modal(page, {"received_quantity": "10"})
     expect(page.locator("tr", has_text="E2E一次性手术衣")).to_contain_text("已验收")
 
     page.click('button[data-use="E2E-HV-1"]')
@@ -4481,6 +4544,9 @@ def test_流程推进与终止都在页内表单里填_取消即不动(page, bas
     expect(modal).to_have_count(0)
     assert instance(adv_id)["current_node"] == "apply", "点了取消却照样推进了"
     adv_row.locator("button[data-advance]").click()
+    form = _spd_modal_rejected(page, {"comment": "意" * 513})   # 意见写超了（后端 512 字）：框不关、没推进（P2-607 第八批）
+    expect(form.locator('[name="comment"]')).to_have_value("意" * 513)
+    assert instance(adv_id)["current_node"] == "apply"
     _redrawn(page, lambda: _spd_modal(page, {"comment": "材料齐全，同意"}))
     assert instance(adv_id)["current_node"] == "approve"
     history = read(f"/api/workflows/instances/{adv_id}/history")
@@ -4493,6 +4559,9 @@ def test_流程推进与终止都在页内表单里填_取消即不动(page, bas
     expect(modal).to_have_count(0)
     assert instance(cancel_id)["status"] == "running", "点了取消却照样终止了"
     cancel_row.locator("button[data-cancel]").click()
+    form = _spd_modal_rejected(page, {"comment": "终" * 513})   # 原因写超了：框不关、没终止
+    expect(form.locator('[name="comment"]')).to_have_value("终" * 513)
+    assert instance(cancel_id)["status"] == "running"
     _redrawn(page, lambda: _spd_modal(page, {"comment": "重复发起"}))
     assert instance(cancel_id)["status"] == "cancelled"
     history = read(f"/api/workflows/instances/{cancel_id}/history")
