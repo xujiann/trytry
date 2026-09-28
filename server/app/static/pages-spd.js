@@ -30,6 +30,8 @@ const SPD_DS_TYPES = {
   HIS: "HIS", EMR: "电子病历 EMR", LIS: "检验 LIS", PACS: "影像 PACS",
   checkup: "体检", publichealth: "公卫随访", device: "设备回传",
 };
+/** 报告推送频率：新建表单的下拉与推送任务表同一套文案（P2-684：表格原先照抄 daily / weekly） */
+const SPD_REPORT_FREQ = { daily: "每日", weekly: "每周", monthly: "每月", custom: "自定义" };
 const SPD_TASK_TYPES = {
   path: "路径节点", followup: "随访", intervention: "干预", assess: "评估",
   revisit: "复诊", referral: "转诊", report: "上报", recall: "召回",
@@ -1923,7 +1925,7 @@ function spdPriorityLabel(p) {
 /** 任务详情（GET /api/spd/tasks/{id}）：列表行放不下的字段——表单、办理结果、佐证、
     审核意见、来源。佐证走鉴权下载（`downloadAttachment`），不能用裸 <a href>：
     Bearer 模式下浏览器直开链接没有令牌。 */
-function spdTaskDetailHtml(t) {
+function spdTaskDetailHtml(t, programOf = (code) => code) {
   const kv = (k, v) => `<div><b>${k}</b>：${v}</div>`;
   const json = (o) => `<pre style="white-space:pre-wrap;margin:4px 0">${esc(JSON.stringify(o || {}, null, 1))}</pre>`;
   // 不另起文件名（P2-683）：原先写死 task-{任务号}-evidence-{附件号}，没有扩展名、上传原名丢了，照片 / PDF 下下来打不开；
@@ -1934,7 +1936,7 @@ function spdTaskDetailHtml(t) {
   return panel(`任务详情 #${t.id}`, `
     ${kv("标题", esc(t.title))}
     ${kv("患者", `${esc(t.patient_name || "")}（#${t.patient_id}）${t.phone ? " " + esc(t.phone) : ""}`)}
-    ${kv("病种 / 类型", `${esc(t.program_code || "—")} / ${esc(SPD_TASK_TYPES[t.task_type] || t.task_type)}`)}
+    ${kv("病种 / 类型", `${esc(t.program_code ? programOf(t.program_code) : "—")} / ${esc(SPD_TASK_TYPES[t.task_type] || t.task_type)}`)}
     ${kv("状态", spdTag(SPD_TASK_STATUS, t.status) + (t.escalated ? ' <span class="tag red">已升级</span>' : ""))}
     ${kv("优先级 / 截止", `${spdPriorityLabel(t.priority)} / ${esc(t.due_date || "—")}`)}
     ${kv("责任人ID / 团队ID / 机构ID", `${t.assignee_id ?? "—"} / ${t.team_id ?? "—"} / ${t.org_id ?? "—"}`)}
@@ -1966,8 +1968,9 @@ function spdInstanceDetailHtml(inst, nodeIds) {
           : "—"}</td></tr>`)}`);
 }
 
-/** 导出端点（GET /api/spd/tasks-export）只回 columns+rows，CSV 在前端拼（后端 docstring 的
-    约定：平台的导出都走这个形状，不多养一份编码/换行/BOM 处理）。单元格含逗号/引号/换行
+/** 导出端点（GET /api/spd/tasks-export）只回 columns+rows，CSV 在前端拼（后端 docstring：多一种导出方式就多一份
+    要维护的编码 / 换行 / BOM 处理）。平台侧的报告卡、运营月报等是服务端直接出 CSV 文件（`reports.CsvResponse`，
+    core.js 的 downloadCsv 取），两种形状并存——原先这里写「平台的导出都走这个形状」，与现状不符。单元格含逗号/引号/换行
     时加引号并把引号翻倍；开头放 BOM 让 Excel 认出 UTF-8；以 = + - @（及制表符、回车，P2-116）开头的非数字
     文本前置单引号，免得被表格软件当公式执行。字符类与服务端 `reports._FORMULA_LEAD` 逐字一致（有用例对着比）。 */
 function spdDownloadCsv(filename, columns, rows) {
@@ -1993,6 +1996,8 @@ async function renderSpdPath() {
   ]);
   // 启动路径的模板下拉带上病种名：模板只能给同病种的纳管档案用（P2-95），原先下拉里看不出哪条是哪个病种的
   const programName = (id) => (catalog.programs.find((p) => p.id === id) || {}).name || `病种#${id}`;
+  // 病种编码 → 名称：任务详情与任务导出共用（P2-684 / P2-567），表外的编码原样显示
+  const programOf = (code) => (catalog.programs.find((p) => p.code === code) || {}).name || code;
   $("#page-body").innerHTML = `
     ${spdCards([
       ["待办任务", summary.open_total], ["超期", summary.overdue, summary.overdue > 0],
@@ -2127,7 +2132,7 @@ async function renderSpdPath() {
   const showTask = async (id) => {
     const box = $("#spd-task-detail");
     box.innerHTML = '<p class="desc">加载中…</p>';
-    try { box.innerHTML = spdTaskDetailHtml(await api(`/api/spd/tasks/${id}`)); }
+    try { box.innerHTML = spdTaskDetailHtml(await api(`/api/spd/tasks/${id}`), programOf); }
     catch (err) { box.innerHTML = `<p class="msg err">${esc(err.message)}</p>`; }
   };
   const showInstance = async (id) => {
@@ -2369,7 +2374,6 @@ async function renderSpdPath() {
       try {
         const d = await api(`/api/spd/tasks-export?${qs}`);
         // 病种、类型、状态、优先级换成与上面清单同一套文案（P2-567）：原先 CSV 里是 hypertension / followup / pending / 2
-        const programOf = (code) => (catalog.programs.find((p) => p.code === code) || {}).name || code;
         const rows = d.rows.map((r) => [r[0], r[1], programOf(r[2]), SPD_TASK_TYPES[r[3]] || r[3], r[4],
           (SPD_TASK_STATUS[r[5]] || [r[5]])[0], spdPriorityLabel(r[6]), ...r.slice(7)]);
         spdDownloadCsv(`spd_tasks_${localToday()}.csv`, d.columns, rows);
@@ -3399,8 +3403,7 @@ async function renderSpdReport() {
         <select name="template_id">${templates.filter((t) => t.active).map((t) => `<option value="${t.id}">${esc(t.name)}</option>`).join("")}</select>
         <input name="name" placeholder="任务名称" required>
         <select name="frequency">
-          <option value="daily">每日</option><option value="weekly">每周</option>
-          <option value="monthly">每月</option><option value="custom">自定义</option>
+          ${Object.entries(SPD_REPORT_FREQ).map(([v, label]) => `<option value="${esc(v)}">${esc(label)}</option>`).join("")}
         </select>
         <input name="push_time" placeholder="推送时间 08:00" value="08:00">
         <input name="priority" type="number" value="1" placeholder="优先级">
@@ -3408,7 +3411,7 @@ async function renderSpdReport() {
       </form><p class="msg" id="spd-rpttask-msg"></p>
       ${table(["ID", "任务", "频率", "推送时间", "订阅人数", "优先级", "状态", "最近运行", "操作"],
         tasks, (t) =>
-        `<tr><td>${t.id}</td><td>${esc(t.name)}</td><td>${esc(t.frequency)}</td>
+        `<tr><td>${t.id}</td><td>${esc(t.name)}</td><td>${esc(SPD_REPORT_FREQ[t.frequency] || t.frequency)}</td>
          <td>${esc(t.push_time)}</td><td>${(t.subscriber_ids || []).length}</td>
          <td>${t.priority}</td>
          <td>${t.status === "active" ? '<span class="tag green">启用</span>' : '<span class="tag orange">暂停</span>'}</td>

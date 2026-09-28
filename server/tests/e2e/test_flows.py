@@ -5191,6 +5191,29 @@ def test_任务详情里的佐证按上传时的文件名下载(page, base_url, 
     assert download.value.suggested_filename == "E2E上门血压照片.jpg"   # 修前 task-{id}-evidence-{附件号}
 
 
+def test_慢专病页面的推送频率与病种显示中文(page, base_url, spd_seed, admin_call, admin_read):
+    """P2-684：推送任务表的「频率」一栏原样显示 weekly（同一页新建表单的下拉写的是「每周」）；任务详情的「病种」一栏
+    显示 hypertension。修后表格与下拉同一套文案，任务详情显示病种名称（与任务导出同一个换算）。"""
+    tpl = next(t for t in admin_read("/api/spd/report-templates") if t["active"])
+    admin_call("POST", "/api/spd/report-tasks", {"template_id": tpl["id"], "name": "E2E周报频率文案", "frequency": "weekly"})
+    admin_call("POST", "/api/spd/tasks", {
+        "patient_id": spd_seed["patient"]["id"], "title": "E2E病种名称显示", "task_type": "edu",
+        "program_code": "hypertension", "org_id": spd_seed["org"]["id"], "due_days": 1, "priority": 3})
+    _login(page, base_url)
+    _open_page(page, "spdreport", "智能辅助报告端")
+    row = page.locator("tr", has_text="E2E周报频率文案")
+    expect(row).to_contain_text("每周")
+    expect(row).not_to_contain_text("weekly")   # 修前这一格就是 weekly
+
+    _open_page(page, "spdpath", "标准路径与任务中心")
+    page.select_option("#spd-task-filter select[name=task_type]", "edu")
+    page.click("#spd-task-filter button.secondary")
+    page.locator("#spd-task-list tr", has_text="E2E病种名称显示").locator("[data-task-detail]").click()
+    detail = page.locator("#spd-task-detail")
+    expect(detail).to_contain_text("高血压 / 宣教")
+    expect(detail).not_to_contain_text("hypertension")   # 修前「病种 / 类型：hypertension / 宣教」
+
+
 @pytest.fixture(scope="module")
 def batch_seed(base_url, seed):
     """同一个药两个批号入库：台账按批号查只剩那一批（P1-148）。"""
