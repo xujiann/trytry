@@ -16,6 +16,7 @@ from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field, FiniteFloat
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..concurrency import insert_or_conflict, move_row
@@ -64,6 +65,16 @@ def _westgard(z: Decimal, prev_z: Decimal | None) -> tuple[bool, bool, list[str]
             violated.append("R-4s")
     warning = abs(z) > 2 and not violated
     return warning, bool(violated), violated
+
+
+def _verdict(warning: bool, out_of_control: bool, violated_rules: str) -> str:
+    """判定结果的人话，与页面上的标签同一套说法。"""
+    return f"失控 {violated_rules}" if out_of_control else "1-2s 警告" if warning else "在控"
+
+
+def _measured_key(column):
+    """测定时刻按字符串排序之前先把 `T` 换成空格：同一天里 `T` 排在空格之后（见 datetypes 时间戳一节）。"""
+    return func.replace(column, "T", " ")
 
 
 # ---------- 批号维护 ----------
@@ -214,10 +225,24 @@ def create_measurement(
         )
         .count()
     )
+    # 留空按录入时刻，取本地时刻（P2-171）：页面上手填的是本地时间（datetime-local），这里原先取 UTC，
+    # 东八区早上 7 点半留空录的点记成前一天 23:30，同一张清单里手填的与留空的差着 8 小时。
+    # 与门急诊文书的记录时间缺省同一个取法（clock.now_local：给人看的时间字符串默认值）
+    measured_at = body.measured_at or now_local().strftime("%Y-%m-%d %H:%M")
+    key = measured_at.replace("T", " ")
+    # 2-2s / R-4s 比的是**时间上**相邻的两点（P2-687）。原先「上一点」按录入编号取：漏录的一次事后补录，补录点
+    # 跟时间上更晚的那点比，之后录的点又跟补录点比——真的 2-2s 判成警告（不出失控处理的按钮、检验报告照发），
+    # 或者凭空判出 R-4s。上一点取测定时刻不晚于本点的最后一个（同一时刻的，先录的在前）；补录插进了中间，
+    # 时间上的下一点改跟本点比、重判——它还没处理时才改（处理过的失控点留着原判定与处理记录）
+    in_lot = db.query(QcMeasurement).filter(QcMeasurement.lot_id == lot.id)
     prev = (
-        db.query(QcMeasurement)
-        .filter(QcMeasurement.lot_id == lot.id)
-        .order_by(QcMeasurement.id.desc())
+        in_lot.filter(_measured_key(QcMeasurement.measured_at) <= key)
+        .order_by(_measured_key(QcMeasurement.measured_at).desc(), QcMeasurement.id.desc())
+        .first()
+    )
+    nxt = (
+        in_lot.filter(_measured_key(QcMeasurement.measured_at) > key)
+        .order_by(_measured_key(QcMeasurement.measured_at), QcMeasurement.id)
         .first()
     )
     z = _z_score(body.value, lot.target_value, lot.sd)
@@ -226,25 +251,28 @@ def create_measurement(
     measurement = QcMeasurement(
         lot_id=lot.id,
         value=body.value,
-        # 留空按录入时刻，取本地时刻（P2-171）：页面上手填的是本地时间（datetime-local），这里原先取 UTC，
-        # 东八区早上 7 点半留空录的点记成前一天 23:30，同一张清单里手填的与留空的差着 8 小时。
-        # 与门急诊文书的记录时间缺省同一个取法（clock.now_local：给人看的时间字符串默认值）
-        measured_at=body.measured_at or now_local().strftime("%Y-%m-%d %H:%M"),
+        measured_at=measured_at,
         operator=body.operator or (user.full_name or user.username),
         warning=warning,
         out_of_control=out_of_control,
         violated_rules=";".join(violated),
     )
     db.add(measurement)
+    rejudged = ""
+    if nxt is not None and not nxt.handled:
+        n_warning, n_out, n_violated = _westgard(_z_score(nxt.value, lot.target_value, lot.sd), z)
+        before = _verdict(nxt.warning, nxt.out_of_control, nxt.violated_rules)
+        after = _verdict(n_warning, n_out, ";".join(n_violated))
+        # 条件写（还没处理才改）：与失控处理登记同一行，别把刚登记的处理压成「在控」
+        if after != before and move_row(db, QcMeasurement, nxt.id, QcMeasurement.handled.is_(False),
+                                        warning=n_warning, out_of_control=n_out, violated_rules=";".join(n_violated)):
+            rejudged = f"这是补录点：插在 {nxt.measured_at} 那一点之前，该点改跟本点比，重判为「{after}」（原为「{before}」）"
     db.commit()
     db.refresh(measurement)
     out = MeasurementOut.model_validate(measurement).model_dump()
     out["unhandled_before"] = unhandled_before
-    out["alert"] = (
-        f"该批号尚有 {unhandled_before} 个失控点未处理，请先登记原因与纠正措施"
-        if unhandled_before
-        else ""
-    )
+    notes = [f"该批号尚有 {unhandled_before} 个失控点未处理，请先登记原因与纠正措施"] if unhandled_before else []
+    out["alert"] = "；".join(notes + ([rejudged] if rejudged else []))
     return out
 
 
@@ -256,16 +284,17 @@ def list_measurements(lot_id: int, db: Session = Depends(get_db), user: User = D
 
 
 def _latest_measurements(db: Session, lot_id: int, limit: int = 500) -> list[QcMeasurement]:
-    """最近 `limit` 个测定点，按录入先后排（P2-157）。
+    """最近 `limit` 个测定点，按测定时刻先后排（同一时刻的按录入先后，P2-687）。
 
     原先按编号升序取前 500 个——截掉的恰好是最新那一端：一个批号用满 500 个点（一天两次约八个月，质控品一个批号常用
     半年到两年），第 501 个点起新录的、包括刚判出的失控点都不上页面，失控处理的按钮（按这份数据画）也就没有了，
-    而每次录入都在提示「尚有 N 个失控点未处理」。与体温单（P1-81）同一个「截断截错了端」。
+    而每次录入都在提示「尚有 N 个失控点未处理」。与体温单（P1-81）同一个「截断截错了端」（P2-157）。
+    排序按测定时刻而不是录入编号：补录的点原先排在最后，L-J 图上的连线与 Westgard 判定用的相邻关系对不上。
     """
     rows = (
         db.query(QcMeasurement)
         .filter(QcMeasurement.lot_id == lot_id)
-        .order_by(QcMeasurement.id.desc())
+        .order_by(_measured_key(QcMeasurement.measured_at).desc(), QcMeasurement.id.desc())
         .limit(limit)
         .all()
     )
@@ -350,7 +379,7 @@ class LjOut(BaseModel):
 
 @router.get("/lots/{lot_id}/levey-jennings", response_model=LjOut)
 def levey_jennings(lot_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    """L-J 图数据：按录入顺序的时间序列 + 均值±1/2/3SD 参考线（前端画图用）。
+    """L-J 图数据：按测定时刻排的时间序列 + 均值±1/2/3SD 参考线（前端画图用）。
 
     参考线以批号**靶值**为均值——L-J 图画的是"相对既定基线的漂移"，
     不是本批实测均值（那样图会跟着漂移走，失控反而看不出来）。
