@@ -327,13 +327,14 @@ def archive(
         .limit(30)
         .all()
     )
+    # 按执行日期取最近 20 次，与医护端「历史随访」同一个取法（P2-691）：编号是建计划时成批给的，不是执行先后
     followups = (
         db.query(SpdFollowupRecord)
         .filter(
             SpdFollowupRecord.patient_id == patient.id,
             SpdFollowupRecord.status == "done",
         )
-        .order_by(SpdFollowupRecord.id.desc())
+        .order_by(SpdFollowupRecord.executed_at.desc(), SpdFollowupRecord.id.desc())
         .limit(20)
         .all()
     )

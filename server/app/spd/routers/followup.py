@@ -933,13 +933,15 @@ def followup_context(
         .limit(5)
         .all()
     )
+    # 最近执行的 10 次，按执行日期取（P2-691）：随访记录是建计划时成批编号的，原先按编号倒序——一年前建的计划里
+    # 昨天才执行的年度随访编号最小，被后建计划的月度随访挤出这 10 条
     history = (
         db.query(SpdFollowupRecord)
         .filter(
             SpdFollowupRecord.patient_id == record.patient_id,
             SpdFollowupRecord.status == "done",
         )
-        .order_by(SpdFollowupRecord.id.desc())
+        .order_by(SpdFollowupRecord.executed_at.desc(), SpdFollowupRecord.id.desc())
         .limit(10)
         .all()
     )
