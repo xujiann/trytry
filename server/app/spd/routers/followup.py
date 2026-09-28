@@ -772,7 +772,9 @@ def auto_match_plans(
             db.query(Admission)
             .filter(Admission.org_id == org_id, Admission.status == "discharged",
                     func.coalesce(Admission.discharged_at, Admission.admitted_at) >= since)
-            .order_by(Admission.id.desc())
+            # 按出院时间取最近的 N 条（P2-692）：原先按住院编号倒序——住了 40 天、昨天才出院的患者编号最小，窗口里
+            # 出院的多于 N 人时被截掉，每次扫描都轮不到他，排进来的反倒是 6 天前出院的短住患者
+            .order_by(func.coalesce(Admission.discharged_at, Admission.admitted_at).desc(), Admission.id.desc())
             .limit(body.limit)
             .all()
         )
