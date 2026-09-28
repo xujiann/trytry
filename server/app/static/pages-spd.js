@@ -1081,8 +1081,7 @@ async function renderSpdCenter() {
          <td>${a.status === "pending"
            ? `<button class="btn secondary" data-apply="${a.id}" data-decision="accepted">受理</button>
               <button class="btn secondary" data-apply="${a.id}" data-decision="rejected">拒绝</button>`
-           : esc(a.handle_note || "—")}</td></tr>`)}
-      <p class="msg" id="spd-apply-msg"></p>`)}
+           : esc(a.handle_note || "—")}</td></tr>`)}`)}
     ${panel("召回跟进", `
       <p class="desc">失访/脱管患者的召回过程逐次留痕；登记为「已召回」时档案自动恢复在管</p>
       ${table(["ID", "档案", "原因", "状态", "联系记录", "结果", "发起", "操作"], recalls, (r) =>
@@ -1092,8 +1091,7 @@ async function renderSpdCenter() {
            ? `，最近 ${esc((r.contacts[r.contacts.length - 1] || {}).at || "")} ${esc((r.contacts[r.contacts.length - 1] || {}).note || "")}` : ""}</td>
          <td>${esc(r.result || "—")}</td><td>${esc(r.created_at || "")}</td>
          <td>${r.status === "returned" || r.status === "failed" ? "—"
-           : `<button class="btn secondary" data-recall="${r.id}">登记进度</button>`}</td></tr>`)}
-      <p class="msg" id="spd-recall-msg"></p>`)}
+           : `<button class="btn secondary" data-recall="${r.id}">登记进度</button>`}</td></tr>`)}`)}
     ${panel("生命周期", table(["状态", "人数"], [
         ["已排除", wb.lifecycle.excluded], ["已迁出", wb.lifecycle.migrated],
         ["已死亡", wb.lifecycle.dead], ["召回中", wb.lifecycle.recalling],
@@ -1148,38 +1146,42 @@ async function renderSpdCenter() {
         { active: toggle.dataset.active === "1" }, "#spd-crt-msg", "PATCH");
     }
     if (claim) return postAction(`/api/spd/candidates/${claim.dataset.candClaim}/claim`, null, "#spd-dist-msg");
+    // 改目标池状态 / 受理拒绝服务申请 / 登记召回进度三张框由框自己提交（P2-607）：写超了、单子已被别人处理（409）时
+    // 报错写在框里、框不关，写了一段的依据 / 拒绝原因 / 联系情况不用重填；拒绝没写原因也在框里就拦
     if (status) {
-      const form = await spdModal("调整目标池状态", [
+      const ok = await spdModal("调整目标池状态", [
         { name: "status", label: "状态", type: "select", value: "target", options: [
           { value: "suspect", label: "疑似" }, { value: "target", label: "目标" }, { value: "excluded", label: "排除" }] },
         { name: "reason", label: "依据 / 原因", type: "textarea" },
-      ]);
-      if (!form) return;
-      return postAction(`/api/spd/candidates/${status.dataset.candStatus}/status`,
-        { status: form.status, reason: form.reason || "" }, "#spd-dist-msg");
+      ], { submit: (form) => api(`/api/spd/candidates/${status.dataset.candStatus}/status`, { method: "POST",
+        body: JSON.stringify({ status: form.status, reason: form.reason || "" }) }) });
+      if (ok) route();
+      return;
     }
     if (profile) return spdShowProfile("#spd-center-profile", profile.dataset.profile);
     if (apply) {
       const accepted = apply.dataset.decision === "accepted";
-      const form = await spdModal(accepted ? "受理服务申请" : "拒绝服务申请", [
+      const ok = await spdModal(accepted ? "受理服务申请" : "拒绝服务申请", [
         { name: "handle_note", label: accepted ? "受理说明（可留空）" : "拒绝原因", type: "textarea" },
-      ]);
-      if (!form) return;
-      if (!accepted && !form.handle_note) { setMsg("#spd-apply-msg", "拒绝须写明原因", false); return; }
-      return postAction(`/api/spd/service-applies/${apply.dataset.apply}/handle`,
-        { status: apply.dataset.decision, handle_note: form.handle_note || "" }, "#spd-apply-msg");
+      ], { submit: (form) => {
+        if (!accepted && !form.handle_note) throw new Error("拒绝须写明原因");
+        return api(`/api/spd/service-applies/${apply.dataset.apply}/handle`, { method: "POST",
+          body: JSON.stringify({ status: apply.dataset.decision, handle_note: form.handle_note || "" }) });
+      } });
+      if (ok) route();
+      return;
     }
     if (recall) {
-      const form = await spdModal("登记召回进度", [
+      const ok = await spdModal("登记召回进度", [
         { name: "status", label: "状态", type: "select", value: "contacted", options: [
           { value: "pending", label: "待联系" }, { value: "contacted", label: "已联系" },
           { value: "returned", label: "已召回（档案恢复在管）" }, { value: "failed", label: "召回失败" }] },
         { name: "contact_note", label: "本次联系情况", type: "textarea" },
         { name: "result", label: "结果（可留空）" },
-      ]);
-      if (!form) return;
-      return postAction(`/api/spd/recalls/${recall.dataset.recall}/progress`,
-        { status: form.status, contact_note: form.contact_note || "", result: form.result || "" }, "#spd-recall-msg");
+      ], { submit: (form) => api(`/api/spd/recalls/${recall.dataset.recall}/progress`, { method: "POST",
+        body: JSON.stringify({ status: form.status, contact_note: form.contact_note || "", result: form.result || "" }) }) });
+      if (ok) route();
+      return;
     }
   });
 }

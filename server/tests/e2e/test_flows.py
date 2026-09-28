@@ -2068,6 +2068,75 @@ def test_回写通话结果由框自己提交_录音地址写超了框不关(pag
     assert status() == "failed"
 
 
+def test_统筹调度的拒绝申请_改目标池状态_召回进度由框自己提交(page, base_url, seed, admin_read, admin_call):
+    """P2-607 第五批：统筹调度中枢三张框（受理 / 拒绝服务申请、调整目标池状态、登记召回进度）原先点确定就关框、再发请求——
+    拒绝原因、依据、联系情况写超了（后端 256 字）报错落在页面消息行，写好的一段全丢；拒绝没写原因也是框关了才说。
+    现在框自己提交：失败留框、报错写在框里、填的都在；成功才关框、整页重画。"""
+    import json
+    from urllib.parse import quote
+    from urllib.request import Request
+
+    def post(path, payload, token):
+        req = Request(f"{base_url}{path}", data=json.dumps(payload).encode(),
+                      headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"})
+        with urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read())
+
+    name, id_card = "E2E统筹调度申请人", "320981198909092241"
+    admin_call("POST", "/api/patients", {"name": name, "id_card": id_card, "gender": "女"})
+    login = Request(f"{base_url}/api/portal/auth/wechat/login", headers={"Content-Type": "application/json"},
+                    data=json.dumps({"code": "mock-e2e-p2607-center", "state": ""}).encode())
+    with urlopen(login, timeout=10) as resp:
+        resident = json.loads(resp.read())["access_token"]
+    post("/api/portal/auth/realname", {"name": name, "id_card": id_card}, resident)
+    accept_id = post("/api/portal/spd/service-applies", {"program_code": "hypertension", "note": "E2E 想加入高血压管理"},
+                     resident)["id"]
+    reject_id = post("/api/portal/spd/service-applies", {"program_code": "diabetes", "note": "E2E 想加入糖尿病管理"},
+                     resident)["id"]
+    lost = admin_call("POST", "/api/patients", {"name": "E2E统筹调度失访患者", "id_card": "320981199001012250"})
+    enrollment = admin_call("POST", "/api/spd/enrollments", {
+        "patient_id": lost["id"], "program_code": "hypertension", "org_id": seed["org"]["id"]})
+    admin_call("POST", f"/api/spd/enrollments/{enrollment['id']}/lifecycle", {"event": "recall", "reason": "E2E 失访三个月"})
+    (recall,) = [r for r in admin_read("/api/spd/recalls?limit=50") if r["enrollment_id"] == enrollment["id"]]
+
+    def apply_status(apply_id):
+        return next(a for a in admin_read("/api/spd/service-applies?status=&limit=50") if a["id"] == apply_id)["status"]
+
+    _login(page, base_url)
+    _open_page(page, "spdcenter", "全程管理中心端·统筹调度")
+    page.click(f'button[data-apply="{reject_id}"][data-decision="rejected"]')
+    form = _spd_modal_rejected(page, {"handle_note": ""})
+    expect(form.locator("[data-modal-msg]")).to_have_text("拒绝须写明原因")   # 修前框先关、报错落到页面消息行
+    form.locator('[name="handle_note"]').fill("拒" * 257)
+    form.locator("button[type=submit]").click()
+    expect(form.locator("[data-modal-msg]")).to_contain_text("最多 256 个字")
+    expect(form.locator('[name="handle_note"]')).to_have_value("拒" * 257)
+    assert apply_status(reject_id) == "pending"
+    _redrawn(page, lambda: _spd_modal(page, {"handle_note": "E2E 不在本辖区，请到户籍地申请"}))
+    assert apply_status(reject_id) == "rejected"
+
+    page.click(f'button[data-apply="{accept_id}"][data-decision="accepted"]')
+    _redrawn(page, lambda: _spd_modal(page, {"handle_note": ""}))   # 受理说明可留空
+    assert apply_status(accept_id) == "accepted"
+    (cand,) = [c for c in admin_read(f"/api/spd/candidates?keyword={quote(name)}&limit=50") if c["program_code"] == "hypertension"]
+    assert cand["status"] == "target", cand
+    page.click(f'button[data-cand-status="{cand["id"]}"]')
+    form = _spd_modal_rejected(page, {"status": "excluded", "reason": "依" * 257})
+    expect(form.locator('[name="reason"]')).to_have_value("依" * 257)
+    assert admin_read(f"/api/spd/candidates?keyword={quote(name)}&limit=50")[0]["status"] == "target"
+    _redrawn(page, lambda: _spd_modal(page, {"reason": "E2E 已在外院规范管理"}))
+    assert admin_read(f"/api/spd/candidates?keyword={quote(name)}&limit=50")[0]["status"] == "excluded"
+
+    page.click(f'button[data-recall="{recall["id"]}"]')
+    form = _spd_modal_rejected(page, {"status": "returned", "contact_note": "联" * 257, "result": "E2E 已回社区复诊"})
+    expect(form.locator('[name="result"]')).to_have_value("E2E 已回社区复诊")
+    assert next(r for r in admin_read("/api/spd/recalls?limit=50") if r["id"] == recall["id"])["status"] == "pending"
+    _redrawn(page, lambda: _spd_modal(page, {"contact_note": "E2E 电话联系上，本周回社区复诊"}))
+    done = next(r for r in admin_read("/api/spd/recalls?limit=50") if r["id"] == recall["id"])
+    assert (done["status"], done["result"]) == ("returned", "E2E 已回社区复诊"), done
+    assert admin_read(f"/api/spd/enrollments/{enrollment['id']}")["status"] == "active"   # 召回成功恢复在管
+
+
 def test_随访方案在界面上新建与改诊断关键词_自动匹配据此排随访(page, base_url, seed, admin_read, admin_call):
     """P2-92：随访方案面板原先没有新建入口、编辑不给诊断关键词，三套预置方案又都没配关键词——出院即派生随访与「按患者
     特征自动匹配」从界面上一个人都匹配不到；没有可用方案时回执照样弹「扫描 undefined 人」，原因被吞掉。"""
