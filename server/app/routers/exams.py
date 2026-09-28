@@ -632,6 +632,7 @@ def list_unacknowledged_critical(
         for report_id, at in db.query(CriticalAction.report_id, func.max(CriticalAction.created_at))
         .filter(CriticalAction.report_id.in_([r.id for r in candidates] or [0]))
         .group_by(CriticalAction.report_id)
+        .order_by(CriticalAction.report_id)
         .all()
     }
     notified_at = {r.id: last_action.get(r.id) or r.reported_at for r in candidates}
