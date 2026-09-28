@@ -10,6 +10,7 @@
 4. `award_points`     —— 村医积分入账（签约、上转、随访、上报四处触发）
 5. `close_open_work`  —— 死亡/迁出/排除时终止后续任务（三处生命周期事件共用）
 """
+import math
 from datetime import date, timedelta
 from typing import Any, cast
 
@@ -68,6 +69,36 @@ def measure_value_problem(metric: str, value: float) -> str | None:
     cap = _PERCENT_MEASURES.get(metric)
     if cap is not None and value > cap:
         return f"{name}不得超过 {cap:g}%（收到 {value:g}）"
+    return None
+
+
+def answers_problem(items: list | None, answers: dict) -> str | None:
+    """随访问卷作答的取值（P2-711）：数值题的作答读不成有限的数、或题目编码是监测指标目录里的（收缩压、空腹血糖……）
+    却过不了 `measure_value_problem`，返回一句人话（调用方报 422）；没问题返回 None。
+
+    医护执行与居民自助作答原先把作答原样交给 `grade_abnormal`：异常规则按数比、读不成数就判不命中——收缩压答 0、
+    -185、「185/110」都照收，一条不命中、判「无异常」、不派处置任务；同一个指标走监测录入，0 早就 422（P1-101）。
+    没作答的题、非数值题不管（问卷不强制每题必答）；读得成数的文本（"185"）照收，与规则求值同一个读法。
+    """
+    for item in items or []:
+        if not isinstance(item, dict) or item.get("type") != "number":
+            continue
+        key = item.get("key")
+        if not isinstance(key, str):
+            continue
+        raw = answers.get(key)
+        if raw is None or raw == "":
+            continue
+        title = item.get("title") or key
+        try:
+            value = math.nan if isinstance(raw, bool) else float(raw)
+        except (TypeError, ValueError):
+            value = math.nan
+        if not math.isfinite(value):
+            return f"「{title}」须填一个数（收到 {raw}）"
+        problem = measure_value_problem(key, value)
+        if problem:
+            return f"「{title}」：{problem}"
     return None
 
 

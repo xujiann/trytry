@@ -51,8 +51,8 @@ from ..models import (
 from ..reporting import compose_section, default_period_label
 from ..rules import RuleError, as_validated, grade_abnormal
 from ..service import (CALL_SETTLEABLE_STATUSES, adjust_followup_record, close_followup_record, followup_abnormal,
-                       followup_overdue, note_call_dispatch_failure, settle_call_task, spawn_followup_abnormal_task,
-                       unknown_code, unknown_ids, unknown_program)
+                       answers_problem, followup_overdue, note_call_dispatch_failure, settle_call_task,
+                       spawn_followup_abnormal_task, unknown_code, unknown_ids, unknown_program)
 from ...numtypes import INT4_MAX, INT4_MIN, non_finite_path
 from ...texttypes import NON_BLANK
 from ...visibility import assert_org_writable, assert_patient_visible, visible_org_ids
@@ -1003,6 +1003,16 @@ def execute_followup(
     assert_org_writable(db, user, record.org_id)
     if record.status in ("done", "removed"):
         raise HTTPException(status_code=409, detail="该随访已结束")
+    questionnaire = (
+        db.query(SpdQuestionnaire)
+        .filter(SpdQuestionnaire.code == record.questionnaire_code)
+        .first()
+    )
+    # 数值题的作答先按题目校验、再办结（P2-711，与居民自助作答同一句）：原先收缩压答 0 / 「185/110」照收，异常规则读不成数
+    # 就判不命中——判「无异常」、不派处置任务。失访不看作答
+    problem = None if body.unreachable or questionnaire is None else answers_problem(questionnaire.items, body.answers)
+    if problem:
+        raise HTTPException(status_code=422, detail=problem)
     # 结果与证据是追加、不是整段覆盖（P2-291）：接通的呼叫回写早把沟通结果与录音地址追加在这条记录上（「回写通话
     # 结果」写明「接通结果会同步写回随访记录」），执行时整段覆盖——界面上随访结果留空也照样覆盖——就把它们抹掉了。
     # 与呼叫回写同一个临界区（锁这一行、重读、再追加）：先到的回写这里重读得到，后到的回写锁到手时看到已办结、不再追加
@@ -1030,11 +1040,6 @@ def execute_followup(
             return _record_out(record)
 
         record.answers = body.answers
-        questionnaire = (
-            db.query(SpdQuestionnaire)
-            .filter(SpdQuestionnaire.code == record.questionnaire_code)
-            .first()
-        )
         action = ""
         if questionnaire is not None:
             level, action = grade_abnormal(questionnaire.abnormal_rules or [], body.answers)

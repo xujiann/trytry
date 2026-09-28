@@ -50,7 +50,7 @@ from ..models import (
 )
 from ..rules import is_suspect_risk, score_scale
 from ..service import (FOLLOWUP_OPEN_STATUSES, MEASUREMENT_SOURCE_NAMES, MEDIA_TYPE_NAMES, PACKAGE_BINDING_STATUS_NAMES,
-                       REFERRAL_STATUS_LABELS, TASK_OPEN_STATUSES, actively_enrolled, referral_ends,
+                       REFERRAL_STATUS_LABELS, TASK_OPEN_STATUSES, actively_enrolled, answers_problem, referral_ends,
                        close_followup_record, enrollment_for, judge_measurement, mark_intervention_done,
                        measure_program_for, measure_value_problem, move_task,
                        scale_program_mismatch, scale_unusable, spawn_followup_abnormal_task, unknown_program)
@@ -1083,6 +1083,15 @@ def self_answer_followup(
     if record.status not in ("planned", "overdue"):
         # 超期的更该让居民补答，只挡已完成/已移除/失访
         raise HTTPException(status_code=409, detail="该随访已结束")
+    questionnaire = (
+        db.query(SpdQuestionnaire)
+        .filter(SpdQuestionnaire.code == record.questionnaire_code)
+        .first()
+    )
+    # 数值题的作答先按题目校验、再办结（P2-711，与医护执行同一句）：原先收缩压答 0 照收，判「无异常」、不派处置任务
+    problem = None if questionnaire is None else answers_problem(questionnaire.items, body.answers)
+    if problem:
+        raise HTTPException(status_code=422, detail=problem)
     record.answers = body.answers
     record.channel = "self"
     # 与医护执行同一道闸：办结的判定与写入压在同一条 UPDATE 里（见
@@ -1092,11 +1101,6 @@ def self_answer_followup(
         db.rollback()  # 先退掉写事务再抛，避免后续审计落库撞写锁
         raise HTTPException(status_code=409, detail="该随访已结束")
     record.executed_at = clock.today().isoformat()
-    questionnaire = (
-        db.query(SpdQuestionnaire)
-        .filter(SpdQuestionnaire.code == record.questionnaire_code)
-        .first()
-    )
     action = ""
     if questionnaire is not None:
         level, action = grade_abnormal(questionnaire.abnormal_rules or [], body.answers)
