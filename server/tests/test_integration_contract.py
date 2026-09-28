@@ -10,7 +10,7 @@
 - **出站 FHIR Patient 是外部标准形状 → 宽 dict 透传**（workflows.nodes 先例）：
   FHIR R4 资源的字段面由国际标准定义，identifier/name/telecom 都是嵌套数组，
   给它建窄模型等于替 HL7 组织另立规格；此处逐键钉死当前导出的 7 键资源
-  （含 telecom 空数组分支），契约用 dict 原样透传。
+  （无电话时省掉 telecom——FHIR JSON 不许空数组，第十六批 T1-4），契约用 dict 原样透传。
 - **入站回执的 patient 复用 `PatientOut` 并按角色脱敏**（H1 口径）——与已治理的
   `AdtInboundOut.patient` 同一先例；掩码后的身份证号/电话逐字符钉住。
 - **`values` 是 `dict[str, float]`**：三条产地（component、顶层 valueQuantity）
@@ -243,11 +243,12 @@ def test_FHIR患者导出精确_角色脱敏与空telecom分支(client, admin, s
         ],
         "telecom": [{"system": "phone", "value": "13800000001"}],
     }
-    # 无电话患者：telecom 是空数组（不是缺键）
+    # 无电话患者：没有 telecom 这个元素（第十六批 T1-4）——FHIR 的 JSON 不许空数组；修前是 `"telecom": []`，
+    # 做校验的前置机整条拒收
     ehc2 = seed["fhir_p2"]["patient"]["ehc_no"]
     body2 = client.get(f"/api/integration/fhir/Patient/{ehc2}", headers=seed["operator"]).json()
-    assert list(body2.keys()) == FHIR_EXPORT_KEYS
-    assert body2["telecom"] == [] and body2["gender"] == "female"
+    assert list(body2.keys()) == [k for k in FHIR_EXPORT_KEYS if k != "telecom"]
+    assert "telecom" not in body2 and body2["gender"] == "female"
 
 
 # ---------------------------------------------------------------- 交换监控

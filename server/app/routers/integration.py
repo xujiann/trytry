@@ -119,6 +119,24 @@ _GENDER_TO_FHIR = {"男": "male", "女": "female"}
 ID_CARD_SYSTEM = "urn:oid:2.16.156.10011.1.3"  # 中国居民身份证号 OID
 EHC_SYSTEM = "urn:medplat:ehc"
 
+_FHIR_EMPTY: tuple = ("", None, [], {})
+
+
+def _fhir_compact(value: Any) -> Any:
+    """出站 FHIR 资源里没有值的元素整个省掉（第十六批 T1-4）。
+
+    FHIR R4 的 JSON 表示不许出现空串、空数组、空对象与 null——没有值的元素就不写。原先照抄库里的默认值：老档案
+    没登记出生日期导出 `"birthDate": ""`、没电话导出 `"telecom": []`，只有诊断编码的就诊内联 `"text": ""`，
+    没写所见的报告 `"presentedForm": []`；做校验的前置机整条拒收，这些档案到不了省平台。
+    布尔 `False` 与数字 `0` 是值，不算空。
+    """
+    if isinstance(value, dict):
+        kept = {k: _fhir_compact(v) for k, v in value.items()}
+        return {k: v for k, v in kept.items() if v not in _FHIR_EMPTY}
+    if isinstance(value, list):
+        return [v for v in (_fhir_compact(item) for item in value) if v not in _FHIR_EMPTY]
+    return value
+
 
 class Hl7Message(BaseModel):
     message: str = Field(min_length=1, description="HL7 v2 ADT 消息原文（管道分隔）", pattern=NON_BLANK)
@@ -455,7 +473,7 @@ def _do_fhir_observation(resource: dict, db: Session):
 
 # FHIR R4 Patient 是**外部标准形状**（identifier/name/telecom 皆为标准定义的嵌套
 # 数组），照 workflows.nodes 先例宽 dict 透传——给国际标准建窄模型等于替 HL7 另立
-# 规格；当前导出的 7 键字段面由 test_integration_contract.py 逐键钉住。
+# 规格；当前导出的 7 键字段面由 test_integration_contract.py 逐键钉住（没值的元素省掉，见 `_fhir_compact`）。
 @router.get("/fhir/Patient/{ehc_no}", response_model=dict[str, Any])
 def export_fhir_patient(
     ehc_no: str, db: Session = Depends(get_db), user: User = Depends(get_current_user)
@@ -480,7 +498,7 @@ def export_fhir_patient(
     log_patient_access(db, user, patient.id, "fhir_export", "export")
     id_card = patient.id_card if user.role == "admin" else mask_id_card(patient.id_card)
     phone = patient.phone if user.role == "admin" else mask_phone(patient.phone)
-    return {
+    return _fhir_compact({
         "resourceType": "Patient",
         "id": patient.ehc_no,
         "identifier": [
@@ -491,7 +509,7 @@ def export_fhir_patient(
         "gender": _GENDER_TO_FHIR.get(patient.gender, "unknown"),
         "birthDate": patient.birth_date,
         "telecom": ([{"system": "phone", "value": phone}] if phone else []),
-    }
+    })
 
 
 # ---------- M11 交换监控 ----------
@@ -1199,7 +1217,7 @@ def fhir_patient_resource(p: Patient) -> dict:
     与 A9 归档导出同口径），不是工作人员侧接口回显——接口面（含 GET
     /fhir/Patient/{ehc_no}）仍按 H1 走角色脱敏，两者口径刻意不同。
     """
-    return {
+    return _fhir_compact({
         "resourceType": "Patient",
         "id": p.ehc_no,
         "identifier": [
@@ -1210,7 +1228,7 @@ def fhir_patient_resource(p: Patient) -> dict:
         "gender": _GENDER_TO_FHIR.get(p.gender, "unknown"),
         "birthDate": p.birth_date,
         "telecom": ([{"system": "phone", "value": p.phone}] if p.phone else []),
-    }
+    })
 
 
 def fhir_encounter_resource(e: Encounter, ehc_no: str) -> dict:
@@ -1246,7 +1264,7 @@ def fhir_encounter_resource(e: Encounter, ehc_no: str) -> dict:
             }
         ]
         resource["diagnosis"] = [{"condition": {"reference": "#dx"}}]
-    return resource
+    return _fhir_compact(resource)
 
 
 def fhir_diagnostic_report_resource(
@@ -1254,7 +1272,7 @@ def fhir_diagnostic_report_resource(
 ) -> dict:
     """ExamReport → FHIR R4 DiagnosticReport（conclusion→conclusion、finding→presentedForm、
     critical→urn:medplat:critical 扩展，与入站承载对称）。修订后再导的一份 `status="amended"`（P2-102）。"""
-    return {
+    return _fhir_compact({
         "resourceType": "DiagnosticReport",
         "id": str(report.id),
         "status": status,
@@ -1273,7 +1291,7 @@ def fhir_diagnostic_report_resource(
             else []
         ),
         "extension": [{"url": CRITICAL_EXTENSION_URL, "valueBoolean": report.critical}],
-    }
+    })
 
 
 def run_fhir_batch_export(db: Session) -> tuple[int, str]:
