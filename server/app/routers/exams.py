@@ -841,6 +841,12 @@ def amend_report(
         assert_patient_visible(db, user, req.patient_id)
     actor = user.full_name or user.username
     was_critical = report.critical
+    # 互认了这份报告的别家申请单（源机构自己互认自己的不算）：改判为危急值时一并通知
+    recognizers = [
+        r for r in db.query(ExamRequest).filter(ExamRequest.recognized_from_id == report.request_id)
+        .order_by(ExamRequest.id).all()
+        if req is None or r.from_org_id != req.from_org_id
+    ]
     db.add(
         ReportRevision(
             report_id=report.id,
@@ -880,6 +886,20 @@ def amend_report(
                 link_type="exam_report",
                 link_id=report.id,
             )
+            # 互认了这份报告、据此免做这项检查的机构一并通知（第十五批 S3-3）：它们正是在治这位患者、却没自己做这项
+            # 检查的一方——原先只通知源申请机构，乙院互认了「未见异常」，报告改判为危急值后乙院一条消息都收不到、
+            # 申请单仍是「已互认」。口径与源机构同一套（医师站内消息 + 定向广播）；要不要撤回「已互认」另行裁定
+            for org_id in dict.fromkeys(r.from_org_id for r in recognizers):
+                notify_staff(
+                    db,
+                    category="critical_value",
+                    title=f"危急值（互认报告修订）：{req.item_name}",
+                    body=report.conclusion,
+                    org_id=org_id,
+                    roles=("doctor",),
+                    link_type="exam_report",
+                    link_id=report.id,
+                )
     elif was_critical:
         # 修订解除危急标记：闭环状态清空并留痕
         report.critical_status = ""
@@ -901,6 +921,18 @@ def amend_report(
             },
             target_org_id=req.from_org_id,
         )
+        for rec in recognizers:
+            manager.broadcast(
+                {
+                    "type": "critical_report",
+                    "org_id": rec.from_org_id,
+                    "request_id": rec.id,
+                    "patient_id": rec.patient_id,
+                    "item_name": rec.item_name,
+                    "conclusion": report.conclusion,
+                },
+                target_org_id=rec.from_org_id,
+            )
     return {
         "id": report.id,
         "conclusion": report.conclusion,
