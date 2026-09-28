@@ -610,9 +610,13 @@ def exchange_logs(
 
 # 受理的 ADT 事件白名单：其余事件（A02 转科、A11 撤销……）平台暂无对应动作，明确 422 拒收
 _ADT_EVENTS = {"A01": "入院", "A03": "出院", "A04": "挂号建档", "A08": "信息更新"}
-# OBX-8 异常标志：H/L 偏高偏低，A 异常，HH/LL 危急高/低（判危急值，进危急值闭环）
-_ABNORMAL_FLAGS = {"H", "L", "A", "HH", "LL"}
-_CRITICAL_FLAGS = {"HH", "LL"}
+# OBX-8 异常标志（HL7 v2 表 0078）：H/L 偏高偏低，A 异常，HH/LL 危急高/低，AA 非数值结果的危急（表 0078：与数值结果
+# 的危急界值同义）——HH/LL/AA 判危急值，进危急值闭环；< / > 超出仪器量程下限 / 上限，按异常计；N 正常，空 = 没给判断。
+# 字段可重复（`~` 分隔，如 H~W），逐个判。其余标志（变化趋势 U/D/B/W、药敏 S/R/I……）平台不据以判异常，结论里如实写
+# 「标志未识别」、不当正常（P1-213：原先整串比对、只认五个，AA 的血培养记成「异常 0 项」、不进危急值闭环）
+_ABNORMAL_FLAGS = {"H", "L", "A", "HH", "LL", "AA", "<", ">"}
+_CRITICAL_FLAGS = {"HH", "LL", "AA"}
+_NORMAL_FLAGS = {"N"}
 
 
 def _hl7_segments(message: str) -> list[str]:
@@ -882,8 +886,9 @@ def hl7v2_oru(
     - **申请单定位**：OBR-2（下单方单号）即平台申请单号（ExamRequest.id，对接规范
       映射表"检查检验申请→ServiceRequest"）；OBR-2 缺失回退 OBR-3（执行方单号）；
     - **OBX 逐条解析**：标识（OBX-3）/值（OBX-5）/单位（OBX-6）/参考范围（OBX-7）/
-      异常标志（OBX-8），逐行拼入报告 finding；异常标志 HH/LL 判**危急值**，
-      复用报告发布的危急值闭环（通知→确认→处置留痕）；
+      异常标志（OBX-8），逐行拼入报告 finding；异常标志 HH/LL/AA 判**危急值**，
+      复用报告发布的危急值闭环（通知→确认→处置留痕）；标志按 `~` 拆开逐个判，认不得的
+      在结论里写明、不当正常（P1-213）；
     - **找不到申请单一律 404 拒收，不建独立报告**：对接规范§四将 404 定义为
       "引用的资源不存在→检查外键是否先行创建"，且平台报告表与申请单一一对应
       （request_id 唯一非空外键），"无单报告"在数据模型上不存在——对接方应先
@@ -944,6 +949,7 @@ def _do_hl7v2_oru(body: Hl7Message, db: Session, event: str, source_system: str)
     lines: list[str] = []
     abnormal = 0
     critical = False
+    unrecognized: list[str] = []   # 没有一个认得的标志、又带着认不得的标志的结果项——判不了，不当正常
     for seg in (s for s in segments if s.startswith("OBX|")):
         code_parts = _hl7_field(seg, 3).split("^")
         label = (code_parts[1].strip() if len(code_parts) > 1 else "") or code_parts[0].strip()
@@ -951,10 +957,13 @@ def _do_hl7v2_oru(body: Hl7Message, db: Session, event: str, source_system: str)
         unit = _hl7_field(seg, 6).split("^")[0].strip()
         ref_range = _hl7_field(seg, 7).strip()
         flag = _hl7_field(seg, 8).strip().upper()
-        if flag in _ABNORMAL_FLAGS:
+        flags = {f.strip() for f in flag.split("~")} - {""}
+        if flags & _ABNORMAL_FLAGS:
             abnormal += 1
-        if flag in _CRITICAL_FLAGS:
+        if flags & _CRITICAL_FLAGS:
             critical = True
+        if flags and not flags & (_ABNORMAL_FLAGS | _NORMAL_FLAGS):
+            unrecognized.append(flag)
         line = f"{label}：{value}"
         if unit:
             line += f" {unit}"
@@ -971,6 +980,8 @@ def _do_hl7v2_oru(body: Hl7Message, db: Session, event: str, source_system: str)
     conclusion = f"{item_name}：共 {len(lines)} 项，异常 {abnormal} 项"
     if critical:
         conclusion += "，含危急值"
+    if unrecognized:
+        conclusion += f"，另 {len(unrecognized)} 项的异常标志平台不认得（{'、'.join(dict.fromkeys(unrecognized))}），以原文为准"
     report = submit_report(
         request.id,
         ExamReportCreate(
