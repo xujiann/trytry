@@ -3260,30 +3260,32 @@ async function renderSpdFollowup() {
       } catch (err) { setMsg("#spd-fu-msg", err.message, false); }
       return;
     }
+    // 抽查结论 / 通话结果 / 执行随访三张框由框自己提交（P2-607）：写超了、状态已变（409）时报错写在框里、框不关，
+    // 写了一段的说明 / 沟通结果 / 随访结果不用重填
     if (qcJudge) {
-      const form = await spdModal("记录抽查结论", [
+      const ok = await spdModal("记录抽查结论", [
         { name: "result", label: "结论", type: "select", value: "pass",
           options: Object.entries(SPD_QC_RESULT).filter(([k]) => k !== "pending").map(([k, v]) => ({ value: k, label: v[0] })) },
         { name: "method", label: "核查方式", type: "select", value: "record",
           options: Object.entries(SPD_QC_METHOD).map(([k, v]) => ({ value: k, label: v })) },
         { name: "note", label: "说明", type: "textarea" },
-      ]);
-      if (!form) return;
-      return postAction(`/api/spd/qc-samples/${qcJudge.dataset.qcJudge}/result`,
-        { result: form.result, method: form.method, note: form.note || "" }, "#spd-qc-msg");
+      ], { submit: (form) => api(`/api/spd/qc-samples/${qcJudge.dataset.qcJudge}/result`, { method: "POST",
+        body: JSON.stringify({ result: form.result, method: form.method, note: form.note || "" }) }) });
+      if (ok) route();
+      return;
     }
     if (callResult) {
-      const form = await spdModal("回写通话结果（接通结果会同步写回随访记录）", [
+      const ok = await spdModal("回写通话结果（接通结果会同步写回随访记录）", [
         { name: "status", label: "结果", type: "select", value: "connected",
           options: [{ value: "connected", label: "已接通" }, { value: "failed", label: "未接通" }, { value: "cancelled", label: "已取消" }] },
         { name: "duration_s", label: "通话时长（秒）", type: "number", value: 0 },
         { name: "record_url", label: "录音地址" },
         { name: "result", label: "沟通结果", type: "textarea" },
-      ]);
-      if (!form) return;
-      return postAction(`/api/spd/call-tasks/${callResult.dataset.callResult}/result`, {
-        status: form.status, duration_s: form.duration_s || 0, record_url: form.record_url || "", result: form.result || "",
-      }, "#spd-fu-msg");
+      ], { submit: (form) => api(`/api/spd/call-tasks/${callResult.dataset.callResult}/result`, { method: "POST",
+        body: JSON.stringify({ status: form.status, duration_s: form.duration_s || 0,
+                               record_url: form.record_url || "", result: form.result || "" }) }) });
+      if (ok) route();
+      return;
     }
     if (exec) {
       // 逐题作答（P1-122）：原先只填渠道与结果、answers 恒为空，问卷的异常分级从界面上永远不触发。
@@ -3293,17 +3295,17 @@ async function renderSpdFollowup() {
         quest = (await api(`/api/spd/followup-records/${exec.dataset.fuExec}/context`)).questionnaire;
       } catch (err) { return setMsg("#spd-fu-msg", err.message, false); }
       const items = quest ? quest.items || [] : [];
-      const form = await spdModal(quest ? `执行随访 · ${quest.name}` : "执行随访", [
+      const ok = await spdModal(quest ? `执行随访 · ${quest.name}` : "执行随访", [
         { name: "channel", label: "随访渠道", type: "select", value: "phone",
           options: [{ value: "phone", label: "电话" }, { value: "wechat", label: "微信" },
                     { value: "sms", label: "短信" }, { value: "visit", label: "面访" }] },
         ...spdQuestionFields(items, "q_"),
         { name: "result", label: "随访结果", type: "textarea" },
-      ]);
-      if (!form) return;
-      return postAction(`/api/spd/followup-records/${exec.dataset.fuExec}/execute`, {
-        channel: form.channel || "phone", result: form.result, answers: spdCollectAnswers(items, form, "q_"),
-      }, "#spd-fu-msg");
+      ], { submit: (form) => api(`/api/spd/followup-records/${exec.dataset.fuExec}/execute`, { method: "POST",
+        body: JSON.stringify({ channel: form.channel || "phone", result: form.result,
+                               answers: spdCollectAnswers(items, form, "q_") }) }) });
+      if (ok) route();
+      return;
     }
     if (call) {
       // 不走 postAction：派发没受理（呼叫中心网关不通 / 未配置）要说出来（P2-367）——原先回执整个丢掉、整页重画，

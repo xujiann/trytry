@@ -2036,9 +2036,36 @@ def test_超期的随访在看板上照样能执行与转呼叫(page, base_url, 
     page.click("#spd-fu-filter button")
     expect(page.locator(f'button[data-fu-call="{record_id}"]')).to_have_count(1)   # 修前 0
     page.click(f'button[data-fu-exec="{record_id}"]')   # 修前超期的这一行没有「执行」
+    # 随访结果写超了（后端 512 字）：框自己提交，报错写在框里、框不关、写的还在（P2-607 第四批）
+    form = _spd_modal_rejected(page, {"result": "补" * 513})
+    expect(form.locator('[name="result"]')).to_have_value("补" * 513)
+    assert admin_read(f"/api/spd/followup-records/{record_id}/context")["record"]["status"] == "overdue"
     _redrawn(page, lambda: _spd_modal(page, {"result": "补做电话随访，恢复良好"}))
     record = admin_read(f"/api/spd/followup-records/{record_id}/context")["record"]
     assert (record["status"], record["result"]) == ("done", "补做电话随访，恢复良好"), record
+
+
+def test_回写通话结果由框自己提交_录音地址写超了框不关(page, base_url, seed, admin_read, admin_call):
+    """P2-607 第四批：「回写通话结果」原先点确定就关框、再发请求——录音地址写超了（后端 256 字）报错落在页面消息行，
+    写好的沟通结果全丢。现在框自己提交：失败留框、报错写在框里、填的都在；成功才关框、整页重画。"""
+    rule = admin_call("POST", "/api/spd/followup-rules", {"code": "E2E_P2607_CALL", "name": "E2E 通话回写", "points": [0]})
+    plan = admin_call("POST", "/api/spd/followup-plans", {
+        "patient_id": seed["patient"]["id"], "rule_id": rule["id"], "org_id": seed["org"]["id"]})
+    call = admin_call("POST", "/api/spd/call-tasks", {
+        "patient_id": seed["patient"]["id"], "ref_type": "followup", "ref_id": plan["items"][0]["id"]})
+
+    def status():
+        return next(c for c in admin_read("/api/spd/call-tasks?limit=50") if c["id"] == call["id"])["status"]
+
+    assert status() == "pending"
+    _login(page, base_url)
+    _open_page(page, "spdfollowup", "智能随访服务端")
+    page.click(f'button[data-call-result="{call["id"]}"]')
+    form = _spd_modal_rejected(page, {"status": "failed", "record_url": "u" * 257, "result": "E2E 占线，明日再拨"})
+    expect(form.locator('[name="result"]')).to_have_value("E2E 占线，明日再拨")   # 修前框关，沟通结果全丢
+    assert status() == "pending"
+    _redrawn(page, lambda: _spd_modal(page, {"record_url": ""}))
+    assert status() == "failed"
 
 
 def test_随访方案在界面上新建与改诊断关键词_自动匹配据此排随访(page, base_url, seed, admin_read, admin_call):
