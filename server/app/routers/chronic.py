@@ -12,7 +12,7 @@ import math
 from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy.orm import Session
 
 from ..concurrency import insert_if_absent, insert_or_conflict
@@ -93,6 +93,27 @@ def level_rules_problem(rules: dict) -> str:
     return ""
 
 
+#: 分级取值时「列为空就取 metrics 同名键」的那三列（`_metric_value`）
+_VITAL_COLUMNS = ("sbp", "dbp", "glucose")
+
+
+def _metrics_column_problem(body: FollowUpCreate) -> str:
+    """metrics 里与列同名的指标按列的同一口径（P1-214）：用请求模型自己那三列的声明再校验一遍，界只有一份。
+
+    分级取值「列为空就取 metrics 同名键」（`_metric_value`），而 metrics 是 `dict[str, FiniteFloat]`、没有任何界——
+    `{"metrics": {"sbp": 0, "dbp": 0}}` 原先照收，P1-101 给三列加的界整个绕开：0 按「越高越危」比阈值永远判成
+    控制良好，3 级高危一次就降成 1 级、上转建议消失（闸门按字段名看请求模型，看不见字典里的键）。
+    校验不挂在请求模型上：出参模型继承它，存量坏值会让随访清单整个 500（出参校验器闸门拦的正是这个形状）。
+    """
+    for key in _VITAL_COLUMNS:
+        if key in body.metrics:
+            try:
+                FollowUpCreate.model_validate({key: body.metrics[key]})
+            except ValidationError as exc:
+                return f"metrics.{key} 须与 {key} 同一口径：{exc.errors()[0]['msg']}（收到 {body.metrics[key]:g}）"
+    return ""
+
+
 def _metric_value(body: FollowUpCreate, key: str) -> float | None:
     """指标取值：优先取 FollowUp 同名列（sbp/dbp/glucose），其次取通用 metrics JSON。"""
     value = getattr(body, key, None)
@@ -135,11 +156,17 @@ def _evaluate_level(db: Session, disease: str, body: FollowUpCreate) -> int | No
     require_all = rules.get("require_all", True)
     levels: list[int] = []
     for metric in metrics:
-        value = _metric_value(body, metric.get("key", ""))
+        key = metric.get("key", "")
+        value = _metric_value(body, key)
         if value is None:
             if require_all:
                 return None
             continue
+        if value < 0:
+            # 分级用到的指标不收负数（P1-214）：量表分、次数没有负的——CAT -25、月漏服 -5 按「越高越危」比阈值永远判成
+            # 控制良好，3 级高危一次就降成 1 级；0 照收（CAT 0、mRS 0 都是真实值）。分级之外的自定义指标不管
+            raise HTTPException(status_code=422,
+                                detail=f"分级指标「{metric.get('name') or key}」（{key}）不能是负数（收到 {value:g}）")
         levels.append(_metric_level(metric, value))
     return max(levels) if levels else None
 
@@ -369,6 +396,9 @@ def add_followup(
     # P0-26：原先只看角色——乙院按档案号就能给甲院管着的患者记随访，还顺带改掉分级与
     # 下次随访日。同文件风险评分与随访记录早就按患者可见性守着，写侧照同一口径。
     assert_patient_visible(db, user, chronic.patient_id, resource="chronic")
+    problem = _metrics_column_problem(body)
+    if problem:
+        raise HTTPException(status_code=422, detail=problem)
     payload = body.model_dump()
     # 未填下次到期日时按病种随访周期自动建议
     suggested = "" if body.next_due else _suggest_next_due(db, chronic.disease)
