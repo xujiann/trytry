@@ -1033,9 +1033,13 @@ function spdGroupMembersHtml(groupId, rows) {
 async function renderSpdCenter() {
   $("#page-desc").textContent =
     "统筹调度中枢：统一待办、目标池分发与认领、在途转诊、生命周期确认、上报任务配置";
-  const [wb, candidates, catalog, reportTasks, applies, recentRecalls, pendingRecalls, contactedRecalls] = await Promise.all([
+  const [wb, recentCandidates, undistributed, catalog, reportTasks, applies, recentRecalls, pendingRecalls,
+    contactedRecalls] = await Promise.all([
     api("/api/spd/workbench/center"),
+    // 待分发的单独取一遍、排在最前（P2-825，与 P2-782 同一做法）：原先只取最新 50 条，早入池、还没分出去的人挤出窗口就
+    // 查不到编号、分发不了——工作台「待分发」报着 N 条。判据与那一格同一句（`unassigned=true`）
     api("/api/spd/candidates?status=target&limit=50"),
+    api("/api/spd/candidates?status=target&unassigned=true&limit=200"),
     spdCatalog(),
     api("/api/spd/case-report-tasks"),
     api("/api/spd/service-applies?status=pending&limit=30"),
@@ -1046,6 +1050,7 @@ async function renderSpdCenter() {
     api("/api/spd/recalls?status=contacted&limit=200"),
   ]);
   const recalls = actionableFirst(recentRecalls, pendingRecalls, contactedRecalls);
+  const candidates = actionableFirst(recentCandidates, undistributed);
   // ADR-0009 第三批：面板外壳改用 `panel()`（定义见 core.js），迁一页、人工过一页。
   // 顶部的 spdCards 卡片区不是面板，原样保留。
   $("#page-body").innerHTML = `
@@ -2081,6 +2086,7 @@ async function renderSpdPath() {
         <select name="team_id"><option value="">全部团队</option>
           ${catalog.teams.map((t) => `<option value="${t.id}">${esc(t.name)}</option>`).join("")}</select>
         <label style="font-size:13px"><input type="checkbox" name="mine" value="true"> 只看我的</label>
+        <label style="font-size:13px"><input type="checkbox" name="unassigned" value="true"> 只看无人认领</label>
         <button class="secondary">查询</button>
         <button type="button" class="btn secondary" data-task-export>导出 CSV</button>
       </form><p class="msg" id="spd-task-msg"></p>
@@ -2138,12 +2144,14 @@ async function renderSpdPath() {
     lastTaskQuery = query || {};
     const qs = new URLSearchParams({ limit: "30", ...lastTaskQuery }).toString();
     const rows = await api(`/api/spd/tasks?${qs}`);
+    // 责任人列（P2-825）：工作台报「无人认领 N」，表上原先看不出哪几条没人接
     $("#spd-task-list").innerHTML = table(
-      ["选", "ID", "患者", "任务", "类型", "状态", "优先级", "截止", "催办", "操作"], rows, (t) =>
+      ["选", "ID", "患者", "任务", "类型", "状态", "责任人", "优先级", "截止", "催办", "操作"], rows, (t) =>
       `<tr><td><input type="checkbox" data-task-pick="${t.id}"></td><td>${t.id}</td>
        <td>${esc(t.patient_name || t.patient_id)}</td>
        <td>${esc(t.title)}</td><td>${esc(SPD_TASK_TYPES[t.task_type] || t.task_type)}</td>
        <td>${spdTag(SPD_TASK_STATUS, t.status)}${t.escalated ? ' <span class="tag red">升级</span>' : ""}</td>
+       <td>${t.assignee_id ? `#${t.assignee_id}` : '<span class="tag orange">无人认领</span>'}</td>
        <td>${spdPriorityLabel(t.priority)}</td>
        <td>${esc(t.due_date || "—")}</td><td>${t.urged_count}</td>
        <td>${spdTaskActions(t)}</td></tr>`);
@@ -3009,14 +3017,17 @@ const SPD_REPORT_SCOPES = { center: "专病中心", dept: "科室团队", grassr
 async function renderSpdFollowup() {
   $("#page-desc").textContent =
     "通用随访能力：方案规则与问卷、多时间点任务生成、多渠道执行、呼叫录音、抽查质控";
-  const [rules, questionnaires, stats, recentCalls, pendingCalls, qcSamples, catalog] = await Promise.all([
+  const [rules, questionnaires, stats, recentCalls, pendingCalls, recentQc, pendingQc, catalog] = await Promise.all([
     // 问卷连停用的一起取（P2-294）：管理表要能把停用的再启用；新建方案的下拉只列启用的
     api("/api/spd/followup-rules"), api("/api/spd/questionnaires?include_inactive=true"),
     // 待呼叫的单独取一遍、排在最前（P2-782）：原先只取最新 20 条，已接通 / 未接通的一多，还等回写的就被挤出窗口
     api("/api/spd/followup-stats"), api("/api/spd/call-tasks?limit=20"), api("/api/spd/call-tasks?status=pending&limit=200"),
-    api("/api/spd/qc-samples?limit=50"), spdCatalog(),
+    // 未判定的样本单独取一遍、排在最前（P2-825）：原先只取最新 50 条，一个批次抽出超过 50 条，把可见的判完刷新看到的
+    // 还是这 50 条，其余的永远没有「判定」按钮。未判定落库是空串，按 `result=pending` 取
+    api("/api/spd/qc-samples?limit=50"), api("/api/spd/qc-samples?result=pending&limit=200"), spdCatalog(),
   ]);
   const calls = actionableFirst(recentCalls, pendingCalls);
+  const qcSamples = actionableFirst(recentQc, pendingQc);
   // 关键词与时间点都是逗号分隔录入；关键词不按空格拆——诊断名里带空格的（「冠状动脉 粥样硬化」）拆开会各自命中一大片
   const keywordList = (text) => String(text || "").split(/[,，、;；]/).map((s) => s.trim()).filter(Boolean);
   const pointList = (text) => String(text || "").split(/[，,\s]+/).filter(Boolean).map(Number);

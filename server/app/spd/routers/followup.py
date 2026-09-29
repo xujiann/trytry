@@ -1483,7 +1483,11 @@ def list_qc_samples(
     query = db.query(SpdQcSample)
     if batch:
         query = query.filter(SpdQcSample.batch == batch)
-    if result:
+    if result == "pending":
+        # 未判定（P2-825）：落库是空串，`?result=` 又被当成不筛——原先取不出「还没判的」，页面只拿最新一页，一个批次抽出
+        # 超过一页的样本，把可见的判完刷新看到的还是那一页，其余的永远没有「判定」按钮
+        query = query.filter(SpdQcSample.result == "")
+    elif result:
         query = query.filter(SpdQcSample.result == result)
     rows = paginate(query.order_by(SpdQcSample.id.desc()), response, offset, limit)
     records = {

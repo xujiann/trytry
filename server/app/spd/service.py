@@ -25,6 +25,7 @@ from ..numtypes import non_finite_path
 from .platform import diagnosis_codes, diagnosis_names, notify_user, patient_of, usable_or_none
 from .models import (
     SpdCallTask,
+    SpdCandidate,
     SpdEnrollment,
     SpdFollowupRecord,
     SpdFollowupRule,
@@ -438,6 +439,23 @@ def task_overdue(today: str):
         SpdTask.status == "overdue",
         and_(SpdTask.status.in_(TASK_IN_HAND_STATUSES), SpdTask.due_date != "", SpdTask.due_date < today),
     )
+
+
+def task_unclaimed():
+    """「无人认领」的判定：没有责任人、能被接收的任务——待接收的与已超期的（P2-245）。
+
+    中心工作台的计数与任务清单的 `unassigned=true` 共用一句（P2-825）：原先清单取不出这一格——工作台报「无人认领 N」，
+    任务中心只取最新一页、又没有责任人列，是哪几条找不到。"""
+    return and_(SpdTask.assignee_id.is_(None), SpdTask.status.in_(TASK_CLAIMABLE_STATUSES))
+
+
+def candidate_undistributed():
+    """「待分发」的判定：还没有团队、也还没有责任人的目标人群（P2-601）。
+
+    中心工作台的计数与目标患者清单的 `unassigned=true` 共用一句（P2-825）：清单的 team_id / assigned_user_id 是整数参数，
+    「为空」表达不出来（传空串 422），早入池、还没分出去的人挤出最新一页就查不到编号、分发不了。"""
+    return and_(SpdCandidate.status == "target", SpdCandidate.team_id.is_(None),
+                SpdCandidate.assigned_user_id.is_(None))
 
 
 #: 「异常随访」的两档：答卷判出中度 / 重度——也就是会派处置任务的那两档（轻度只记不派）

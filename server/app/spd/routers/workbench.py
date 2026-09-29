@@ -50,9 +50,9 @@ from ..models import (
 )
 from ..reporting import latest_plan_period_scores, score_in_orgs
 from ..service import (FOLLOWUP_OPEN_STATUSES, MIGRATION_VOID_STATUSES, REVISIT_OPEN_STATUSES,
-                       TASK_CLAIMABLE_STATUSES, TASK_OPEN_STATUSES,
+                       TASK_OPEN_STATUSES, candidate_undistributed,
                        followup_abnormal, followup_overdue, referral_last_moved_at, sweep_overdue_on_read,
-                       task_overdue)
+                       task_overdue, task_unclaimed)
 
 # 团队层级文案（措辞照抄 SpdTeam.level 列注释；工作台「所属团队」显示它——P2-74）
 TEAM_LEVEL_NAMES = {"county": "县级团队", "township": "乡镇团队", "village": "村级团队", "center": "专病中心团队"}
@@ -1086,8 +1086,7 @@ def _unassigned_tasks(db: Session, orgs: list[int] | None, program_code: str = "
     原先只数 `pending`：同一个请求里先跑的超期扫描把过了截止日的待接收任务翻成「超期」，没人接的超期任务恰是最该
     有人去接的，却从这一格里消失了（接收接口照收它们，`TASK_CLAIMABLE_STATUSES`）。病种筛选与同一栏的
     「我的待办」「全部待办」同口径——原先这一格不看病种。"""
-    query = _apply_scope(db.query(SpdTask), SpdTask.org_id, orgs).filter(
-        SpdTask.assignee_id.is_(None), SpdTask.status.in_(TASK_CLAIMABLE_STATUSES))
+    query = _apply_scope(db.query(SpdTask), SpdTask.org_id, orgs).filter(task_unclaimed())   # 与任务清单同一句（P2-825）
     if program_code:
         query = query.filter(SpdTask.program_code == program_code)
     return query.count()
@@ -1128,10 +1127,7 @@ def center_workbench(
             "target": scoped(SpdCandidate, SpdCandidate.org_id).filter(SpdCandidate.status == "target").count(),
             # 待分发 = 还没有团队、也还没有责任人的目标人群（P2-601）：原先只看团队——团队成员认领的（认领只记责任人、
             # 不记团队）照数，而分发一律跳过已认领的（P2-251），这几条永远「待分发」、分发不下去
-            "unassigned": scoped(SpdCandidate, SpdCandidate.org_id).filter(
-                SpdCandidate.status == "target", SpdCandidate.team_id.is_(None),
-                SpdCandidate.assigned_user_id.is_(None),
-            ).count(),
+            "unassigned": scoped(SpdCandidate, SpdCandidate.org_id).filter(candidate_undistributed()).count(),   # 同清单（P2-825）
             "excluded": scoped(SpdCandidate, SpdCandidate.org_id).filter(SpdCandidate.status == "excluded").count(),
             "pending_review": scoped(SpdScreening, SpdScreening.org_id).filter(
                 SpdScreening.result == "suspect", SpdScreening.reviewed.is_(False)

@@ -46,6 +46,7 @@ from ..service import (
     award_points,
     enrollment_for,
     mark_task_escalated,
+    task_unclaimed,
     move_task,
     node_due_days,
     node_enter_allowed,
@@ -755,6 +756,7 @@ def list_tasks(
     team_id: int | None = None,
     assignee_id: int | None = None,
     mine: bool = False,
+    unassigned: bool = False,
     patient_id: int | None = None,
     priority: int | None = None,
     due_before: str = "",
@@ -764,7 +766,9 @@ def list_tasks(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """任务清单：中心端 #13 要求的六个筛选维度 + "我的待办"。"""
+    """任务清单：中心端 #13 要求的六个筛选维度 + "我的待办"。
+
+    `unassigned=true` 只列无人认领的（P2-825，与中心工作台「无人认领」同一句 `task_unclaimed`）。"""
     query = db.query(SpdTask)
     if patient_id is not None:
         assert_patient_visible(db, user, patient_id, resource="spd_task")
@@ -775,6 +779,8 @@ def list_tasks(
             query = query.filter(SpdTask.org_id.in_(orgs))
     if mine:
         query = query.filter(SpdTask.assignee_id == user.id)
+    if unassigned:
+        query = query.filter(task_unclaimed())
     for column, value in (
         (SpdTask.task_type, task_type), (SpdTask.status, status),
         (SpdTask.program_code, program_code), (SpdTask.org_id, org_id),
@@ -1366,6 +1372,7 @@ def export_tasks(
     team_id: int | None = None,
     task_type: str | None = None,
     mine: bool = False,
+    unassigned: bool = False,
     limit: int = 2000,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
@@ -1384,6 +1391,8 @@ def export_tasks(
         query = query.filter(SpdTask.org_id.in_(orgs))
     if mine:
         query = query.filter(SpdTask.assignee_id == user.id)
+    if unassigned:   # 「只看无人认领」与清单同一句（P2-825）：导出跟着表格走，别勾着它导出全部
+        query = query.filter(task_unclaimed())
     # 按团队筛与清单同一个判据（P2-685）：任务中心的筛选栏补了机构 / 团队，导出跟着表格走
     for column, value in (
         (SpdTask.program_code, program_code), (SpdTask.status, status),

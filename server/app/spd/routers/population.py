@@ -56,7 +56,7 @@ from ..models import (
 )
 from ..rules import RuleError, as_validated, evaluate, is_suspect_risk, score_scale
 from ..service import (MEASUREMENT_SOURCE_NAMES, TASK_OPEN_STATUSES, actively_enrolled, award_points, build_facts,
-                       close_open_work, match_program, migration_void_reason, package_items_ok,
+                       candidate_undistributed, close_open_work, match_program, migration_void_reason, package_items_ok,
                        scale_program_mismatch, scale_unusable, unknown_program)
 
 # 筛查来源、分组范围文案（措辞照抄 SpdScreening.source / SpdGroup.scope 列注释——P2-74）
@@ -779,11 +779,13 @@ def list_candidates(
     assigned_user_id: int | None = None,
     risk_level: str | None = None,
     keyword: str = "",
+    unassigned: bool = False,
     offset: int = 0,
     limit: int = 100,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """目标患者清单。`unassigned=true` 只列待分发的（P2-825，与中心工作台「待分发」同一句 `candidate_undistributed`）。"""
     query = db.query(SpdCandidate)
     orgs = visible_org_ids(db, user)
     if orgs is not None:
@@ -799,6 +801,8 @@ def list_candidates(
     if keyword:
         # 子查询而不是先取患者号：原先 `.limit(500)` 取任意 500 个同名患者再筛，常见姓氏一搜名单少一截（P1-83）
         query = query.filter(SpdCandidate.patient_id.in_(select(Patient.id).where(keyword_like(Patient.name, keyword))))
+    if unassigned:
+        query = query.filter(candidate_undistributed())
     rows = paginate(query.order_by(SpdCandidate.id.desc()), response, offset, limit)
     briefs = _patient_brief(db, [r.patient_id for r in rows])
     return [_candidate_out(r, briefs.get(r.patient_id)) for r in rows]
