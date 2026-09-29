@@ -242,7 +242,7 @@ def main() -> int:
     import test_org_param_read_guard as orgread
     import test_unscopable_patient_reads as reads
 
-    registered = (set(reads.UNSCOPABLE_PATIENT_READS) | set(reads.AGGREGATE_ONLY_READS)
+    registered = (set(reads.UNSCOPABLE_PATIENT_READS) | set(reads.BOUND_PENDING_SCOPE_READS) | set(reads.AGGREGATE_ONLY_READS)
                   | set(reads.ONEHOP_UNSCOPABLE_READS))
     org_by_design = set(ORG_BY_DESIGN) | set(orgread.BY_DESIGN)
     # 机构维度的「已登记」：患者读侧名单（真正要守的是患者）、P1-49 待裁定的清单、P0-37 待裁定、本文件待裁定

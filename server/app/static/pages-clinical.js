@@ -918,12 +918,13 @@ async function renderMedication() {
         // cancelled，这些行会显示一个点下去必定 409（"状态 collected 已是终态"）
         // 的按钮。此前看不出来是因为这一页在有结案登记时根本打不开。
         // 判据与后端 `_SHORTAGE_FLOW` 的键一一对应：能流转的只有这两个状态。
-        const canAdvance = s.status === "registered" || s.status === "purchasing";
+        // 流转 / 结案以登记机构的名义写（P2-793）：清单是全县的，别家的登记原先照样摆这两个按钮、点了必 403
+        const canAdvance = s.can_handle && (s.status === "registered" || s.status === "purchasing");
         return `<tr><td>${s.id}</td><td>${s.org_id}</td><td>${esc(s.drug_name)}</td><td>${s.quantity}</td>
           <td>${statusTag(SS, s.status)}</td>
           <td>${[
             canAdvance ? `<button class="btn secondary" data-adv="${s.id}">流转</button>` : "",
-            CLOSED.includes(s.status) ? "" : `<button class="btn" data-close="${s.id}">结案</button>`,
+            CLOSED.includes(s.status) || !s.can_handle ? "" : `<button class="btn" data-close="${s.id}">结案</button>`,
           ].filter(Boolean).join(" ") || "—"}</td></tr>`;
       })}
       <p class="desc">结案分三种：<b>已取药 / 未取药只能在「已配送」之后判定</b>——药还没到就说

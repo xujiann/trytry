@@ -177,6 +177,16 @@ def assert_org_writable(db: Session, user: User, org_id: int | None) -> None:
     raise HTTPException(status_code=403, detail="无权以该机构名义写入数据")
 
 
+def can_write_org(user: User, org_id: int | None) -> bool:
+    """`assert_org_writable` 的判据的布尔版：只给清单出参算「这一行摆不摆写按钮」用（P2-793）。
+
+    清单是全县的（P1-69 待裁定），写接口按机构归属判：原先页面只看状态摆按钮，别家的缺药登记照样给「流转」「结案」，
+    点了必 403。**真正放不放行仍以 `assert_org_writable` 为准**，这里不参与任何放行；两者是同一判据由
+    `tests/test_row_actionable_flags.py` 逐个组合钉着，改一边忘了另一边会当场红。
+    """
+    return org_id is None or user.role in GLOBAL_ROLES or user.org_id == org_id
+
+
 def assert_obj_org_writable(db: Session, user: User, obj, org_attr: str = "org_id") -> None:
     """对**已取出的对象**校验机构归属，用于 `/{id}` 型写接口。
 

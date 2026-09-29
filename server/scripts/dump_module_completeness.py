@@ -84,7 +84,8 @@ def rows() -> list[dict]:
             "authz_exempt": _count(horizontal.BYID_CROSS_ORG_OK, module)
             + _count(horizontal.BYID_PATIENT_READ_OK, module),
             "authz_read_debt": _count(horizontal.NEWLY_VISIBLE_UNGUARDED_READS, module),
-            "unscopable": _count(unscopable.UNSCOPABLE_PATIENT_READS, module),
+            # 已绑身份、收口仍待裁定的（P2-793）照样算「收不了口」：挪了清单不等于收了口
+            "unscopable": _count(unscopable.UNSCOPABLE_PATIENT_READS | unscopable.BOUND_PENDING_SCOPE_READS, module),
             "rmw": _count(concurrency.KNOWN_READ_MODIFY_WRITE, module),
         })
     return out

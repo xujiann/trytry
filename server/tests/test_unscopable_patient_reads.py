@@ -95,10 +95,8 @@ UNSCOPABLE_PATIENT_READS = {
     "maternal.py:list_children",
     "maternal.py:list_high_risk_children",
     "maternal.py:list_records",
-    "medication.py:list_shortages",
     "prescriptions.py:list_prescriptions",
     "quality.py:clinical_indicators",
-    "referrals.py:list_referrals",
     "spd/care.py:list_edu_pushes",
     "spd/followup.py:list_call_tasks",
     "spd/followup.py:list_qc_samples",
@@ -108,6 +106,16 @@ UNSCOPABLE_PATIENT_READS = {
     "surveys.py:list_surveys",
     "tcm.py:list_orders",
     "telemedicine.py:list_consults",
+}
+
+#: 【欠账，只减不增】**已绑调用方身份、但还没按归属收口**的清单——该给谁看仍随 P1-49 待裁定。
+#: 2026-09-29：P2-793 为了按行算「这一行你能不能写」（转诊的接收方 / 缺药登记的机构），给这两个清单补了
+#: `Depends(get_current_user)`：结构上能收口了，收到哪儿仍是 P1-49 要答的问题，一行也没收。从上面那份挪到这里
+#: （两份合计不变，`docs/闸门现状.md` 两行都列），动态探针（`scripts/probe_list_exposure.py`）把它当「待裁定（已登记）」，
+#: 模块完成度的「收不了口」一列两份一起数。答了 P1-49、按归属收了口的，从这里删掉。
+BOUND_PENDING_SCOPE_READS = {
+    "medication.py:list_shortages",
+    "referrals.py:list_referrals",
 }
 
 #: 同一形状、但响应只有聚合/计数，没有个体身份。**信息项**，不是欠账。
@@ -277,6 +285,22 @@ def test_两份清单不重叠且都不为空():
     assert AGGREGATE_ONLY_READS, "对照清单空了——分母没了参照，数字会被误读"
     overlap = UNSCOPABLE_PATIENT_READS & AGGREGATE_ONLY_READS
     assert overlap == set(), f"同一端点同时进了两份清单，分类逻辑坏了：{sorted(overlap)}"
+    moved = BOUND_PENDING_SCOPE_READS & (UNSCOPABLE_PATIENT_READS | AGGREGATE_ONLY_READS)
+    assert moved == set(), f"挪去「已绑身份待收口」的又留在了无身份清单里：{sorted(moved)}"
+
+
+def test_已绑身份待收口的清单_确实绑了身份():
+    """挪进 `BOUND_PENDING_SCOPE_READS` 的前提是真绑了身份：没绑的（改名、删了依赖）应当回到无身份那份，
+    否则两份都数不到它，缺口又回到"看不见"。"""
+    found = {}
+    for name, path in _router_files():
+        for fn in ast.walk(ast.parse(open(path, encoding="utf-8").read())):
+            if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                found[f"{name}:{fn.name}"] = fn
+    missing = sorted(key for key in BOUND_PENDING_SCOPE_READS if key not in found)
+    assert missing == [], f"这些登记项已找不到（改名或删除），应从清单删掉：{missing}"
+    unbound = sorted(key for key in BOUND_PENDING_SCOPE_READS if not _binds_identity(found[key]))
+    assert unbound == [], f"这些没绑调用方身份，应回到 UNSCOPABLE_PATIENT_READS：{unbound}"
 
 
 # ---------------------------------------------------------------------------

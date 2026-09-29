@@ -1640,7 +1640,10 @@ async function renderReferrals() {
     ${panel("", table(["ID", "患者", "方向", "转出→转入", "原因", "状态", "操作"], referrals, (r) => {
       const text = r.status_label || r.status;
       const color = REF_STATUS_COLOR[r.status] || "";
-      const actions = r.status === "pending"
+      // 接诊 / 退回 / 结案只有接收机构能做（P2-793）：清单是全县的，原先只看状态摆，转出方与不相干的机构在这张单上
+      // 照样有这几个按钮、点了必 403。`can_advance` 由后端按同一判据现算
+      const actions = !r.can_advance ? "—"
+        : r.status === "pending"
         ? `<button class="btn secondary" data-status="accepted" data-id="${r.id}">接诊</button>
            <button class="btn danger" data-status="rejected" data-id="${r.id}">退回</button>`
         : r.status === "accepted"

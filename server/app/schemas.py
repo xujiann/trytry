@@ -88,6 +88,8 @@ class ReferralOut(ReferralCreate):
     #: 加这个字段是为了把文案的权威收到后端一处——前端各存一份映射，
     #: 改一处漏一处只是时间问题。对既有调用方是**新增**字段，不动任何原有字段。
     status_label: str = ""
+    #: 当前用户能不能推进这张单（接诊 / 退回 / 结案只有接收机构能做，全域角色放行；P2-793）。新增字段，页面按它摆按钮
+    can_advance: bool = False
 
     model_config = {"from_attributes": True}
 

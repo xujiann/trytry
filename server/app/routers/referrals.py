@@ -26,9 +26,15 @@ STATUS_LABELS = {
 }
 
 
-def _with_label(referral: Referral) -> Referral:
-    """给 ORM 对象挂上 `status_label` 供响应模型取用（不入库）。"""
+def _with_label(referral: Referral, user: User) -> Referral:
+    """给 ORM 对象挂上 `status_label` 与 `can_advance` 供响应模型取用（不入库）。
+
+    `can_advance`：这位用户所在机构是不是这张单的接收方（全域角色放行），与 `_assert_receiving_org` 同一判据（P2-793）。
+    清单是全县的，原先页面只看状态摆「接诊 / 退回 / 结案」——转出方、不相干的第三家在自己看到的单子上照样有这几个
+    按钮，点了必 403。只管机构归属；按角色摆不摆（只收医师）随 P2-447 待裁定。
+    """
     setattr(referral, "status_label", STATUS_LABELS.get(referral.status, referral.status))
+    setattr(referral, "can_advance", _is_receiving_side(user, referral))
     return referral
 
 _ALLOWED_TRANSITIONS = {
@@ -53,10 +59,13 @@ def _assert_receiving_org(user: User, referral: Referral) -> None:
     （上转时接收方是上级、下转时是基层），不存在分级审核那种锚点逐级转移，
     因此不需要 `current_org_id`。两边规则不同是业务不同，不是漏抄。
     """
-    if user.role in GLOBAL_ROLES:
-        return
-    if user.org_id is None or user.org_id != referral.to_org_id:
+    if not _is_receiving_side(user, referral):
         raise HTTPException(status_code=403, detail="仅转诊接收机构可推进该单状态")
+
+
+def _is_receiving_side(user: User, referral: Referral) -> bool:
+    """推进权的判据本身：全域角色，或所在机构就是这张单的接收方。"""
+    return user.role in GLOBAL_ROLES or (user.org_id is not None and user.org_id == referral.to_org_id)
 
 
 @router.post(
@@ -84,15 +93,15 @@ def create_referral(
     db.add(referral)
     db.commit()
     db.refresh(referral)
-    return _with_label(referral)
+    return _with_label(referral, user)
 
 
 @router.get("", response_model=list[ReferralOut])
-def list_referrals(status: str | None = None, db: Session = Depends(get_db)):
+def list_referrals(status: str | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     query = db.query(Referral)
     if status:
         query = query.filter(Referral.status == status)
-    return [_with_label(r) for r in query.order_by(Referral.id.desc()).limit(200).all()]
+    return [_with_label(r, user) for r in query.order_by(Referral.id.desc()).limit(200).all()]
 
 
 @router.patch(
@@ -122,7 +131,7 @@ def update_status(
         raise _transition_conflict(referral, body.status)
     db.commit()
     db.refresh(referral)
-    return _with_label(referral)
+    return _with_label(referral, user)
 
 
 def _transition_conflict(referral: Referral, target: str) -> HTTPException:

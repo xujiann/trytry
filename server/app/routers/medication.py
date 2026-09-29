@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from ..concurrency import move_row
 from ..numtypes import INT4_MAX
 from ..texttypes import NON_BLANK
-from ..visibility import assert_obj_org_writable, assert_org_writable, assert_patient_visible
+from ..visibility import assert_obj_org_writable, assert_org_writable, assert_patient_visible, can_write_org
 from ..database import get_db
 from ..deps import get_current_user, require_roles, row_dict
 from ..clock import now_naive
@@ -58,8 +58,17 @@ class ShortageOut(ShortageCreate):
     # 出参不带「不能只填空格」（P1-109）：修之前存进去的纯空白行要原样读出来，而不是让整个清单 500
     drug_code: str = Field(min_length=1, max_length=64)
     drug_name: str = Field(min_length=1, max_length=128)
+    #: 当前用户能不能流转 / 结案这条登记（以登记机构的名义写，全域角色放行；P2-793）。新增字段，页面按它摆按钮
+    can_handle: bool = False
 
     model_config = {"from_attributes": True}
+
+
+def _with_can_handle(shortage: DrugShortage, user: User) -> DrugShortage:
+    """挂上 `can_handle` 供响应模型取用（不入库）：与流转 / 结案的 `assert_obj_org_writable` 同一判据（P2-793）。
+    清单是全县的，原先页面只看状态摆「流转」「结案」，别家的登记照样有，点了必 403。按角色摆不摆随 P2-447 待裁定。"""
+    setattr(shortage, "can_handle", can_write_org(user, shortage.org_id))
+    return shortage
 
 
 class ShortageClose(BaseModel):
@@ -99,15 +108,15 @@ def register_shortage(body: ShortageCreate, db: Session = Depends(get_db), user:
     db.add(shortage)
     db.commit()
     db.refresh(shortage)
-    return shortage
+    return _with_can_handle(shortage, user)
 
 
 @router.get("/shortages", response_model=list[ShortageOut])
-def list_shortages(status: str | None = None, db: Session = Depends(get_db)):
+def list_shortages(status: str | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     query = db.query(DrugShortage)
     if status:
         query = query.filter(DrugShortage.status == status)
-    return query.order_by(DrugShortage.id.desc()).limit(200).all()
+    return [_with_can_handle(s, user) for s in query.order_by(DrugShortage.id.desc()).limit(200).all()]
 
 
 @router.post(
@@ -134,7 +143,7 @@ def advance_shortage(shortage_id: int, db: Session = Depends(get_db), user: User
             detail=f"登记状态已变为 {SHORTAGE_STATUS_NAMES.get(shortage.status, shortage.status)}，请刷新后再操作")
     db.commit()
     db.refresh(shortage)
-    return shortage
+    return _with_can_handle(shortage, user)
 
 
 def _move_shortage(db: Session, shortage: DrugShortage, **values: Any) -> bool:
@@ -173,7 +182,7 @@ def close_shortage(shortage_id: int, body: ShortageClose, db: Session = Depends(
             detail=f"登记状态已变为 {SHORTAGE_STATUS_NAMES.get(shortage.status, shortage.status)}，请刷新后再操作")
     db.commit()
     db.refresh(shortage)
-    return shortage
+    return _with_can_handle(shortage, user)
 
 
 class ShortageStatsOut(BaseModel):

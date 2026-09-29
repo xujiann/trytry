@@ -123,6 +123,8 @@ def _rows() -> list[tuple[str, str, str, str]]:
         ("横向越权（读侧）", "跟进 helper 后新看见的读侧欠账", len(horizontal.NEWLY_VISIBLE_UNGUARDED_READS), H),
         ("横向越权（读侧）", "无调用方身份的患者读接口（待裁定）",
          len(unscopable.UNSCOPABLE_PATIENT_READS), "tests/test_unscopable_patient_reads.py"),
+        ("横向越权（读侧）", "已绑调用方身份、归属收口仍待裁定的清单（P1-49；P2-793 为按行算写按钮补的身份）",
+         len(unscopable.BOUND_PENDING_SCOPE_READS), "tests/test_unscopable_patient_reads.py"),
         ("横向越权（读侧）", "仅聚合无身份（信息项，非欠账）",
          len(unscopable.AGGREGATE_ONLY_READS), "tests/test_unscopable_patient_reads.py"),
         ("横向越权（读侧）", "无调用方身份 × 隔一跳/两跳的患者维度表（待逐条判定）",
