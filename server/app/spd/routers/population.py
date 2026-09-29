@@ -2094,8 +2094,11 @@ def list_service_applies(
     query = db.query(SpdServiceApply)
     if status:
         query = query.filter(SpdServiceApply.status == status)
-    order = SpdServiceApply.id.asc() if oldest_first else SpdServiceApply.id.desc()
-    rows = paginate(query.order_by(order), response, offset, limit)
+    # 两个方向各写一处 order_by：排序键放进变量，分页全序闸门（test_pagination_sort_stability）认不出末位键是哪一列
+    if oldest_first:
+        rows = paginate(query.order_by(SpdServiceApply.id.asc()), response, offset, limit)
+    else:
+        rows = paginate(query.order_by(SpdServiceApply.id.desc()), response, offset, limit)
     briefs = _patient_brief(db, [r.patient_id for r in rows])
     # 受理按钮按 `acceptable` 摆（P2-796）：病种停用后页面原先照给「受理」，点了 409「……只能驳回」
     problems = {code: unknown_program(db, code, active_only=True) for code in {r.program_code for r in rows}}
