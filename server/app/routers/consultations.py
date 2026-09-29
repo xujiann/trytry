@@ -99,7 +99,23 @@ def accept(
     consultation = _get(db, consultation_id, user)
     if consultation.status != "applied":
         raise HTTPException(status_code=409, detail=f"当前状态 {CONSULTATION_STATUS_NAMES.get(consultation.status, consultation.status)} 不可受理")
+    _check_expert(db, body.expert_name)
     return _move(db, consultation, "applied", "受理", status="accepted", expert_name=body.expert_name)
+
+
+def _check_expert(db: Session, name: str) -> None:
+    """受理专家与界面同一个规矩（P2-764）：专家库里有可排班的专家，就只能从他们里选；一位可排班的都没有才收手填。
+
+    界面（core.js 受理会诊）早就只列可排班的专家、库为空才退回手填，注释写着「后端 accept 只收字符串不校验，于是统计里
+    "谁接得多"永远是一笔糊涂账」——后端原先确实照收：页面打开之后专家被设成暂停排班，旧页面照样能选他受理；直接调接口
+    填任意名字也 200，「谁接得多 / 评分」按名字分组，里面混进不存在的人。"""
+    on_duty = {e.name: e.available for e in db.query(ConsultExpert).all()}
+    if not any(on_duty.values()):
+        return
+    if name in on_duty and not on_duty[name]:
+        raise HTTPException(status_code=409, detail="该专家已暂停排班，不能受理")
+    if name not in on_duty:
+        raise HTTPException(status_code=422, detail="受理专家须从专家库里可排班的专家中选")
 
 
 @router.post(

@@ -524,7 +524,8 @@ async function renderConsultations() {
     try {
       if (act === "accept") {
         // 有专家库就从库里选，没有才退回手打——手打进来的名字对不上任何一条专家记录，
-        // 后端 accept 只收字符串不校验，于是统计里"谁接得多"永远是一笔糊涂账
+        // 统计里"谁接得多"就成了一笔糊涂账。后端 accept 按同一个规矩校验（P2-764）：有可排班的专家时，
+        // 暂停排班的 409、库外的名字 422
         const picked = await spdModal("受理会诊", [onDuty.length
           ? { name: "expert_name", label: "受理专家（只列可排班的）", type: "select",
               options: onDuty.map((x) => ({ value: x.name, label: `${x.name}${x.specialty ? `（${x.specialty}）` : ""}` })) }
