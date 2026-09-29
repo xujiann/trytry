@@ -116,6 +116,8 @@ class ImportReport:
     dry_run: bool
     imported: int = 0
     skipped: int = 0
+    # 库里已有、只补了空值的行（P2-888：修复前导入的慢病档案到期日是空串）；不算「已导入」，也不再算「幂等跳过」
+    filled: int = 0
     errors: list[tuple[int, str]] = field(default_factory=list)  # (行号, 原因)
     # 错误行原始数据（供 errors.csv 落盘）：(行号, 原因, 原始行)
     error_rows: list[tuple[int, str, dict]] = field(default_factory=list)
@@ -132,6 +134,8 @@ class ImportReport:
             f"  幂等跳过(已存在): {self.skipped} 行",
             f"  错误: {len(self.errors)} 行",
         ]
+        if self.filled:   # 只在补过的时候出现，其余实体的报告一字不变
+            lines.insert(3, f"  {'将补' if self.dry_run else '已补'}到期日(已存在、原先为空): {self.filled} 行")
         for line_no, reason in self.errors[:50]:
             lines.append(f"    - 第 {line_no} 行: {reason}")
         if len(self.errors) > 50:
@@ -409,8 +413,9 @@ def import_chronic(db, rows, report: ImportReport, ctx: ImportContext) -> None:
     diseases = {code for (code,) in db.query(ChronicDiseaseType.code).filter(ChronicDiseaseType.active.is_(True))}
     suggested_due: dict[str, str] = {}
     existing = {
-        (pid, disease)
-        for pid, disease in db.query(ChronicPatient.patient_id, ChronicPatient.disease).all()
+        (pid, disease): (chronic_id, due)
+        for chronic_id, pid, disease, due in db.query(
+            ChronicPatient.id, ChronicPatient.patient_id, ChronicPatient.disease, ChronicPatient.next_due).all()
     }
     seen_batch: dict[tuple, int] = {}
     for line_no, row in rows:
@@ -438,13 +443,24 @@ def import_chronic(db, rows, report: ImportReport, ctx: ImportContext) -> None:
             continue
         if _dup_in_batch(seen_batch, (patient_id, disease), line_no, report, row, "患者 + 病种"):
             continue
-        if (patient_id, disease) in existing:
+        known = existing.get((patient_id, disease))
+        if known is not None and known[1]:
             report.skipped += 1
             continue
         if not next_due:
             if disease not in suggested_due:
                 suggested_due[disease] = _suggest_next_due(db, disease)
             next_due = suggested_due[disease]
+        if known is not None:
+            # 修复前导入的档案到期日是空串（P2-888）：超期名单、到期扫描都按 `next_due != ""` 过滤，这些人从此不进任何到期
+            # 清单，同一份 CSV 重导按幂等键跳过也补不上。只补空值（`next_due = ''`，天然幂等），与新行同一个取法（文件里
+            # 给了用文件的，否则按病种随访周期建议）；补错了按同一份 CSV 改好到期日、先把这几行置回空串再导一次即可重算
+            report.filled += db.query(ChronicPatient).filter(
+                ChronicPatient.id == known[0], ChronicPatient.next_due == ""
+            ).update({ChronicPatient.next_due: next_due}, synchronize_session=False)
+            existing[(patient_id, disease)] = (known[0], next_due)
+            ctx.checkpoint()
+            continue
         db.add(
             ChronicPatient(
                 patient_id=patient_id,
