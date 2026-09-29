@@ -303,15 +303,27 @@ function spdReferralOps(r) {
 /** 发起上转的卡片内表单（P2-795）：村医手册写的是「在『转诊办理』里发起，写清理由」，原先这一页只有在途单的
  *  审核 / 到院 / 承接按钮，发起要回电脑上的管理端。患者从本人名下的在管档案里选（病种随档案带上），目标机构从
  *  县级机构里选（可空：不写目标的由审核环节定），理由必填。`prefill` 给「重新发起」用。 */
-async function openSpdReferralForm(card, patients, prefill = {}) {
+/* 患者下拉的选项：本人名下在管的档案。「重新发起」带来的那位不在这一页里时（名下超过 100 份、他建档早），照退回单上的
+   患者与病种补一项（P2-824）——原先预填落空，要在 100 项里自己找，找不到就发不了 */
+function spdReferralPatientOptions(patients, pick, prefill) {
+  const opts = patients.map((e) => ({ value: `${e.patient_id}|${e.program_code}`, name: e.patient_name || String(e.patient_id),
+    program: e.program_code }));
+  if (prefill.patient_id && !opts.some((o) => o.value === pick)) {
+    opts.unshift({ value: pick, name: prefill.patient_name || String(prefill.patient_id), program: prefill.program_code || "" });
+  }
+  return `<option value="">选择患者（本人名下在管）</option>` + opts.map((o) =>
+    `<option value="${esc(o.value)}"${o.value === pick ? " selected" : ""}>${esc(o.name)}（${esc(o.program)}）</option>`).join("");
+}
+
+async function openSpdReferralForm(card, patients, prefill = {}, mineQuery = "") {
   let counties;
   try { counties = await api("/api/organizations?level=county"); }
   catch (err) { $("#spd-msg").textContent = err.message; return; }
   const pick = `${prefill.patient_id || ""}|${prefill.program_code || ""}`;
   cardForm(card, "spd-ref-new-form", `
-    <select name="enrollment" required><option value="">选择患者（本人名下在管）</option>${patients.map((e) =>
-      `<option value="${e.patient_id}|${esc(e.program_code)}"${`${e.patient_id}|${e.program_code}` === pick ? " selected" : ""}>${
-        esc(e.patient_name || String(e.patient_id))}（${esc(e.program_code)}）</option>`).join("")}</select>
+    <input name="kw" placeholder="按姓名 / 证件号找患者（名下超过 100 份时用）">
+    <button type="button" class="ghost-btn" data-spd-ref-find>找</button>
+    <select name="enrollment" required>${spdReferralPatientOptions(patients, pick, prefill)}</select>
     <select name="target_org_id"><option value="">目标机构（可空）</option>${counties.map((o) =>
       `<option value="${o.id}"${o.id === prefill.target_org_id ? " selected" : ""}>${esc(o.name)}</option>`).join("")}</select>
     <textarea name="reason" rows="2" placeholder="转诊理由（血压 / 血糖控制情况、预警症状）" required>${esc(prefill.reason || "")}</textarea>`,
@@ -325,6 +337,19 @@ async function openSpdReferralForm(card, patients, prefill = {}) {
         direction: "up", target_org_id: f.target_org_id.value ? Number(f.target_org_id.value) : null,
         reason: f.reason.value.trim() });
     });
+  // 按姓名 / 证件号在本人名下在管的档案里找（P2-824）：下拉只装得下前 100 份，接口早就收 keyword
+  const form = card.querySelector(".spd-ref-new-form");
+  if (!form) return;
+  const find = async () => {
+    const kw = form.elements.kw.value.trim();
+    try {
+      const found = await api(`/api/spd/enrollments?limit=100&${mineQuery}${kw ? `&keyword=${encodeURIComponent(kw)}` : ""}`);
+      form.elements.enrollment.innerHTML = spdReferralPatientOptions(found, pick, prefill);
+      $("#spd-msg").textContent = found.length ? "" : "本人名下在管的档案里没有匹配的";
+    } catch (err) { $("#spd-msg").textContent = err.message; }
+  };
+  form.querySelector("[data-spd-ref-find]").onclick = find;
+  form.elements.kw.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); find(); } };   // 回车是找，不是提交
 }
 
 async function loadSpdReferral(box) {
@@ -332,10 +357,11 @@ async function loadSpdReferral(box) {
   const mine = me.is_village_doctor ? `village_doctor_id=${me.id}` : `doctor_user_id=${me.id}`;
   // 本人发起、被退回的单子单列（P2-795）：手册写「看退回理由，补材料后重新发起」，原先这一页只取在途的，
   // 退回的单子（已结束）从清单里消失，退回意见在手机上看不到
-  const [rows, rejected, patients] = await Promise.all([
-    api("/api/spd/referrals?open_only=true&limit=30"), api("/api/spd/referrals?status=rejected&limit=50"),
+  // 本人发起的由接口按发起人筛（P2-824）：原先取机构最新 50 张退回单、在这里按发起人挑，同机构别人的退回单一多，本人的
+  // 整段被挤掉
+  const [rows, myRejected, patients] = await Promise.all([
+    api("/api/spd/referrals?open_only=true&limit=30"), api("/api/spd/referrals?status=rejected&mine=true&limit=10"),
     api(`/api/spd/enrollments?limit=100&${mine}`)]);
-  const myRejected = rejected.filter((r) => r.initiator_id === me.id).slice(0, 10);
   box.innerHTML = `<div class="m-card" id="spd-ref-new-card">
       <button type="button" class="ghost-btn" data-spd-ref-new>发起上转</button>
     </div>` + (rows.map((r) => `<div class="m-card">
@@ -356,7 +382,7 @@ async function loadSpdReferral(box) {
     <button type="button" class="ghost-btn" data-spd-ref-again="${r.id}">重新发起</button>
   </div>`).join("") : "");
   box.querySelector("[data-spd-ref-new]").addEventListener("click", () =>
-    openSpdReferralForm(box.querySelector("#spd-ref-new-card"), patients));
+    openSpdReferralForm(box.querySelector("#spd-ref-new-card"), patients, {}, mine));
   box.querySelectorAll("[data-spd-reject-view]").forEach((b) => b.addEventListener("click", async () => {
     const note = b.closest(".m-card").querySelector("[data-spd-reject-note]");
     try {
@@ -367,7 +393,7 @@ async function loadSpdReferral(box) {
   }));
   box.querySelectorAll("[data-spd-ref-again]").forEach((b) => b.addEventListener("click", () => {
     const r = myRejected.find((x) => String(x.id) === b.dataset.spdRefAgain);
-    openSpdReferralForm(b.closest(".m-card"), patients, r);
+    openSpdReferralForm(b.closest(".m-card"), patients, r, mine);
   }));
   const bind = (attr, path, body) => box.querySelectorAll(`[${attr}]`).forEach((b) =>
     b.addEventListener("click", () => spdPost(path(b), body ? body() : null)));

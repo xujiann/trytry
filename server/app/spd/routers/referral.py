@@ -615,11 +615,15 @@ def list_referrals(
     current_org_id: int | None = None,
     initiator_org_id: int | None = None,
     open_only: bool = False,
+    mine: bool = False,
     offset: int = 0,
     limit: int = 100,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """转诊清单。`mine=true` 只列本人发起的（P2-824）：医生移动端「我发起的、被退回的」原先取机构最新 50 张退回单、在页面
+    上按发起人挑——同一机构别人的退回单一多，本人的整段被挤掉（`routers/portal.py` 的推送清单说明里写明的反例）；与任务
+    清单的 `mine` 同一个意思、与移动端工作台按发起人计数同一句。"""
     query = db.query(SpdReferralCase)
     if patient_id is not None:
         assert_patient_visible(db, user, patient_id, resource="spd_referral")
@@ -644,6 +648,8 @@ def list_referrals(
             query = query.filter(column == value)
     if open_only:
         query = query.filter(SpdReferralCase.status.notin_(_TERMINAL))
+    if mine:
+        query = query.filter(SpdReferralCase.initiator_id == user.id)
     rows = paginate(query.order_by(SpdReferralCase.id.desc()), response, offset, limit)
     return [{**_case_out(db, r), "actions": _case_actions(db, user, r)} for r in rows]
 

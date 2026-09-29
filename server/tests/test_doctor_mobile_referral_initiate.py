@@ -28,8 +28,9 @@ def test_发起上转从本人名下的在管患者里选_理由必填():
 
 def test_转诊办理页有发起入口_本人被退回的单子单列():
     page = _function("loadSpdReferral")
-    assert 'api("/api/spd/referrals?status=rejected&limit=50")' in page   # 修前只取在途的
-    assert "rejected.filter((r) => r.initiator_id === me.id)" in page
+    # 修前只取在途的；本人发起的由接口按发起人筛（P2-824：原先取机构最新 50 张再在页面上挑，本人的会被挤掉）
+    assert 'api("/api/spd/referrals?status=rejected&mine=true&limit=10")' in page
+    assert "initiator_id === me.id" not in page
     assert "`/api/spd/enrollments?limit=100&${mine}`" in page   # 与「我的患者」同一口径（P2-373）
     for attr in ("data-spd-ref-new", "data-spd-reject-view", "data-spd-ref-again"):
         assert attr in page, attr   # 修前一个都没有
