@@ -593,8 +593,10 @@ def build_variable_index(db: Session, period: str) -> dict[int, dict[str, float]
     rejected = grouped(
         Prescription, Prescription.org_id, Prescription.status == "rejected", *in_period(Prescription)
     )
+    # 在管慢病人数是期末存量：只设上界、不设下界（P2-766，与绩效考核的分母同一个取法）——原先查上个月也数着今天新建的档案
     chronic = row_dict(
         db.query(ChronicPatient.managed_by_org_id, func.count(ChronicPatient.id))
+        .filter(ChronicPatient.created_at < end_dt)
         .group_by(ChronicPatient.managed_by_org_id)
         .order_by(ChronicPatient.managed_by_org_id)
         .all()
