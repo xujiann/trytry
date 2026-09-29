@@ -251,6 +251,11 @@ class EduStatsOut(BaseModel):
     by_channel: dict[str, int]
 
 
+class InterventionRowOut(InterventionOut):
+    """干预清单的一行：多一个 `restorable`（已移除的这一条现在能不能恢复，与 `update_intervention` 同一判据，P2-796）。"""
+    restorable: bool
+
+
 class RevisitOut(BaseModel):
     id: int
     patient_id: int
@@ -266,6 +271,11 @@ class RevisitOut(BaseModel):
     actual_date: str
     # JSON 日志列：[{"at": 日期, "note": 说明}]，办理与超期扫描都会追加
     log: list[dict[str, Any]]
+
+
+class RevisitRowOut(RevisitOut):
+    """复诊清单的一行：多一个 `restorable`（已移除的这一条现在能不能恢复，与 `update_revisit` 同一判据，P2-796）。"""
+    restorable: bool
 
 
 class CaseReportTaskCreatedOut(BaseModel):
@@ -1006,7 +1016,7 @@ def create_interventions(
     return {"created": len(created), "ids": created}
 
 
-@router.get("/interventions", response_model=list[InterventionOut])
+@router.get("/interventions", response_model=list[InterventionRowOut])
 def list_interventions(
     response: Response,
     patient_id: int | None = None,
@@ -1032,7 +1042,18 @@ def list_interventions(
         p.id: p.name
         for p in db.query(Patient).filter(Patient.id.in_([r.patient_id for r in rows] or [0]))
     }
-    return [_intervention_out(r, names.get(r.patient_id, "")) for r in rows]
+    # 已移除的这一条现在能不能恢复（P2-796）：患者登记死亡、档案收尾时一并移除的，页面原先照给「恢复」，点了 409
+    return [{**_intervention_out(r, names.get(r.patient_id, "")),
+             "restorable": r.status == "removed" and not _intervention_restore_blocker(db, r)} for r in rows]
+
+
+def _intervention_restore_blocker(db: Session, record: SpdIntervention) -> str:
+    """已移除的干预为什么不能恢复：这份档案已结束（死亡 / 迁出 / 排除 / 结案）的返回状态的中文，能恢复返回空串。
+    `update_intervention` 的 409 与清单行的 `restorable` 共用这一句（P2-796）。"""
+    enrollment = db.get(SpdEnrollment, record.enrollment_id) if record.enrollment_id else None
+    if enrollment is not None and enrollment.status in ENROLLMENT_ENDED_STATUSES:
+        return ENROLL_STATUS_LABELS[enrollment.status]
+    return ""
 
 
 class InterventionUpdate(BaseModel):
@@ -1071,10 +1092,10 @@ def update_intervention(
         if "status" in changes:
             if record.status == "done":
                 raise HTTPException(status_code=409, detail="干预已办结，不能再改状态")
-            if (record.status == "removed" and changes["status"] != "removed"
-                    and enrollment is not None and enrollment.status in ENROLLMENT_ENDED_STATUSES):
-                raise HTTPException(status_code=409, detail=(
-                    f"患者已不在管（{ENROLL_STATUS_LABELS[enrollment.status]}），干预不能恢复"))
+            ended = (_intervention_restore_blocker(db, record)
+                     if record.status == "removed" and changes["status"] != "removed" else "")
+            if ended:
+                raise HTTPException(status_code=409, detail=f"患者已不在管（{ended}），干预不能恢复")
         for key, value in changes.items():
             if key == "feedback" and not value:
                 continue
@@ -1319,7 +1340,7 @@ def create_revisit(
     return _revisit_out(record)
 
 
-@router.get("/revisits", response_model=list[RevisitOut])
+@router.get("/revisits", response_model=list[RevisitRowOut])
 def list_revisits(
     response: Response,
     patient_id: int | None = None,
@@ -1370,7 +1391,11 @@ def list_revisits(
         p.id: p.name
         for p in db.query(Patient).filter(Patient.id.in_([r.patient_id for r in rows] or [0]))
     }
-    return [_revisit_out(r, names.get(r.patient_id, "")) for r in rows]
+    # 已移除的这一条现在能不能恢复（P2-796）：与 `update_revisit` 同一判据（`_management_ended`），原先页面照给「恢复」，
+    # 患者登记死亡、档案收尾时一并移除的点了 409
+    return [{**_revisit_out(r, names.get(r.patient_id, "")),
+             "restorable": r.status == "removed" and not _management_ended(db, r.patient_id, r.program_code)}
+            for r in rows]
 
 
 def _management_ended(db: Session, patient_id: int, program_code: str) -> str:

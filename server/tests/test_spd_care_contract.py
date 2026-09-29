@@ -310,27 +310,28 @@ def test_干预新建列表与办理(client, h, base):
     i2 = second["ids"][0]
 
     rows = client.get(f"{B}/interventions", headers=h).json()
-    assert [list(r) for r in rows] == [INTERVENTION_KEYS] * 2
+    # 清单行比单条回执多一个 restorable（已移除的这一条现在能不能恢复，P2-796）
+    assert [list(r) for r in rows] == [INTERVENTION_KEYS + ["restorable"]] * 2
     assert rows == [
         {"id": i2, "patient_id": p2, "patient_name": "契约患者二",
          "enrollment_id": None, "program_code": "", "template_id": None,
          "goal": "控制体重", "content": "每周运动150分钟", "measures": "快走",
          "frequency": "每周3次", "next_at": next_at, "owner_id": rows[0]["owner_id"],
          "status": "planned", "feedback": "", "read_at": "",
-         "created_at": _iso(rows[0]["created_at"])},
+         "created_at": _iso(rows[0]["created_at"]), "restorable": False},
         {"id": i1, "patient_id": p1, "patient_name": "契约患者一",
          "enrollment_id": base["enrollment"]["id"], "program_code": "ctc_htn",
          "template_id": base["tpl"]["id"], "goal": "契约饮食干预", "content": "低盐饮食",
          "measures": "每日盐摄入<5g", "frequency": "每日",
          "next_at": (date.today() + timedelta(days=30)).isoformat(),
          "owner_id": rows[1]["owner_id"], "status": "planned", "feedback": "",
-         "read_at": "", "created_at": _iso(rows[1]["created_at"])},
+         "read_at": "", "created_at": _iso(rows[1]["created_at"]), "restorable": False},
     ]
 
     patched = client.patch(f"{B}/interventions/{i1}",
                            json={"status": "doing", "feedback": "已开始执行"}, headers=h)
     assert patched.status_code == 200
-    row = next(r for r in rows if r["id"] == i1)
+    row = {k: v for k, v in next(r for r in rows if r["id"] == i1).items() if k != "restorable"}
     assert patched.json() == {**row, "patient_name": "", "status": "doing",
                               "feedback": "已开始执行"}
 
@@ -420,7 +421,8 @@ def test_复诊计划新建列表与办理(client, h, base):
     }
 
     rows = client.get(f"{B}/revisits", params={"patient_id": pid}, headers=h).json()
-    assert rows == [{**created.json(), "patient_name": "契约患者一"}]
+    # 清单行比单条回执多一个 restorable（P2-796）
+    assert rows == [{**created.json(), "patient_name": "契约患者一", "restorable": False}]
 
     done = client.patch(
         f"{B}/revisits/{rid}",

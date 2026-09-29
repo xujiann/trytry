@@ -624,13 +624,13 @@ def test_居民服务申请受理(client, h, base):
     rows = client.get(f"{B}/service-applies", headers=h).json()
     assert [list(r) for r in rows] == [["id", "patient_id", "program_code", "note",
                                         "status", "handle_note", "created_at", "name",
-                                        "gender", "birth_date", "ehc_no", "phone"]]
+                                        "gender", "birth_date", "ehc_no", "phone", "acceptable"]]
     assert rows == [{
         "id": aid, "patient_id": base["p_apply"]["id"], "program_code": "ctp_dm",
         "note": "希望尽快纳管", "status": "pending", "handle_note": "",
         "created_at": _iso(rows[0]["created_at"]), "name": "契约人群三", "gender": "女",
         "birth_date": "1970-07-07", "ehc_no": base["p_apply"]["ehc_no"],
-        "phone": "13900030003",
+        "phone": "13900030003", "acceptable": True,   # 病种在用、待受理：能受理（P2-796）
     }]
 
     handled = client.post(f"{B}/service-applies/{aid}/handle",

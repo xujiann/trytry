@@ -350,6 +350,8 @@ class ServiceApplyOut(BaseModel):
     birth_date: str | None = None
     ehc_no: str | None = None
     phone: str | None = None
+    #: 待受理的这一条现在能不能受理（P2-796）：病种已停用 / 不在目录里的只能驳回（`handle_service_apply` 同一判据，P2-762）
+    acceptable: bool = False
 
 
 class ApplyHandledOut(BaseModel):
@@ -2051,11 +2053,14 @@ def list_service_applies(
         query = query.filter(SpdServiceApply.status == status)
     rows = paginate(query.order_by(SpdServiceApply.id.desc()), response, offset, limit)
     briefs = _patient_brief(db, [r.patient_id for r in rows])
+    # 受理按钮按 `acceptable` 摆（P2-796）：病种停用后页面原先照给「受理」，点了 409「……只能驳回」
+    problems = {code: unknown_program(db, code, active_only=True) for code in {r.program_code for r in rows}}
     return [
         {"id": r.id, "patient_id": r.patient_id, "program_code": r.program_code,
          "note": r.note, "status": r.status, "handle_note": r.handle_note,
          "created_at": r.created_at.isoformat(),
-         **(briefs.get(r.patient_id) or {})}
+         **(briefs.get(r.patient_id) or {}),
+         "acceptable": r.status == "pending" and not problems[r.program_code]}
         for r in rows
     ]
 
