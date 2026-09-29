@@ -934,14 +934,14 @@ def followup_context(
     encounters = (
         db.query(Encounter)
         .filter(Encounter.patient_id == record.patient_id)
-        .order_by(Encounter.id.desc())
+        .order_by(Encounter.created_at.desc(), Encounter.id.desc())   # 按就诊 / 入院时刻取最近几次（P2-846）：导入的历史
         .limit(10)
         .all()
     )
     admissions = (
         db.query(Admission)
         .filter(Admission.patient_id == record.patient_id)
-        .order_by(Admission.id.desc())
+        .order_by(Admission.admitted_at.desc(), Admission.id.desc())   # 记录编号更大，按编号会挤掉真正最近的
         .limit(5)
         .all()
     )

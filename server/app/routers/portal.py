@@ -810,7 +810,7 @@ def _build_archive(db: Session, patient: Patient) -> dict:
     encounters = (
         db.query(Encounter)
         .filter(Encounter.patient_id == patient.id)
-        .order_by(Encounter.id.desc())
+        .order_by(Encounter.created_at.desc(), Encounter.id.desc())   # 按就诊时刻取最近 50 次（P2-846，同 360）
         .limit(50)
         .all()
     )

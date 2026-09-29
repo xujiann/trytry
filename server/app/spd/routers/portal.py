@@ -323,7 +323,7 @@ def archive(
     encounters = (
         db.query(Encounter)
         .filter(Encounter.patient_id == patient.id)
-        .order_by(Encounter.id.desc())
+        .order_by(Encounter.created_at.desc(), Encounter.id.desc())   # 按就诊时刻取最近 30 次（P2-846）
         .limit(30)
         .all()
     )

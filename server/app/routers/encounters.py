@@ -83,7 +83,9 @@ def list_encounters(
         orgs = visible_org_ids(db, user)
         if orgs is not None:
             query = query.filter(Encounter.org_id.in_(orgs))
-    return paginate(query.order_by(Encounter.id.desc()), response, offset, limit)
+    # 按就诊时刻倒序、编号兜底（P2-846）：导入的历史就诊 created_at 是就诊日期、编号却排在上线之后，原先按编号倒序，
+    # 第一页全是几年前的导入记录
+    return paginate(query.order_by(Encounter.created_at.desc(), Encounter.id.desc()), response, offset, limit)
 
 
 # 360 视图每类记录的返回上限：与居民端 portal._build_archive 保持一致。
@@ -92,7 +94,11 @@ ARCHIVE_SECTION_LIMIT = 50
 
 
 def _section(query, limit: int = ARCHIVE_SECTION_LIMIT) -> tuple[list, bool]:
-    """取最近 limit 条，并判断是否还有更多（多取一条来判定，不额外做 count）。"""
+    """取最近 limit 条，并判断是否还有更多（多取一条来判定，不额外做 count）。
+
+    「最近」按业务时刻排（P2-846）：就诊、处方、结算的 created_at 就是就诊 / 开方 / 结算时刻（存量导入照写业务日期，
+    `scripts/import_legacy.py`），编号只是入库先后——上线后再导入的历史记录编号更大，原先按编号倒序，前 50 条全是几年前
+    的导入记录，真正最近的那次被截掉。编号只做同一时刻的兜底。"""
     rows = query.limit(limit + 1).all()
     return rows[:limit], len(rows) > limit
 
@@ -197,7 +203,8 @@ def patient_360_view(
         raise HTTPException(status_code=404, detail="患者不存在")
     assert_patient_visible(db, user, patient.id, resource="archive_360")
     encounters, encounters_more = _section(
-        db.query(Encounter).filter(Encounter.patient_id == patient.id).order_by(Encounter.id.desc())
+        db.query(Encounter).filter(Encounter.patient_id == patient.id)
+        .order_by(Encounter.created_at.desc(), Encounter.id.desc())
     )
     reports, reports_more = _section(
         db.query(ExamReport)
@@ -207,7 +214,8 @@ def patient_360_view(
     )
     chronic = db.query(ChronicPatient).filter(ChronicPatient.patient_id == patient.id).all()
     prescriptions, prescriptions_more = _section(
-        db.query(Prescription).filter(Prescription.patient_id == patient.id).order_by(Prescription.id.desc())
+        db.query(Prescription).filter(Prescription.patient_id == patient.id)
+        .order_by(Prescription.created_at.desc(), Prescription.id.desc())
     )
     checkups, checkups_more = _section(
         db.query(PhysicalExam).filter(PhysicalExam.patient_id == patient.id).order_by(PhysicalExam.id.desc())
@@ -218,7 +226,7 @@ def patient_360_view(
     settlements, settlements_more = _section(
         db.query(Settlement)
         .filter(Settlement.patient_id == patient.id)
-        .order_by(Settlement.id.desc())
+        .order_by(Settlement.created_at.desc(), Settlement.id.desc())
     )
     return {
         "section_limit": ARCHIVE_SECTION_LIMIT,
