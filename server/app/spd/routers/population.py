@@ -9,6 +9,7 @@
 所以三个阶段是三张表而不是一张表加状态列——一张表会让"筛查了几个人"
 和"管了几个人"变成同一个数字，而这两个数字在考核里是两条指标。
 """
+from contextlib import nullcontext
 from copy import deepcopy
 from datetime import date, timedelta
 from typing import Any, cast
@@ -1361,39 +1362,52 @@ def lifecycle_event(
     if cross_org and db.get(Organization, body.target_org_id) is None:
         raise HTTPException(status_code=404, detail="目标机构不存在")
 
-    event = SpdLifecycleEvent(
-        enrollment_id=enrollment_id, event=body.event, reason=body.reason,
-        detail=body.detail, target_org_id=body.target_org_id,
-        confirmed=not cross_org, operator_id=user.id,
-        occurred_at=body.occurred_at or clock.today().isoformat(),
-    )
-    db.add(event)
-
-    closed = {}
-    if not cross_org:
-        # 条件翻转（P2-344）：上面「已登记死亡」的预检是锁外读的，读到之后别人刚登记死亡并提交，原先这里照旧改成
-        # 排除 / 召回 / 迁出——死亡被盖掉，再「恢复」就把死者恢复成在管
-        if not move_row(db, SpdEnrollment, enrollment.id, SpdEnrollment.status != "dead",
-                        status=_EVENT_STATUS[body.event]):
-            db.rollback()
-            raise HTTPException(status_code=409, detail="已登记死亡的档案不可再登记生命周期事件")
-        db.refresh(enrollment)
-        # 收尾理由写事件中文名（P2-767）：原先拼成「death:心源性猝死」，落进被取消任务的审核意见、复诊日志与外呼撤回原因，
-        # 居民端健康任务与管理端任务详情照印
-        label = LIFECYCLE_EVENT_NAMES[body.event]
-        closed = close_open_work(db, enrollment, (f"{label}：{body.reason}" if body.reason else label)[:250])
-        if body.event == "death":
-            # 召回随死亡收尾（P2-260）：原先结案收尾不管召回记录——死者名下的召回照旧「待联系」，还能登记「已重新纳管」
-            ended = _end_open_recalls(db, enrollment.id, "患者已登记死亡，召回终止")
-            if ended:
-                closed["recalls"] = ended
+    # 还有没结束的召回，不再召回（P2-788）：原先照收——「召回」连点两下生出两条待联系召回，登记其中一条召回成功、档案恢复在管，
+    # 另一条照旧挂在待联系清单里、还能再登记一次「已召回」。上一次召回失败了的照样能重新发起（登记进度那里就是这么叫人做的）。
+    # 「有没有未结束的召回」与插召回记录压不进一条 SQL：圈进这份档案那一行的临界区，commit 也在块里（concurrency.serialized_on）
+    with serialized_on(db, SpdEnrollment, enrollment_id) if body.event == "recall" else nullcontext():
         if body.event == "recall":
-            db.add(
-                SpdRecall(
-                    enrollment_id=enrollment_id, reason=body.reason, operator_id=user.id
+            open_recall = db.query(SpdRecall.id).filter(
+                SpdRecall.enrollment_id == enrollment_id, SpdRecall.status.in_(RECALL_OPEN_STATUSES),
+            ).order_by(SpdRecall.id).first()
+            if open_recall is not None:
+                db.rollback()
+                raise HTTPException(status_code=409,
+                                    detail=f"该档案已在召回中（召回记录 {open_recall.id} 尚未结束），不能重复召回")
+
+        event = SpdLifecycleEvent(
+            enrollment_id=enrollment_id, event=body.event, reason=body.reason,
+            detail=body.detail, target_org_id=body.target_org_id,
+            confirmed=not cross_org, operator_id=user.id,
+            occurred_at=body.occurred_at or clock.today().isoformat(),
+        )
+        db.add(event)
+
+        closed = {}
+        if not cross_org:
+            # 条件翻转（P2-344）：上面「已登记死亡」的预检是锁外读的，读到之后别人刚登记死亡并提交，原先这里照旧改成
+            # 排除 / 召回 / 迁出——死亡被盖掉，再「恢复」就把死者恢复成在管
+            if not move_row(db, SpdEnrollment, enrollment.id, SpdEnrollment.status != "dead",
+                            status=_EVENT_STATUS[body.event]):
+                db.rollback()
+                raise HTTPException(status_code=409, detail="已登记死亡的档案不可再登记生命周期事件")
+            db.refresh(enrollment)
+            # 收尾理由写事件中文名（P2-767）：原先拼成「death:心源性猝死」，落进被取消任务的审核意见、复诊日志与外呼撤回原因，
+            # 居民端健康任务与管理端任务详情照印
+            label = LIFECYCLE_EVENT_NAMES[body.event]
+            closed = close_open_work(db, enrollment, (f"{label}：{body.reason}" if body.reason else label)[:250])
+            if body.event == "death":
+                # 召回随死亡收尾（P2-260）：原先结案收尾不管召回记录——死者名下的召回照旧「待联系」，还能登记「已重新纳管」
+                ended = _end_open_recalls(db, enrollment.id, "患者已登记死亡，召回终止")
+                if ended:
+                    closed["recalls"] = ended
+            if body.event == "recall":
+                db.add(
+                    SpdRecall(
+                        enrollment_id=enrollment_id, reason=body.reason, operator_id=user.id
+                    )
                 )
-            )
-    db.commit()
+        db.commit()
     return {
         "enrollment": _enroll_out(enrollment),
         "event_id": event.id,
