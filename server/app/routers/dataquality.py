@@ -162,8 +162,25 @@ def _check_critical_closed_loop(db: Session, rule: QcRule, model) -> list[tuple[
     ]
 
 
+def _day_of(value) -> str:
+    """与另一边比「哪一天」：落库时间戳是 naive UTC，先换本地日期（P2-714，与报卡迟报 P2-528 同一口径）；日期串取本身。"""
+    if isinstance(value, datetime):
+        return clock.to_local(value).date().isoformat()
+    return str(value)[:10]
+
+
+def _shown(value) -> str:
+    """违规文案里的时刻印本地时刻（P2-714）：原先印的是落库的 UTC，东八区看着差 8 小时。"""
+    return f"{clock.to_local(value):%Y-%m-%d %H:%M}" if isinstance(value, datetime) else str(value)
+
+
 def _check_datetime_order(db: Session, rule: QcRule, model) -> list[tuple[int, str]]:
-    """结束时间早于开始时间（结束为空视为进行中，不判违规）。"""
+    """结束时间早于开始时间（结束为空视为进行中，不判违规）。
+
+    两边都是时间戳按时刻比、都是日期串按串比；一边只到日期、一边是时间戳时按本地日期、日粒度比，同一天不算早于
+    （P2-714）。原先起止任一是字符串就整个按 `str()` 比：「下次随访日不得早于建档时间」里下次随访定在建档当天，
+    `"2026-09-20" < "2026-09-20 05:20:37"` 恒真；东八区 0–8 点报的卡落库是前一天的 UTC，被判「报告早于发病」。
+    """
     start_field = rule.config.get("start_field", "")
     end_field = rule.config.get("end_field", "")
     hits = []
@@ -173,17 +190,14 @@ def _check_datetime_order(db: Session, rule: QcRule, model) -> list[tuple[int, s
         # 按字符串比 `"" < "2026-…"` 恒真——每一条「进行中」的都被判成「结束早于开始」
         if start is None or end is None or _is_blank(start) or _is_blank(end):
             continue
-        if isinstance(start, str) or isinstance(end, str):
-            if str(end) < str(start):
-                hits.append((row.id, f"{end_field}（{end}）早于 {start_field}（{start}）"))
-            continue
-        if end < start:
-            hits.append(
-                (
-                    row.id,
-                    f"{end_field}（{end:%Y-%m-%d %H:%M}）早于 {start_field}（{start:%Y-%m-%d %H:%M}）",
-                )
-            )
+        if isinstance(start, datetime) and isinstance(end, datetime):
+            earlier = end < start
+        elif isinstance(start, datetime) or isinstance(end, datetime):
+            earlier = _day_of(end) < _day_of(start)
+        else:
+            earlier = str(end) < str(start)
+        if earlier:
+            hits.append((row.id, f"{end_field}（{_shown(end)}）早于 {start_field}（{_shown(start)}）"))
     return hits
 
 
@@ -194,7 +208,8 @@ def _check_date_not_future(db: Session, rule: QcRule, model) -> list[tuple[int, 
     for row in _scan(_fields_query(db, model, field), model):
         value = getattr(row, field, None)
         if isinstance(value, datetime):
-            value = value.date().isoformat()
+            # 本地日期比本地的今天（P2-714）：原先取 UTC 日期，东八区次日 0–8 点的时刻算成今天、漏报
+            value = _day_of(value)
         elif isinstance(value, date):
             value = value.isoformat()
         if _is_blank(value):
