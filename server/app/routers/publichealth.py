@@ -10,6 +10,7 @@ from ..datetypes import OptionalDateStr
 from ..texttypes import NON_BLANK
 from ..deps import get_current_user, require_roles
 from ..models import (
+    ChronicDiseaseType,
     ChronicPatient,
     HealthMonitorRecord,
     Organization,
@@ -176,11 +177,17 @@ def clinic_reminders(
         raise HTTPException(status_code=404, detail="患者不存在")
     cutoff = resolve_business_date(today).isoformat()
     reminders: list[dict] = []
-    for c in db.query(ChronicPatient).filter(ChronicPatient.patient_id == patient_id).all():
+    chronic = db.query(ChronicPatient).filter(ChronicPatient.patient_id == patient_id).all()
+    # 整句里写病种的中文名（P2-880，与 P2-767 / P2-73 同一句：不把英文码拼进给人看的文字）：原先印「hypertension 分级3级，
+    # 建议上转评估」「diabetes 随访已超期」；目录里没有的照旧印编码
+    disease_names = {t.code: t.name for t in db.query(ChronicDiseaseType).filter(
+        ChronicDiseaseType.code.in_([c.disease for c in chronic] or [""]))}
+    for c in chronic:
+        disease = disease_names.get(c.disease, c.disease)
         if c.next_due and c.next_due < cutoff:
-            reminders.append({"type": "chronic_followup_overdue", "detail": f"{c.disease} 随访已超期（应访日期 {c.next_due}）"})
+            reminders.append({"type": "chronic_followup_overdue", "detail": f"{disease} 随访已超期（应访日期 {c.next_due}）"})
         if c.level == 3:
-            reminders.append({"type": "chronic_high_risk", "detail": f"{c.disease} 分级3级，建议上转评估"})
+            reminders.append({"type": "chronic_high_risk", "detail": f"{disease} 分级3级，建议上转评估"})
         guidance = guidance_for(db, c.disease)
         if guidance:
             reminders.append({"type": "lifestyle_guidance", "detail": guidance})
