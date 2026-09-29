@@ -236,8 +236,9 @@ def test_任务新建回执27键与清单详情29键(client, auth, world):
                       params={"patient_id": world["patient"]["id"], "limit": 200},
                       headers=auth).json()
     mine = next(r for r in rows if r["id"] == body["id"])
-    assert list(mine.keys()) == TASK_KEYS + ["patient_name", "phone"]
-    assert mine == got
+    # 清单行在末尾多一个 claimable（P2-799，这位用户此刻点「接收」能不能成）；详情与动作类回执不带
+    assert list(mine.keys()) == TASK_KEYS + ["patient_name", "phone", "claimable"]
+    assert mine == {**got, "claimable": True}
     world["manual"] = body
 
 

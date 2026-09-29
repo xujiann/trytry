@@ -33,8 +33,24 @@ def test_已超期的任务接口照收接收(client, admin):
     assert claimed.status_code == 200 and claimed.json()["status"] == "claimed", claimed.text
 
 
-def test_任务中心与手机端同一口径给接收按钮():
+def test_任务中心与手机端同一口径给接收按钮(client, admin):
+    """任务中心的「接收」改按清单行的 `claimable` 摆（P2-799）：已超期、空着的照样给——口径落在后端的判据里。"""
+    from app.database import SessionLocal
+    from app.spd.models import SpdTask
+
+    org = client.post("/api/organizations", headers=admin, json={
+        "name": "P2600 卫生院（清单）", "org_type": "township", "level": "township"}).json()["id"]
+    patient = client.post("/api/patients", headers=admin, json={
+        "name": "P2600 患者（清单）", "id_card": "330106197206062618"}).json()["id"]
+    with SessionLocal() as db:
+        task = SpdTask(patient_id=patient, org_id=org, program_code="hypertension", task_type="followup",
+                       title="P2600 超期随访（清单）", status="overdue", due_date="2020-01-01")
+        db.add(task)
+        db.commit()
+        task_id = task.id
+    rows = client.get("/api/spd/tasks", headers=admin, params={"patient_id": patient, "limit": 50}).json()
+    assert {r["id"]: r["claimable"] for r in rows}[task_id] is True
     start = PAGE.index("function spdTaskActions(t) {")
     body = PAGE[start:PAGE.index("\n}\n", start)]
-    assert 'if (t.status === "pending" || t.status === "overdue") parts.push(b("data-task-claim", "接收"));' in body
+    assert 'if (t.claimable) parts.push(b("data-task-claim", "接收"));' in body
     assert '["pending", "overdue"].includes(t.status) ? b("data-spd-claim", "接收")' in MOBILE   # 手机端的口径

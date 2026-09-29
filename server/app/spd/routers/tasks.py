@@ -54,7 +54,7 @@ from ..service import (
     sweep_overdue_on_read,
     unknown_program,
 )
-from ...visibility import assert_org_writable, assert_patient_visible, visible_org_ids
+from ...visibility import assert_org_writable, assert_patient_visible, can_write_org, visible_org_ids
 
 router = APIRouter(
     prefix="/api/spd",
@@ -120,6 +120,15 @@ class TaskWithPatientOut(TaskOut):
 
     patient_name: str | None = None
     phone: str | None = None
+
+
+class TaskRowOut(TaskWithPatientOut):
+    """清单行再多一个 `claimable`：这位用户此刻点「接收」能不能成（P2-799，与 `claim_task` 同一判据现算，`_claimable`）。
+
+    只加在清单行上：详情与动作类端点的出参一字不动。原先页面只看状态摆「接收」，别人名下待接收的任务照样摆，点了必
+    409「该任务已由其他人员接收」——主管医生派生的任务在同事的任务中心里每一条都是这样。"""
+
+    claimable: bool = False
 
 
 class AdvanceResultOut(BaseModel):
@@ -734,7 +743,7 @@ def create_task(
     return _task_out(task)
 
 
-@router.get("/tasks", response_model=list[TaskWithPatientOut],
+@router.get("/tasks", response_model=list[TaskRowOut],
             response_model_exclude_unset=True)
 def list_tasks(
     response: Response,
@@ -787,7 +796,14 @@ def list_tasks(
         p.id: {"name": p.name, "phone": p.phone}
         for p in db.query(Patient).filter(Patient.id.in_([r.patient_id for r in rows] or [0]))
     }
-    return [_task_out(r, briefs.get(r.patient_id)) for r in rows]
+    return [{**_task_out(r, briefs.get(r.patient_id)), "claimable": _claimable(r, user)} for r in rows]
+
+
+def _claimable(task: SpdTask, user: User) -> bool:
+    """清单行的「接收」摆不摆：与 `claim_task` 同一判据——待接收 / 已超期、空着或本人名下、能以任务机构的名义写入
+    （`_load_task` 的归属校验）。真正放不放行仍以 `claim_task` 为准，这里不参与放行（P2-799）。"""
+    return (task.status in TASK_CLAIMABLE_STATUSES and task.assignee_id in (None, user.id)
+            and can_write_org(user, task.org_id))
 
 
 @router.get("/tasks/summary", response_model=TaskSummaryOut)

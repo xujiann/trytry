@@ -1915,7 +1915,8 @@ const SPD_INST_STATUS = {
 
 /** 任务行的操作按钮按状态给：待接收的能接收/分派，办理中的能提交/转派/上传佐证，
     待审核的只能审核，已结束的只剩详情。九个流转端点后端都还按角色（SERVICE_ROLES）
-    与机构归属再判一次——这里只是不把注定 409 的按钮摆出来。 */
+    与机构归属再判一次——这里只是不把注定 409 的按钮摆出来。「接收」按清单行的 `claimable` 摆（P2-799）：
+    状态之外还要空着或本人名下，页面不知道自己是谁，由后端按接收接口同一判据现算。 */
 function spdTaskActions(t) {
   const b = (attr, label) => `<button class="btn secondary" ${attr}="${t.id}">${label}</button>`;
   const parts = [b("data-task-detail", "详情")];
@@ -1925,8 +1926,8 @@ function spdTaskActions(t) {
     return parts.join(" ");
   }
   // 已超期的也能接收（P2-600）：接收接口收待接收与已超期（TASK_CLAIMABLE_STATUSES），医生手机端早就两种都给；
-  // 原先这里只给待接收——没人接、已超期的任务恰是最该有人去接的
-  if (t.status === "pending" || t.status === "overdue") parts.push(b("data-task-claim", "接收"));
+  // 原先这里只给待接收——没人接、已超期的任务恰是最该有人去接的。别人名下的不给（P2-799）：原先只看状态，点了必 409
+  if (t.claimable) parts.push(b("data-task-claim", "接收"));
   parts.push(b("data-task-assign", t.assignee_id ? "转派" : "分派"));
   parts.push(b("data-task-submit", "提交"));
   if (t.require_evidence) parts.push(b("data-task-evidence", "上传佐证"));
