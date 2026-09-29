@@ -309,6 +309,33 @@ def scale_problem(items: list, scoring: dict) -> str:
     return ""
 
 
+def scale_overlap_problem(scoring: dict) -> str:
+    """评分分段两两不重叠（P2-887），没问题返回空串。先过 `scale_problem`（分段是列表、上下限是数）再调。
+
+    `score_scale` 上下限都含、取第一个命中的段：照「0–3 低危 / 3–6 中危 / 6 起高危」写，压线的 3 分落进先写的低危、
+    6 分落进中危，同样三段倒过来写，3 分变中危、6 分变高危——同文件 `grade_abnormal` 的规矩是书写顺序不该决定分级。
+    只在建 / 改 / 发布量表时拦（配置的写入口），不进 `scale_problem`：那一句作答时也查，已发布的存量量表会整张作答不了；
+    存量的照常作答（压线的分照旧按书写顺序落段），出新版本时改。上下限按 `score_scale` 同一个读法（读不成数的算不封）。
+    """
+    def label(rng: dict) -> str:
+        low, high = rng.get("min"), rng.get("max")
+        if low is None and high is None:
+            return "不限"
+        return f"{low} 起" if high is None else f"{high} 及以下" if low is None else f"{low}–{high}"
+
+    ranges = [rng for rng in (scoring or {}).get("ranges", []) if isinstance(rng, dict)]
+    bounds = [(_as_number(rng.get("min")), _as_number(rng.get("max"))) for rng in ranges]
+    for i, (low_i, high_i) in enumerate(bounds):
+        for j in range(i + 1, len(bounds)):
+            low_j, high_j = bounds[j]
+            lows = [v for v in (low_i, low_j) if v is not None]
+            highs = [v for v in (high_i, high_j) if v is not None]
+            if not lows or not highs or max(lows) <= min(highs):
+                return (f"评分分段「{label(ranges[i])}」与「{label(ranges[j])}」有重叠（上下限都含）：压线的得分落进哪一段"
+                        "取决于书写顺序，请把相邻两段错开（如 0–3、4–6）")
+    return ""
+
+
 def score_scale(items: list[dict], answers: dict, scoring: dict) -> dict:
     """量表评分：按题目选项分值累加，再落到 scoring.ranges 给出风险等级与建议。
 

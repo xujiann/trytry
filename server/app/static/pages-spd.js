@@ -1842,7 +1842,7 @@ const SPD_SCALE_CATEGORY = { risk: "风险", stage: "分期", rehab: "康复", s
 const SPD_SCALE_STATUS = { draft: ["草稿", "orange"], published: ["已发布", "green"], disabled: ["已停用", ""] };
 
 /* 量表构建器（P2-93：建 / 改量表原先只有接口）。题目逐行：题干、单选 / 多选、选项写成「文字=分值」用 / 分隔；
- * 评分分段逐行：总分下限、上限（空 = 不封顶）、风险等级、建议。新建、「编辑草稿」（PATCH：编码、版本、病种不可改；
+ * 评分分段逐行：总分下限、上限（上下限都含，空 = 不封顶；相邻两段不能重叠，P2-887）、风险等级、建议。新建、「编辑草稿」（PATCH：编码、版本、病种不可改；
  * 已发布的量表后端 409，只能复制为新版本）、「复制为新版本」三处共用。题目的 key 载入时原样保留（历史作答按 key 记），
  * 新加的题取不重复的 q1、q2…… */
 function spdScaleBuilder(form, msgSel) {
@@ -1862,8 +1862,8 @@ function spdScaleBuilder(form, msgSel) {
   const addRange = (r = {}) => {
     const row = document.createElement("div");
     row.className = "inline scale-range";
-    row.innerHTML = `<input class="r-min" type="number" step="any" placeholder="总分下限" value="${esc(r.min ?? "")}" style="width:100px">
-      <input class="r-max" type="number" step="any" placeholder="上限（空 = 不封顶）" value="${esc(r.max ?? "")}" style="width:150px">
+    row.innerHTML = `<input class="r-min" type="number" step="any" placeholder="总分下限（含）" value="${esc(r.min ?? "")}" style="width:120px">
+      <input class="r-max" type="number" step="any" placeholder="上限（含；空 = 不封顶）" value="${esc(r.max ?? "")}" style="width:170px">
       <select class="r-risk">${Object.entries(SPD_RISK).map(([k, [name]]) => `<option value="${k}">${esc(name)}</option>`).join("")}</select>
       <input class="r-advice" placeholder="建议" value="${esc(r.advice || "")}" style="min-width:260px">`;
     if (r.risk) row.querySelector(".r-risk").value = r.risk;
