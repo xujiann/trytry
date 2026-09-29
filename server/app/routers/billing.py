@@ -659,8 +659,14 @@ def create_deposit(
         method=body.method,
         operator=user.full_name or user.username,
     )
-    db.add(deposit)
-    db.commit()
+    # 已办结算的住院不再收押金（P2-912，与计费 P1-141 同一句、同一把住院登记行锁）：押金只在建结算单那一刻冲抵一次，
+    # 结算之后预交的钱没有任何去处——居民端照旧显示待支付，收银按默认额（自付 − 冲抵）再收一遍，同一笔自付付两遍，
+    # 押金原样挂着。结算后该补缴的走统一支付
+    with serialized_on(db, Admission, body.admission_id):
+        if _inpatient_settlement_id(db, body.admission_id) is not None:
+            raise HTTPException(status_code=409, detail="该次住院已办理结算，不再收押金：应补缴的请走统一支付")
+        db.add(deposit)
+        db.commit()
     db.refresh(deposit)
     return _deposit_out(deposit, deposit_balance(db, body.admission_id))
 
