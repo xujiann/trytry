@@ -335,8 +335,17 @@ def test_呼叫结果两次回写_结果串与证据都追加_截断500(client, 
 
 
 def test_呼叫结果只回写待随访的记录(client, admin, world, followup_record):
-    """已完成的随访记录不再被外呼结果改写（临界区内按重读后的状态再判一次）。"""
+    """已完成的随访记录不再被外呼结果改写（临界区内按重读后的状态再判一次）。
+
+    呼叫在随访办结之前发起——办结之后不能再转呼叫（P2-761）；办结把待呼叫撤出队列（P2-498），网关那头已经打出去的
+    电话照旧回写一次结果，这一次不得改写已办结的随访。"""
     pid, rid = followup_record["patient"]["id"], followup_record["record"]["id"]
+    task = client.post(
+        "/api/spd/call-tasks",
+        json={"patient_id": pid, "ref_type": "followup", "ref_id": rid, "phone": "13800001111"},
+        headers=admin,
+    )
+    assert task.status_code == 201, task.text
     executed = client.post(
         f"/api/spd/followup-records/{rid}/execute",
         json={"answers": {}, "channel": "phone", "result": "随访完成"},
@@ -346,7 +355,12 @@ def test_呼叫结果只回写待随访的记录(client, admin, world, followup_
     done = _followup_record(client, admin, rid, pid)
     assert done["status"] == "done"
 
-    _call_back(client, admin, pid, rid, record_url="http://cdn/late.mp3", result="迟到的回写")
+    late = client.post(
+        f"/api/spd/call-tasks/{task.json()['id']}/result",
+        json={"status": "connected", "duration_s": 30, "record_url": "http://cdn/late.mp3", "result": "迟到的回写"},
+        headers=admin,
+    )
+    assert late.status_code == 200, late.text
     after = _followup_record(client, admin, rid, pid)
     assert after["result"] == done["result"] and after["evidence"] == done["evidence"]
 

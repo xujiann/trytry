@@ -50,9 +50,10 @@ from ..models import (
 )
 from ..reporting import compose_section, default_period_label
 from ..rules import RuleError, as_validated, grade_abnormal
-from ..service import (CALL_SETTLEABLE_STATUSES, adjust_followup_record, close_followup_record, followup_abnormal,
-                       answers_problem, followup_overdue, note_call_dispatch_failure, settle_call_task,
-                       plan_offsets, spawn_followup_abnormal_task, unknown_code, unknown_ids, unknown_program)
+from ..service import (CALL_SETTLEABLE_STATUSES, REVISIT_OPEN_STATUSES, adjust_followup_record, close_followup_record,
+                       followup_abnormal, answers_problem, followup_overdue, note_call_dispatch_failure,
+                       settle_call_task, plan_offsets, spawn_followup_abnormal_task, unknown_code, unknown_ids,
+                       unknown_program)
 from ...numtypes import INT4_MAX, INT4_MIN, non_finite_path
 from ...texttypes import NON_BLANK
 from ...visibility import assert_org_writable, assert_patient_visible, visible_org_ids
@@ -1192,12 +1193,26 @@ def create_call_task(
     # 挂的随访记录得是这位患者的（P2-296）：接通的回写按 ref_id 把沟通结果与录音地址追加进那条随访记录——患者甲的
     # 呼叫任务挂上患者乙的随访，甲的通话内容就进了乙的档案。只查会被回写的随访一类（与 `vaccine_supply` 关联接种
     # 记录同一口径：不存在 404、不是这位患者的 422）；复诊 / 宣教等只作引用、不回写
+    #
+    # 已结束的随访 / 复诊不再转呼叫（P2-761）：收尾时撤回待呼叫（P2-498 随访、P2-735 复诊）只撤当时已在队列里的——看板没
+    # 刷新时（别人刚登记死亡、居民刚自助答完、门诊当面办结）点一下「转呼叫」，原先又建出一条待呼叫，坐席照单打给已经随访过
+    # 的人、甚至死者家属。随访与执行同一句（失访的照收，还能补录）；复诊同一个口径，原先连存在都不查
     if body.ref_type == "followup" and body.ref_id is not None:
         record = db.get(SpdFollowupRecord, body.ref_id)
         if record is None:
             raise HTTPException(status_code=404, detail="随访记录不存在")
         if record.patient_id != body.patient_id:
             raise HTTPException(status_code=422, detail="随访记录不属于该患者")
+        if record.status in ("done", "removed"):
+            raise HTTPException(status_code=409, detail="该随访已结束")
+    elif body.ref_type == "revisit" and body.ref_id is not None:
+        revisit = db.get(SpdRevisit, body.ref_id)
+        if revisit is None:
+            raise HTTPException(status_code=404, detail="复诊计划不存在")
+        if revisit.patient_id != body.patient_id:
+            raise HTTPException(status_code=422, detail="复诊计划不属于该患者")
+        if revisit.status not in REVISIT_OPEN_STATUSES:
+            raise HTTPException(status_code=409, detail="该复诊已结束")
     phone = body.phone
     if not phone:
         patient = db.get(Patient, body.patient_id)

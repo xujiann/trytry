@@ -6,6 +6,9 @@
 
 修法：挂随访记录的，不存在 404、不是这位患者的 422（与关联接种记录同一口径）；复诊 / 宣教等只作引用、不回写，不在此列。
 与 P1-130（回写由谁来写，待裁定）是两件事：这里只管「挂得对不对」。
+
+2026-09-29 补：复诊自 P2-761 起按同一口径查——复诊收尾时撤回挂在它上面的待呼叫（P2-735），已结束的复诊不能再转呼叫，
+不存在 / 不是这位患者的也一并拦（见 `test_spd_call_task_ended_ref.py`）；宣教等别的引用照旧不查。
 """
 import pytest
 
@@ -52,5 +55,5 @@ def test_挂不存在的随访记录_404(client, admin, world):
 def test_挂自己的随访照常_不挂随访的引用照旧不查(client, admin, world):
     ok = _call(client, admin, world["jia"], world["rec_jia"])
     assert ok.status_code == 201, ok.text
-    revisit = _call(client, admin, world["yi"], 99999999, ref_type="revisit")
-    assert revisit.status_code == 201, revisit.text
+    edu = _call(client, admin, world["yi"], 99999999, ref_type="edu")
+    assert edu.status_code == 201, edu.text
