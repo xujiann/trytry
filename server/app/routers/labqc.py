@@ -12,11 +12,12 @@
 **与 `/api/mgmt/qc`（QcRecord）法域不同**：那是①-④共享中心的运行质量台账
 （人工登记合格/不合格），本模块是检验科室内质控的数值体系，互不替代。
 """
+import re
+from datetime import datetime
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field, FiniteFloat
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..concurrency import insert_or_conflict, move_row
@@ -24,6 +25,7 @@ from ..database import get_db
 from ..datetypes import OptionalDateTimeStr
 from ..texttypes import NON_BLANK
 from ..deps import get_current_user, paginate, require_roles
+from .. import clock
 from ..clock import now_local
 from ..models import Organization, QcLot, QcMeasurement, User, utcnow
 from ..visibility import assert_obj_org_writable, assert_org_visible, assert_org_writable, scope_org_list
@@ -72,9 +74,32 @@ def _verdict(warning: bool, out_of_control: bool, violated_rules: str) -> str:
     return f"失控 {violated_rules}" if out_of_control else "1-2s 警告" if warning else "在控"
 
 
-def _measured_key(column):
-    """测定时刻按字符串排序之前先把 `T` 换成空格：同一天里 `T` 排在空格之后（见 datetypes 时间戳一节）。"""
-    return func.replace(column, "T", " ")
+#: 测定时刻的宽松读法（P2-889）：规范写法之外，兜住 P1-100（09-24）之前自由文本框里手填的不补零、斜杠写法
+_LOOSE_MOMENT = re.compile(r"(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})(?:[ T](\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?")
+
+
+def _moment(value: str) -> str | None:
+    """测定时刻读成可比的 `YYYY-MM-DD HH:MM:SS`，读不成日期的返回 None。"""
+    matched = _LOOSE_MOMENT.fullmatch((value or "").strip())
+    if matched is None:
+        return None
+    year, month, day, hour, minute, second = (int(part) if part else 0 for part in matched.groups())
+    try:
+        return datetime(year, month, day, hour, minute, second).strftime("%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
+
+
+def _time_order(m: QcMeasurement) -> tuple[str, int]:
+    """测定点在时间上的先后（P2-687）：按测定时刻，同一时刻的按录入先后。
+
+    测定时刻原先按字符串比（只把 `T` 换成空格）：P1-100 之前测定时间是自由文本框，存量里「2026-9-20 8:30」这类不补零
+    的写法在第 6 位是 '9'，同一年里比任何补零的写法都「晚」（P2-889）——09-25 录的新点取不到它当上一点，真的 2-2s
+    只判成警告、检验报告照发；它自己反倒被当成「时间上的下一点」改判失控，L-J 图把它画在最新一端。现在按日历读：
+    不补零、斜杠写法照读；读不成日期的按录入时刻（本地）算，与留空按录入时刻同一个取法（P2-171）。一个批号的点数有限，
+    在 Python 里排。
+    """
+    return (_moment(m.measured_at) or clock.to_local(m.created_at).strftime("%Y-%m-%d %H:%M:%S"), m.id)
 
 
 # ---------- 批号维护 ----------
@@ -229,22 +254,15 @@ def create_measurement(
     # 东八区早上 7 点半留空录的点记成前一天 23:30，同一张清单里手填的与留空的差着 8 小时。
     # 与门急诊文书的记录时间缺省同一个取法（clock.now_local：给人看的时间字符串默认值）
     measured_at = body.measured_at or now_local().strftime("%Y-%m-%d %H:%M")
-    key = measured_at.replace("T", " ")
+    key = _moment(measured_at) or measured_at   # 入参已按 check_datetime 校验过，读得成
     # 2-2s / R-4s 比的是**时间上**相邻的两点（P2-687）。原先「上一点」按录入编号取：漏录的一次事后补录，补录点
     # 跟时间上更晚的那点比，之后录的点又跟补录点比——真的 2-2s 判成警告（不出失控处理的按钮、检验报告照发），
     # 或者凭空判出 R-4s。上一点取测定时刻不晚于本点的最后一个（同一时刻的，先录的在前）；补录插进了中间，
     # 时间上的下一点改跟本点比、重判——它还没处理时才改（处理过的失控点留着原判定与处理记录）
-    in_lot = db.query(QcMeasurement).filter(QcMeasurement.lot_id == lot.id)
-    prev = (
-        in_lot.filter(_measured_key(QcMeasurement.measured_at) <= key)
-        .order_by(_measured_key(QcMeasurement.measured_at).desc(), QcMeasurement.id.desc())
-        .first()
-    )
-    nxt = (
-        in_lot.filter(_measured_key(QcMeasurement.measured_at) > key)
-        .order_by(_measured_key(QcMeasurement.measured_at), QcMeasurement.id)
-        .first()
-    )
+    in_lot = sorted(((_time_order(m), m) for m in db.query(QcMeasurement).filter(QcMeasurement.lot_id == lot.id)),
+                    key=lambda pair: pair[0])
+    prev = next((m for (moment, _), m in reversed(in_lot) if moment <= key), None)
+    nxt = next((m for (moment, _), m in in_lot if moment > key), None)
     z = _z_score(body.value, lot.target_value, lot.sd)
     prev_z = _z_score(prev.value, lot.target_value, lot.sd) if prev is not None else None
     warning, out_of_control, violated = _westgard(z, prev_z)
@@ -291,14 +309,8 @@ def _latest_measurements(db: Session, lot_id: int, limit: int = 500) -> list[QcM
     而每次录入都在提示「尚有 N 个失控点未处理」。与体温单（P1-81）同一个「截断截错了端」（P2-157）。
     排序按测定时刻而不是录入编号：补录的点原先排在最后，L-J 图上的连线与 Westgard 判定用的相邻关系对不上。
     """
-    rows = (
-        db.query(QcMeasurement)
-        .filter(QcMeasurement.lot_id == lot_id)
-        .order_by(_measured_key(QcMeasurement.measured_at).desc(), QcMeasurement.id.desc())
-        .limit(limit)
-        .all()
-    )
-    return rows[::-1]
+    rows = sorted(db.query(QcMeasurement).filter(QcMeasurement.lot_id == lot_id).all(), key=_time_order)
+    return rows[-limit:]   # 先后按 `_time_order`（存量不补零的测定时刻按日历读，P2-889）
 
 
 # ---------- 失控处理 ----------
