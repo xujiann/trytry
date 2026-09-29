@@ -3221,6 +3221,10 @@ async function renderSpdFollowup() {
       route();
     } catch (err) { setMsg("#spd-fu-msg", err.message, false); }
   };
+  // 「只看超期」与状态不相与（P2-828）：后端 overdue=true 就是按「已超期」筛，再带状态是两个条件相与——「待随访 + 只看超期」
+  // 恒为空，而这一步扫描刚把那几条改成了超期，看的人以为没有超期的。勾上就把状态置灰（置灰的不进表单、不送）
+  const fuFilter = $("#spd-fu-filter");
+  fuFilter.overdue.onchange = () => { fuFilter.status.disabled = fuFilter.overdue.checked; };
   $("#spd-fu-filter").onsubmit = async (e) => {
     e.preventDefault();
     // 查询失败要说出来（P2-378）：原先 draw 抛错没人接，列表还是上一次的结果
@@ -3977,10 +3981,13 @@ async function renderSpdManager() {
     e.preventDefault();
     return postAction("/api/spd/revisits", formJson(e.target, ["patient_id"]), "#spd-revisit-msg");
   };
+  // 「只看逾期」与状态不相与（P2-828，与随访看板同一处理）：勾上就把状态置灰、不送——后端 overdue=true 就是按「逾期」筛
+  const revisitFilter = $("#spd-revisit-filter");
+  revisitFilter.overdue.onchange = () => { revisitFilter.status.disabled = revisitFilter.overdue.checked; };
   $("#spd-revisit-filter").onsubmit = async (e) => {
     e.preventDefault();
     const params = new URLSearchParams({ limit: 50 });
-    const status = e.target.status.value;
+    const status = e.target.overdue.checked ? "" : e.target.status.value;
     if (status) params.set("status", status);
     if (e.target.overdue.checked) params.set("overdue", "true");
     // 查询失败要说出来（P2-378）：原先 api() 抛错没人接，列表还是上一次的结果
