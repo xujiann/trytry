@@ -1638,7 +1638,8 @@ async function renderVaccineSupply() {
       let r;   // 查失败要说出来（P2-378）：原先 api() 抛错没人接，点了没反应
       try { r = await api(`/api/vaccine-supply/batches/${d.recipients}/recipients`); }
       catch (err) { return setMsg("#vb-msg", err.message, false); }
-      alert(`批号 ${r.batch_no}（${r.vaccine_name}）共 ${r.total} 名受种者\n` +
+      // total 是这一批的接种人次（同一人打两剂记两次，后端 docstring 原话），原先写成「名受种者」（P2-780）
+      alert(`批号 ${r.batch_no}（${r.vaccine_name}）共接种 ${r.total} 人次\n` +
             r.recipients.slice(0, 20).map((x) => `${x.patient_name}(#${x.patient_id}) 第${x.dose_no}剂 ${x.vaccinated_date}`).join("\n"));
     }
   };
