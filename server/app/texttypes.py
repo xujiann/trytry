@@ -17,6 +17,7 @@
 不许带它。前端 `shared.js` 的 `errorText` 认得这条 pattern，把 pydantic 的英文原话换成「不能只填空格」。
 """
 import re
+import unicodedata
 
 
 #: 必填文本至少要有一个非空白字符：`Field(min_length=1, max_length=N, pattern=NON_BLANK)`
@@ -30,3 +31,12 @@ _LIST_SEPARATORS = re.compile(r"[,，、]")
 def split_list(value: str | None) -> list[str]:
     """把界面 / 导入里「逗号分隔」的清单拆成去空白、去空项的列表；半角逗号、全角逗号、顿号都认（P1-137）。"""
     return [part.strip() for part in _LIST_SEPARATORS.split(value or "") if part.strip()]
+
+
+def code_key(value: str | None) -> str:
+    """编码的比对键：全角转半角（NFKC）、去首尾空白、大写（P1-218）。
+
+    **只用于比对，不改落库的值**（与上面 NON_BLANK「不替人 strip」同一个取舍：落库口径怎么定另是一件事）。药品编码、
+    疫苗编码这类「按编码找规则 / 找禁忌」的地方，原样比对时 `b01aa03`、`B01AA03 `、`Ｂ０１ＡＡ０３` 都等于「规则库里没有」
+    ——审方直接系统审通过、禁忌拦不住。比对两侧都过它，写法不同的同一个编码才认得出是同一个。"""
+    return unicodedata.normalize("NFKC", value or "").strip().upper()

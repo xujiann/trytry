@@ -24,7 +24,7 @@ from ..models import (
     PrescriptionItem,
     User,
 )
-from ..texttypes import split_list
+from ..texttypes import code_key, split_list
 from ..visibility import assert_org_writable
 from ..schemas import (
     SPECIAL_GROUP_NAMES,
@@ -89,12 +89,21 @@ def _patient_groups(db: Session, patient: Patient) -> set[str]:
 
 
 def _active_rule(db: Session, drug_code: str) -> DrugRule | None:
-    """取生效中的规则。停用的规则一律当作"未维护"，与规则不存在同路处理。"""
-    return (
+    """取生效中的规则。停用的规则一律当作"未维护"，与规则不存在同路处理。
+
+    编码原样对不上的，再按比对键（`texttypes.code_key`：全角转半角、去首尾空白、大写）找一遍（P1-218）：原先开方编码写成
+    `b01aa03`、`B01AA03 `、`Ｂ０１ＡＡ０３`，这味药就等于「规则库里没有」——超量、相互作用、禁忌诊断、特殊人群一律不判，
+    处方直接系统审通过、不进药师队列。原样命中的照旧（快路径），只在对不上时多认一种写法，审方只会更严、不会放过。"""
+    rule = (
         db.query(DrugRule)
         .filter(DrugRule.drug_code == drug_code, DrugRule.active.is_(True))
         .first()
     )
+    if rule is not None:
+        return rule
+    key = code_key(drug_code)
+    return next((r for r in db.query(DrugRule).filter(DrugRule.active.is_(True)).order_by(DrugRule.id)
+                 if code_key(r.drug_code) == key), None)
 
 
 def _rule_snapshot(rule: DrugRule | None) -> dict:
@@ -321,16 +330,17 @@ def create_prescription(
 
     violations: list[str] = []
 
-    # 同方重复药品编码 → 转药师审
+    # 同方重复药品编码 → 转药师审。按比对键判（P1-218）：同一张方里 `B01AA03` 与 `b01aa03` 并存原先不算重复
     codes = [item.drug_code for item in body.items]
-    duplicated = sorted({c for c in codes if codes.count(c) > 1})
-    for code in duplicated:
-        names = {item.drug_name for item in body.items if item.drug_code == code}
-        violations.append(f"同方重复药品：{'/'.join(sorted(names))}（{code}）出现多次，需药师人工审核")
+    keys = [code_key(c) for c in codes]
+    duplicated = sorted({k for k in keys if keys.count(k) > 1})
+    for key in duplicated:
+        names = {item.drug_name for item in body.items if code_key(item.drug_code) == key}
+        violations.append(f"同方重复药品：{'/'.join(sorted(names))}（{key}）出现多次，需药师人工审核")
 
     advisories: list[str] = []
     patient_groups = _patient_groups(db, patient)
-    names_by_code = {item.drug_code: item.drug_name for item in body.items}
+    names_by_key = {code_key(item.drug_code): item.drug_name for item in body.items}
     seen_pairs: set[frozenset[str]] = set()
     # 审方用的这一版规则，同一版随明细落库（P2-577）：之后规则再改，这张方怎么审的、按什么单位开的都回溯得到
     rules = {code: _active_rule(db, code) for code in dict.fromkeys(codes)}
@@ -343,15 +353,17 @@ def create_prescription(
                 f"{item.drug_name} 日剂量 {item.daily_dose}{rule.dose_unit} 超过上限 "
                 f"{rule.max_daily_dose}{rule.dose_unit}"
             )
-        # 相互作用审查：同一处方内出现冲突药对 → 转药师审并注明
-        conflict_codes = set(split_list(rule.interactions))
-        for other_code in conflict_codes & set(names_by_code) - {item.drug_code}:
-            pair = frozenset((item.drug_code, other_code))
+        # 相互作用审查：同一处方内出现冲突药对 → 转药师审并注明。两侧都按比对键认（P1-218）：原先华法林配小写的
+        # 阿司匹林 `b01ac06` 系统审通过
+        conflict_keys = {code_key(c) for c in split_list(rule.interactions)}
+        own_key = code_key(item.drug_code)
+        for other_key in conflict_keys & set(names_by_key) - {own_key}:
+            pair = frozenset((own_key, other_key))
             if pair in seen_pairs:
                 continue
             seen_pairs.add(pair)
             violations.append(
-                f"药物相互作用：{item.drug_name} 与 {names_by_code[other_code]} 存在相互作用，需药师人工审核"
+                f"药物相互作用：{item.drug_name} 与 {names_by_key[other_key]} 存在相互作用，需药师人工审核"
             )
         # 禁忌诊断审查：诊断名命中禁忌关键词 → 转药师审并注明
         # 清单按半角 / 全角逗号、顿号拆（P1-137）：导入 JSON 里写「妊娠，哺乳期」原先是一个词，这条禁忌从不触发
