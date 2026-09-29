@@ -22,7 +22,7 @@ from .. import clock
 from ..clock import now_naive
 from ..concurrency import add_amount, ensure_present, insert_if_absent, serialized_on
 from ..numtypes import non_finite_path
-from .platform import diagnosis_codes, diagnosis_names, notify_user, patient_of, usable_or_none
+from .platform import diagnosis_codes, diagnosis_names, notify_user, patient_of, unusable_user, usable_or_none
 from .models import (
     SpdCallTask,
     SpdCandidate,
@@ -44,6 +44,7 @@ from .models import (
     SpdScale,
     SpdTarget,
     SpdTask,
+    SpdVillageDoctor,
 )
 from .rules import FIELD_SOURCES, evaluate, judge_level, scale_problem
 
@@ -963,8 +964,18 @@ def award_points(
 
     每日上限按"当天该规则已入账分值"算而不是"次数"：规则里配的是分值上限
     （`daily_limit` 单位是分），这样调整单次分值时不用同时调次数上限。
+
+    停用的账号、停用的村医档案不入账（P2-845，与 P2-663 同一口径——别处一律把停用村医当「已回收」）：村医离岗后他签约
+    的档案仍挂着他，接手的人办结随访、上报异常、有效上转，积分原先照记给已停用的村医，工作量与考核跟着算他的。停用
+    期间的这些积分该记给谁（不记，还是记实际办理人）随 P2-840 待裁定；两个选项都不该记给停用的人，这里只做不记。
+    没有村医档案的账号不看档案（P2-663 同一句）。
     """
     if user_id is None:
+        return None
+    if unusable_user(db, user_id):
+        return None
+    profile = db.query(SpdVillageDoctor.active).filter(SpdVillageDoctor.user_id == user_id).first()
+    if profile is not None and not profile.active:
         return None
     # 同一事件配了几条启用的规则时取编号最小的那条（P2-693）：原先不排序，PG 上改过的行排到堆尾（P2-304 实测），
     # 改一下规则名称，同样的随访就从 3 分变成 5 分、每日上限也跟着换——与转诊规则试算、随访方案匹配同一个次序
