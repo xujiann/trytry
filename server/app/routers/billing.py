@@ -431,6 +431,11 @@ def create_bill_detail(
             raise HTTPException(status_code=404, detail="就诊记录不存在")
         if encounter.patient_id != body.patient_id:
             raise HTTPException(status_code=422, detail="就诊记录与患者不匹配")
+        # 住院类就诊（入院登记、FHIR 按 IMP 入站时建的）不按门诊计费（P2-911）：明细的规矩是「门诊按就诊、住院按住院
+        # 登记」（BillDetail 列注释）。原先照收——记在住院就诊号上的费用不进住院结算、出院不拦、住院费用清单与打印件都
+        # 没有它，还绕过了「该次住院已办理结算，不可再计费」（P1-141）；之后再按门诊结算掉，计进门诊统计
+        if encounter.encounter_type == "inpatient":
+            raise HTTPException(status_code=422, detail="这是住院类就诊：住院期间的费用请按住院号（admission_id）计费")
         assert_obj_org_writable(db, user, encounter)
     item = db.query(ChargeItem).filter(ChargeItem.code == body.item_code).first()
     if item is None:
@@ -910,6 +915,8 @@ def create_settlement(
         encounter = db.get(Encounter, body.encounter_id)
         if encounter is None:
             raise HTTPException(status_code=404, detail="就诊记录不存在")
+        if encounter.encounter_type == "inpatient":   # 与计费同一句（P2-911）：住院费用按住院号办住院结算
+            raise HTTPException(status_code=422, detail="这是住院类就诊：住院费用请按住院号办住院结算，不能按门诊结算")
         patient_id, org_id = encounter.patient_id, encounter.org_id
         gate_model = Encounter
         gate_id = body.encounter_id

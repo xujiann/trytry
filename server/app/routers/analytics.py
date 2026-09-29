@@ -862,7 +862,8 @@ def drug_use(
         )
         .select_from(BillDetail)
         .join(Encounter, BillDetail.encounter_id == Encounter.id)
-        .filter(BillDetail.created_at >= start_dt, BillDetail.created_at < end_dt)
+        # 门诊口径排除住院类就诊（P2-911，与本文件门诊人次 P2-153 / P2-199 同一句）：存量里记在住院就诊号上的费用
+        .filter(BillDetail.created_at >= start_dt, BillDetail.created_at < end_dt, Encounter.encounter_type != "inpatient")
         .group_by(Encounter.org_id)
         .order_by(Encounter.org_id)
         .all()
