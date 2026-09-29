@@ -442,8 +442,8 @@ _GLUCOSE_UNIT_DIVISOR = {"mmol/l": 1.0, "mg/dl": 18.0}
 _FIELD_DISEASE = {"sbp": "hypertension", "dbp": "hypertension", "glucose": "diabetes"}
 
 
-class FhirObservationInboundOut(BaseModel):
-    """Observation 入站归档回执：`values` 的产地都经 `float(quantity)`，恒 float。"""
+class FhirObservationFiledOut(BaseModel):
+    """一个病种归档的一条随访：`values` 的产地都经 `float(quantity)`，恒 float。"""
 
     followup_id: int
     chronic_id: int
@@ -452,7 +452,19 @@ class FhirObservationInboundOut(BaseModel):
     level: int
 
 
-@router.post("/fhir/Observation", status_code=201, response_model=FhirObservationInboundOut)
+class FhirObservationInboundOut(FhirObservationFiledOut):
+    """Observation 入站归档回执。
+
+    血压、血糖一起报的按病种各归各的档案（P2-848）：顶层是第一个归档的病种，其余归档了的病种在 `others`，没有档案、
+    没归档的病种在 `unfiled`。这两个键只在有值时出现（`response_model_exclude_unset`）——只报一个病种的回执字节不变。
+    """
+
+    others: list[FhirObservationFiledOut] = []
+    unfiled: list[str] = []
+
+
+@router.post("/fhir/Observation", status_code=201, response_model=FhirObservationInboundOut,
+             response_model_exclude_unset=True)
 def fhir_observation(
     resource: dict, db: Session = Depends(get_db), x_source_system: str = Header(default="")
 ):
@@ -523,32 +535,49 @@ def _do_fhir_observation(resource: dict, db: Session):
     if not values:
         raise HTTPException(status_code=422, detail="未识别到支持的观测指标（血压/血糖 LOINC）")
 
-    disease = _FIELD_DISEASE[next(iter(values))]
-    chronic = (
-        db.query(ChronicPatient)
+    # 按指标归病种、各归各的档案（P2-848，`_FIELD_DISEASE` 本来就是「指标 → 随访归属档案」）：原先整条挂到第一个分量的
+    # 病种——血压 + 血糖一起报，血糖记进高血压档案、糖尿病档案不记也不分级（分量顺序反过来就反过来）；只有糖尿病档案的
+    # 患者连血糖一起 404。缺档案的那部分在回执里点名，不连累其余；一个都归不了的照旧 404
+    groups: dict[str, dict[str, float]] = {}
+    for field_name, value in values.items():
+        groups.setdefault(_FIELD_DISEASE[field_name], {})[field_name] = value
+    chronics = {
+        disease: db.query(ChronicPatient)
         .filter(ChronicPatient.patient_id == patient.id, ChronicPatient.disease == disease)
+        .order_by(ChronicPatient.id)
         .first()
-    )
-    if chronic is None:
-        raise HTTPException(status_code=404, detail=f"该患者无 {disease} 慢病档案，无法归档随访")
-
-    # `values` 是运行期按 LOINC 映射拼出来的字段字典，键名在类型上不可知；
-    # pydantic 会做校验，缺字段/多字段都会在这里报 422，不会静默走下去。
-    followup_in = FollowUpCreate(**cast(Any, values), guidance="HL7/FHIR 对接自动归档")
-    followup = FollowUp(chronic_id=chronic.id, **followup_in.model_dump())
-    new_level = _evaluate_level(db, chronic.disease, followup_in)
-    if new_level is not None:
-        chronic.level = new_level
-    db.add(followup)
-    db.commit()
-    db.refresh(followup)
-    return {
-        "followup_id": followup.id,
-        "chronic_id": chronic.id,
-        "disease": disease,
-        "values": values,
-        "level": chronic.level,
+        for disease in groups
     }
+    unfiled = [disease for disease, chronic in chronics.items() if chronic is None]
+    if len(unfiled) == len(groups):
+        raise HTTPException(status_code=404, detail=f"该患者无 {'、'.join(unfiled)} 慢病档案，无法归档随访")
+
+    filed = []
+    for disease, group in groups.items():
+        chronic = chronics[disease]
+        if chronic is None:
+            continue
+        # `group` 是运行期按 LOINC 映射拼出来的字段字典，键名在类型上不可知；
+        # pydantic 会做校验，缺字段/多字段都会在这里报 422，不会静默走下去。
+        followup_in = FollowUpCreate(**cast(Any, group), guidance="HL7/FHIR 对接自动归档")
+        followup = FollowUp(chronic_id=chronic.id, **followup_in.model_dump())
+        new_level = _evaluate_level(db, chronic.disease, followup_in)
+        if new_level is not None:
+            chronic.level = new_level
+        db.add(followup)
+        filed.append((disease, chronic, followup, group))
+    db.commit()
+    receipts = []
+    for disease, chronic, followup, group in filed:
+        db.refresh(followup)
+        receipts.append({"followup_id": followup.id, "chronic_id": chronic.id, "disease": disease,
+                         "values": group, "level": chronic.level})
+    out: dict[str, Any] = dict(receipts[0])
+    if receipts[1:]:
+        out["others"] = receipts[1:]
+    if unfiled:
+        out["unfiled"] = unfiled
+    return out
 
 
 # FHIR R4 Patient 是**外部标准形状**（identifier/name/telecom 皆为标准定义的嵌套
