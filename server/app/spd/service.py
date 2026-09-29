@@ -22,7 +22,8 @@ from .. import clock
 from ..clock import now_naive
 from ..concurrency import add_amount, ensure_present, insert_if_absent, serialized_on
 from ..numtypes import non_finite_path
-from .platform import diagnosis_codes, diagnosis_names, notify_user, patient_of, unusable_user, usable_or_none
+from .platform import (User, diagnosis_codes, diagnosis_names, notify_user, patient_of, unusable_user,
+                       usable_or_none)
 from .models import (
     SpdCallTask,
     SpdCandidate,
@@ -1022,7 +1023,7 @@ def award_points(
     return record
 
 
-def close_open_work(db: Session, enrollment: SpdEnrollment, reason: str) -> dict:
+def close_open_work(db: Session, enrollment: SpdEnrollment, reason: str, *, keep_org_id: int | None = None) -> dict:
     """终止一名患者在该病种下的全部未完成任务、路径、干预、复诊与随访。
 
     死亡 / 迁出 / 排除三处生命周期事件共用。**不删除记录**，只置为取消并写明理由：
@@ -1030,6 +1031,8 @@ def close_open_work(db: Session, enrollment: SpdEnrollment, reason: str) -> dict
 
     随访记录原先不在其中（P1-129）：死者名下计划好的随访照旧到期、被扫成超期，排在随访清单与超期数里。
     只收本机构（或没挂机构）的——迁入确认时目标机构自己的随访不能被原档案的结案带走；已完成、失访的是留痕，不动。
+
+    `keep_org_id`：迁入确认时传目标机构，它自己的医生排的同病种复诊不随原档案移除（P2-849，同上一句的复诊版）。
     """
     stats = {"tasks": 0, "instances": 0, "interventions": 0, "revisits": 0, "followups": 0}
     # 每一条都是条件翻转、按编号取（P2-114）：原先查出一批、逐条改内存、由调用方提交时才发 UPDATE（只有 `WHERE id = ?`），
@@ -1073,16 +1076,20 @@ def close_open_work(db: Session, enrollment: SpdEnrollment, reason: str) -> dict
         if _move_row(db, SpdIntervention, item.id, ("planned", "doing"), status="removed"):
             stats["interventions"] += 1
 
-    revisits = (
-        db.query(SpdRevisit)
-        .filter(
-            SpdRevisit.patient_id == enrollment.patient_id,
-            SpdRevisit.program_code == enrollment.program_code,
-            SpdRevisit.status.in_(REVISIT_OPEN_STATUSES),
-        )
-        .order_by(SpdRevisit.id)
-        .all()
+    revisit_query = db.query(SpdRevisit).filter(
+        SpdRevisit.patient_id == enrollment.patient_id,
+        SpdRevisit.program_code == enrollment.program_code,
+        SpdRevisit.status.in_(REVISIT_OPEN_STATUSES),
     )
+    if keep_org_id is not None:
+        # 迁入确认：目标机构自己排的复诊不随原档案收尾（P2-849）——原先待确认期间目标机构排好的复诊，一确认就成了「已移除」
+        # （日志「迁出至其他机构」、待呼叫一并撤掉），同一时候排的随访却留着。复诊表没有机构列，按复诊医生所在机构认；
+        # 没填医生的认不出是谁排的，照旧随原档案移除。死亡 / 排除 / 召回不传，照旧同病种一并移除
+        revisit_query = revisit_query.filter(or_(
+            SpdRevisit.doctor_user_id.is_(None),
+            SpdRevisit.doctor_user_id.not_in(select(User.id).where(User.org_id == keep_org_id)),
+        ))
+    revisits = revisit_query.order_by(SpdRevisit.id).all()
     removed_revisits: list[int] = []
     for revisit in revisits:
         # 日志是 JSON 列整体覆写（P2-708，与 `update_revisit` 同一处理）：锁住这一行、重读、再追加——原先拼的是整批载入时

@@ -1493,7 +1493,7 @@ def confirm_migration(
     event.confirmed = True
     event.confirmed_by = user.id
     enrollment.status = "migrated"
-    closed = close_open_work(db, enrollment, "迁出至其他机构")
+    closed = close_open_work(db, enrollment, "迁出至其他机构", keep_org_id=event.target_org_id)
 
     # 目标机构重建档案。唯一性是**部分唯一索引**（仅 status='active'）：
     # 原档案已置 migrated，不占键；若目标机构已有同病种在管档案则撞索引，
