@@ -1208,16 +1208,29 @@ def team_workbench(
 
     # 「我的」档案范围（按角色 + 病种），不带状态；在管的是其中 active 的那部分。「召回中」原先写成在管查询上再加
     # `status == 'recalled'`（P2-130）——active 且 recalled，恒 0；召回的患者又不在「在管」里，页面上哪儿都看不见
-    scope_query = db.query(SpdEnrollment)
-    if role == "case_manager":
-        scope_query = scope_query.filter(SpdEnrollment.manager_user_id == user.id)
-    elif role == "member":
-        scope_query = scope_query.filter(SpdEnrollment.doctor_user_id == user.id)
-    else:
-        scope_query = scope_query.filter(SpdEnrollment.team_id.in_(team_ids or [0]))
-    if program_code:
-        scope_query = scope_query.filter(SpdEnrollment.program_code == program_code)
+    def scope_of(entity) -> list:
+        conditions = [
+            entity.manager_user_id == user.id if role == "case_manager"
+            else entity.doctor_user_id == user.id if role == "member"
+            else entity.team_id.in_(team_ids or [0])
+        ]
+        if program_code:
+            conditions.append(entity.program_code == program_code)
+        return conditions
+
+    scope_query = db.query(SpdEnrollment).filter(*scope_of(SpdEnrollment))
     mine_query = scope_query.filter(SpdEnrollment.status == "active")
+    mine = aliased(SpdEnrollment)
+
+    def of_mine(patient_col, program_col, org_col=None):
+        """这条记录挂在我在管的某份档案上：同一患者、同一病种（没写病种的照旧算）；随访再看机构（档案机构或没挂机构，
+        与档案收尾 `close_open_work` 同一句）。原先只看患者号（P2-851）：高血压归东镇甲、糖尿病归西镇乙，乙排的复诊、
+        录的偏高血糖、今天到期的糖尿病随访都进了甲的「到期复诊 / 指标异常 / 到期随访」，甲打开随访是 403"""
+        conditions = [mine.patient_id == patient_col, mine.status == "active",
+                      or_(program_col == "", program_col == mine.program_code), *scope_of(mine)]
+        if org_col is not None:
+            conditions.append(or_(org_col.is_(None), org_col == mine.org_id))
+        return exists().where(*conditions)
 
     month_start = clock.today().replace(day=1).isoformat()
     # P1-51（同形状）：原先先 `mine_query.limit(5000)` 物化患者号，待评估 / 待入径 / 到期随访 / 到期复诊 /
@@ -1227,14 +1240,17 @@ def team_workbench(
     # 派生表而不是直接拿 Query 当 IN 的子查询：「死亡」那一项外层也查 spd_enrollments，
     # 直接嵌会被自动关联掉内层的 FROM
     my_patients = select(mine_query.with_entities(SpdEnrollment.patient_id).subquery().c.patient_id)
-    pending_assess = mine_query.filter(
-        ~exists().where(SpdAssessment.patient_id == SpdEnrollment.patient_id)
-    ).count()
-    pathed_enrollment = aliased(SpdEnrollment)
+    # 待评估：带了病种的按（患者, 病种）判（P2-851，与考核按病种跑分同一句，P2-690）——原先按患者名下有没有任何评估，
+    # 做了高血压评估，糖尿病档案带 `program_code=diabetes` 也不算待评估；不带病种照旧按人（P2-139 的按人口径）
+    assessed = (SpdAssessment.patient_id == SpdEnrollment.patient_id,
+                *((SpdAssessment.program_code == SpdEnrollment.program_code,) if program_code else ()))
+    pending_assess = mine_query.filter(~exists().where(*assessed)).count()
+    # 待建路径按这份档案自己有没有进行中 / 已完成的路径（P2-851）：路径实例本就挂在单份档案上，原先看的是患者名下任何
+    # 档案有没有任何状态的路径——高血压启动了路径，糖尿病档案就不算待建；已取消的也算「有路径」
     pending_path = mine_query.filter(
         ~exists().where(
-            pathed_enrollment.patient_id == SpdEnrollment.patient_id,
-            SpdPathInstance.enrollment_id == pathed_enrollment.id,
+            SpdPathInstance.enrollment_id == SpdEnrollment.id,
+            SpdPathInstance.status != "cancelled",   # 进行中 / 暂停 / 已完成都算有路径（不手写状态清单，P1-128 闸门）
         )
     ).count()
 
@@ -1268,24 +1284,24 @@ def team_workbench(
             "pending_path": pending_path,
             # 到期 = 没做完且日期不晚于今天——过了日期的已被扫描置为超期，只认 planned 就只剩今天的（P1-128）
             "due_followups": db.query(SpdFollowupRecord).filter(
-                SpdFollowupRecord.patient_id.in_(my_patients),
+                of_mine(SpdFollowupRecord.patient_id, SpdFollowupRecord.program_code, SpdFollowupRecord.org_id),
                 SpdFollowupRecord.status.in_(FOLLOWUP_OPEN_STATUSES),
                 SpdFollowupRecord.planned_at <= business_day.isoformat(),
             ).count(),
             "due_revisits": db.query(SpdRevisit).filter(
-                SpdRevisit.patient_id.in_(my_patients),
+                of_mine(SpdRevisit.patient_id, SpdRevisit.program_code),
                 SpdRevisit.status.in_(REVISIT_OPEN_STATUSES),
                 SpdRevisit.plan_date <= business_day.isoformat(),
             ).count(),
         },
         "alerts": {
             "abnormal_measure": db.query(SpdMeasurement).filter(
-                SpdMeasurement.patient_id.in_(my_patients),
+                of_mine(SpdMeasurement.patient_id, SpdMeasurement.program_code),
                 SpdMeasurement.level.in_(["high", "low"]),
                 SpdMeasurement.measured_at >= f"{month_start} 00:00:00",
             ).count(),
             "referrals": db.query(SpdReferralCase).filter(
-                SpdReferralCase.patient_id.in_(my_patients),
+                of_mine(SpdReferralCase.patient_id, SpdReferralCase.program_code),
                 SpdReferralCase.status.notin_(["closed", "rejected", "withdrawn"]),
             ).count(),
             "recall": scope_query.filter(SpdEnrollment.status == "recalled").count(),
