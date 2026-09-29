@@ -40,3 +40,12 @@ def code_key(value: str | None) -> str:
     疫苗编码这类「按编码找规则 / 找禁忌」的地方，原样比对时 `b01aa03`、`B01AA03 `、`Ｂ０１ＡＡ０３` 都等于「规则库里没有」
     ——审方直接系统审通过、禁忌拦不住。比对两侧都过它，写法不同的同一个编码才认得出是同一个。"""
     return unicodedata.normalize("NFKC", value or "").strip().upper()
+
+
+def text_key(value: str | None) -> str:
+    """文字的比对键：全角转半角（NFKC）、不分大小写（casefold）、去掉全部空白（P2-792）。
+
+    给「关键词在不在这段文字里」的子串比对用：DRG 的主诊断 / 主手术关键词、审方规则的禁忌诊断。原先按原样比，手术写成
+    `pci术` / `ＰＣＩ术`、诊断写成 `qt间期延长` / `ＱＴ间期延长` 都命中不了——经皮冠脉介入落进内科组，QT 延长的患者照开
+    阿奇霉素、系统审通过。关键词与被查的文字两侧都过它；同 `code_key`，只用于比对，不改落库的值。"""
+    return "".join(unicodedata.normalize("NFKC", value or "").casefold().split())

@@ -20,7 +20,7 @@ from ..visibility import scope_org_list
 from ..database import get_db
 from ..deps import get_current_user, require_admin, require_roles, resolve_business_date
 from ..models import Admission, CaseSummary, DrgGroup, Organization, User
-from ..texttypes import NON_BLANK, split_list
+from ..texttypes import NON_BLANK, split_list, text_key
 
 # 同组历史病例少于该数不做事中预警——3 个病例算出来的"均值"，预警的是噪声。
 MIN_BASELINE_CASES = 5
@@ -38,14 +38,23 @@ def _split(value: str) -> list[str]:
     return split_list(value)
 
 
+def _contains(text: str, keyword: str) -> bool:
+    """`text` 是已过 `text_key` 的病例文字；关键词归一后为空的（只有空白）不算命中。"""
+    key = text_key(keyword)
+    return bool(key) and key in text
+
+
 def _match_group(group: DrgGroup, diagnosis: str, operation: str) -> tuple[int, int] | None:
     """单组匹配打分。返回 (总分, 最长命中词长度)，不匹配返回 None。
 
     评分：每命中一个主诊断关键词 +10，每命中一个主手术关键词 +20（外科组权重更高），
     再加上最长命中关键词的字数作为细粒度区分（长词更具体，优先级更高）。
     """
-    dx_hits = [kw for kw in _split(group.keywords) if kw in diagnosis]
-    op_hits = [kw for kw in _split(group.procedure_keywords) if operation and kw in operation]
+    # 关键词与病例两侧都按比对键认（P2-792）：原先按原样找子串，`pci术`、`ＰＣＩ术`、`急诊Pci` 都命中不了「PCI」，
+    # 经皮冠脉介入落进内科组（权重 3.6 → 1.42）
+    diagnosis_key, operation_key = text_key(diagnosis), text_key(operation)
+    dx_hits = [kw for kw in _split(group.keywords) if _contains(diagnosis_key, kw)]
+    op_hits = [kw for kw in _split(group.procedure_keywords) if operation_key and _contains(operation_key, kw)]
     # 外科操作组：未命中主手术一律不得入组，避免内科保守治疗病例误入手术组
     if group.require_procedure and not op_hits:
         return None

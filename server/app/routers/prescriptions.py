@@ -24,7 +24,7 @@ from ..models import (
     PrescriptionItem,
     User,
 )
-from ..texttypes import code_key, split_list
+from ..texttypes import code_key, split_list, text_key
 from ..visibility import assert_org_writable
 from ..schemas import (
     SPECIAL_GROUP_NAMES,
@@ -341,6 +341,7 @@ def create_prescription(
     advisories: list[str] = []
     patient_groups = _patient_groups(db, patient)
     names_by_key = {code_key(item.drug_code): item.drug_name for item in body.items}
+    diagnosis_key = text_key(body.diagnosis_name)
     seen_pairs: set[frozenset[str]] = set()
     # 审方用的这一版规则，同一版随明细落库（P2-577）：之后规则再改，这张方怎么审的、按什么单位开的都回溯得到
     rules = {code: _active_rule(db, code) for code in dict.fromkeys(codes)}
@@ -366,9 +367,11 @@ def create_prescription(
                 f"药物相互作用：{item.drug_name} 与 {names_by_key[other_key]} 存在相互作用，需药师人工审核"
             )
         # 禁忌诊断审查：诊断名命中禁忌关键词 → 转药师审并注明
-        # 清单按半角 / 全角逗号、顿号拆（P1-137）：导入 JSON 里写「妊娠，哺乳期」原先是一个词，这条禁忌从不触发
+        # 清单按半角 / 全角逗号、顿号拆（P1-137）：导入 JSON 里写「妊娠，哺乳期」原先是一个词，这条禁忌从不触发。
+        # 两侧都按比对键认（P2-792）：诊断写成 `qt间期延长`、`ＱＴ间期延长` 原先命中不了禁忌「QT间期延长」，系统审通过
         for keyword in split_list(rule.contraindicated_diagnoses):
-            if keyword in body.diagnosis_name:
+            keyword_key = text_key(keyword)
+            if keyword_key and keyword_key in diagnosis_key:
                 violations.append(
                     f"禁忌诊断：{item.drug_name} 禁用于「{keyword}」相关诊断"
                     f"（本方诊断：{body.diagnosis_name}），需药师人工审核"
