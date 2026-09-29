@@ -85,6 +85,17 @@ def level_rules_problem(rules: dict) -> str:
             # 血压定成 1 级、不转诊——正是本函数要挡的「悄悄定错级」（P2-465）；PG 的 JSON 列还存不进去，直接 500
             if isinstance(value, float) and not math.isfinite(value):
                 return f"指标 {key} 的 {level} 阈值必须是有限的数（不能是 NaN / Infinity）"
+        # 阈值先后要与方向一致（P2-886）：3 级是更极端的一档（预置「≥160→3级，≥140→2级」；越低越危的严重精神障碍
+        # level3=3 < level2=6）。原先不查——照依从性那样写 level3 < level2 却漏写 direction，按缺省越高越危算，分级整个
+        # 倒过来（MMSE 28 定 3 级、5 定 1 级）；方向写对、阈值写反的，2 级永远到不了。与规则「介于」、量表分段倒置 422
+        # 同一句（P2-712）。存量写反的与 P1-125 同一口径：记随访时 422 说清楚，请在病种目录里改
+        level3, level2 = metric.get("level3"), metric.get("level2")
+        if level3 is not None and level2 is not None:
+            if metric.get("direction", "high") == "high" and level3 < level2:
+                return (f"指标 {key} 按越高越危（direction: high）算，3 级阈值 {level3:g} 不能低于 2 级阈值 {level2:g}；"
+                        "越低越危请写 direction: low")
+            if metric.get("direction") == "low" and level3 > level2:
+                return f"指标 {key} 按越低越危（direction: low）算，3 级阈值 {level3:g} 不能高于 2 级阈值 {level2:g}"
     if not isinstance(rules.get("require_all", True), bool):
         return "require_all 只能是 true / false"
     bad = non_finite_path(rules, "level_rules")   # 阈值之外原样透传的键同理（P2-466）
