@@ -1288,14 +1288,18 @@ async function renderSpdHome(box) {
     ${packages}`;
 }
 
-async function renderSpdMeasure(box) {
-  const rows = await authApi(`/api/portal/spd/measurements${spdQuery({ limit: 30 })}`);
-  const list = rows.map((r) => `<div class="m-card">
+async function renderSpdMeasure(box, days = 90) {
+  // 说出取数窗口（P2-830）：接口缺省只回近 90 天，原先空了就说「还没有记录」——最后一次测量在 90 天以前的居民，首页
+  // 「最新指标」照样有数，这一页却说没有。空了给「看近两年的」
+  const rows = await authApi(`/api/portal/spd/measurements${spdQuery({ limit: 30, days })}`);
+  const span = days >= 730 ? "近两年" : `近 ${days} 天`;
+  const list = rows.length ? `<p class="hint">${span}的记录（最新 30 条）</p>` + rows.map((r) => `<div class="m-card">
     ${kv("项目", esc(r.metric))}
     ${kv("数值", `${esc(r.value)}${esc(r.unit)} ${spdTagOf(SPD_LEVEL_TAGS, r.level)}`)}
     ${kv("来源", esc(r.source_name || r.source))}
     ${kv("时间", esc(r.measured_at.replace("T", " ").slice(0, 16)))}</div>`).join("")
-    || '<p class="empty">还没有记录，先添加一条吧</p>';
+    : days < 730 ? `<p class="empty">${span}没有记录 <button type="button" class="ghost-btn" data-spd-older>看近两年的</button></p>`
+      : '<p class="empty">近两年没有记录，先添加一条吧</p>';
   box.innerHTML = `
     <form id="spd-measure-form" class="m-card">
       <p class="hint">记录血压、血糖、体质指数、血氧等居家监测数据，系统会按管理目标判定是否达标</p>
@@ -1329,6 +1333,8 @@ async function renderSpdMeasure(box) {
       await loadSpd();
     } catch (err) { $("#spd-measure-msg").textContent = err.message; }
   });
+  const older = box.querySelector("[data-spd-older]");
+  if (older) older.addEventListener("click", () => renderSpdMeasure(box, 730));
 }
 
 async function renderSpdTasks(box) {

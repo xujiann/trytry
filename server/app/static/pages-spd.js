@@ -3783,7 +3783,9 @@ async function renderSpdMember() {
       t = await api(`/api/spd/measurements/trend?patient_id=${body.patient_id}`
         + `&metric=${encodeURIComponent(body.metric)}`);
     } catch (err) { return setMsg("#spd-meas-msg", err.message, false); }
+    // 说出取数窗口（P2-830）：缺省近 90 天，原先不说——最后一次测量在 90 天以前的，这里是一张空图
     $("#spd-meas-result").innerHTML = `
+      <p class="desc">近 ${t.days} 天${t.points.length ? "" : "没有这项指标的记录（更早的在上面的监测记录里按日期查）"}</p>
       ${barChart(t.points.map((p) => [p.label, p.avg]), { unit: t.latest?.unit || "" })}
       ${table(["时段", "均值", "最低", "最高", "次数"], t.points, (p) =>
         `<tr><td>${esc(p.label)}</td><td>${p.avg}</td><td>${p.min}</td>

@@ -146,6 +146,9 @@ class MeasurementTrendOut(BaseModel):
     total: int
     # 无数据时为 null——键永远在，不是条件键
     latest: CareMeasurementOut | None
+    # 取数窗口（天，P2-830）：缺省近 90 天、最多 730 天。原先不回显——最后一次测量在 90 天以前的患者看趋势是一张空图，
+    # 看的人以为没有记录。加在末尾，前面的键一字不动
+    days: int
 
 
 class CareAssessmentOut(BaseModel):
@@ -587,7 +590,8 @@ def measurement_trend(
     单个患者单个指标的量级（百条）在应用层聚合毫无压力。
     """
     assert_patient_visible(db, user, patient_id, resource="spd_measurement")
-    since = now_naive() - timedelta(days=max(min(days, 730), 1))
+    window = max(min(days, 730), 1)
+    since = now_naive() - timedelta(days=window)
     rows = (
         db.query(SpdMeasurement)
         .filter(
@@ -622,6 +626,7 @@ def measurement_trend(
         "level_distribution": levels,
         "total": len(rows),
         "latest": _measure_out(rows[-1]) if rows else None,
+        "days": window,
     }
 
 

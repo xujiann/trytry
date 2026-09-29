@@ -195,7 +195,7 @@ def test_监测趋势聚合(client, h, base):
     body = client.get(f"{B}/measurements/trend",
                       params={"patient_id": pid, "metric": "bp_sys"}, headers=h).json()
     assert list(body) == ["metric", "granularity", "points", "level_distribution",
-                          "total", "latest"]
+                          "total", "latest", "days"]   # days：P2-830 回显的取数窗口，加在末尾
     assert body == {
         "metric": "bp_sys",
         "granularity": "day",
@@ -208,13 +208,14 @@ def test_监测趋势聚合(client, h, base):
         "total": 3,
         "latest": _measure_row(base["m1"]["id"] + 2, pid, 120.5, "normal",
                                f"{d1}T10:00:00"),
+        "days": 90,
     }
     assert all(isinstance(p["avg"], float) for p in body["points"])
     # 无数据时 latest 是 null（键仍在，不是条件键）
     empty = client.get(f"{B}/measurements/trend",
                        params={"patient_id": pid, "metric": "nope"}, headers=h).json()
     assert empty == {"metric": "nope", "granularity": "day", "points": [],
-                     "level_distribution": {}, "total": 0, "latest": None}
+                     "level_distribution": {}, "total": 0, "latest": None, "days": 90}
 
 
 # ------------------------------------------------- 评估
