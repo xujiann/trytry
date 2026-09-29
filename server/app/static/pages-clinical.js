@@ -3074,7 +3074,9 @@ async function renderBilling() {
         return `<tr><td>${p.id}</td><td>${p.settlement_id}</td><td>${esc(p.channel_name)}</td><td>${p.amount}</td>
           <td>${p.refunded_amount || 0}</td><td>${statusTag(PAY_STATUS, p.status)}${p.fail_reason ? `<div style="font-size:12px;color:#b23c3c">${esc(p.fail_reason)}</div>` : ""}</td>
           <td style="font-size:12px">${esc(p.trade_no) || "—"}</td>
-          <td>${p.status === "paid" ? `<button class="btn secondary" data-refund="${p.id}">退款</button>` : "—"}</td></tr>`;
+          <td>${p.status === "paid" ? `<button class="btn secondary" data-refund="${p.id}">退款</button>` : ""}${
+            p.refunded_amount > 0 ? ` <button class="btn secondary" data-refunds="${p.id}">退款记录</button>` : ""}${
+            p.status !== "paid" && !(p.refunded_amount > 0) ? "—" : ""}</td></tr>`;
       })}`)
     + panel("日终对账", `
       <form class="inline" id="recon-form">
@@ -3182,7 +3184,7 @@ async function renderBilling() {
     } catch (err) { setMsg("#recon-msg", err.message, false); }
   };
   $("#page-body").onclick = async (e) => {
-    const { reprice, history, refund, printSettle, ciEdit } = e.target.dataset;
+    const { reprice, history, refund, refunds, printSettle, ciEdit } = e.target.dataset;
     try {
       if (printSettle) return await openPrintPage(`/api/print/settlements/${printSettle}`);
       if (ciEdit) {
@@ -3223,12 +3225,21 @@ async function renderBilling() {
       } else if (refund) {
         const form = await spdModal("支付退款（留空 = 全额退款，不得超可退余额）", [
           { name: "amount", label: "退款金额（元，留空为全额）" },
+          { name: "reason", label: "退款原因（记进逐笔退款流水，可留空）" },
         ]);
         if (!form) return;
         const body = form.amount ? { amount: Number(form.amount) } : {};
+        if (form.reason) body.reason = form.reason;
         const res = await api(`/api/billing/payments/${refund}/refund`, { method: "POST", body: JSON.stringify(body) });
         setMsg("#pay-msg", `退款成功 ${res.refund_amount} 元，退款单号 ${res.refund_no}`);
         route();
+      } else if (refunds) {
+        // 逐笔退款流水（P2-730）：原先退款单号只在上面那条提示里闪一次，多次部分退款只剩累计额
+        const rows = await api(`/api/billing/payments/${refunds}/refunds`);
+        setMsg("#pay-msg", rows.length
+          ? rows.map((r) => `${r.created_at.slice(0, 16).replace("T", " ")} 退 ${r.amount} 元（单号 ${r.refund_no || "—"}，${
+              r.operator_name || "—"}${r.reason ? `：${r.reason}` : ""}）`).join("；")
+          : "这张支付单没有逐笔退款记录（逐笔流水上线前的退款只有累计额）", true);
       }
     } catch (err) { setMsg("#bill-msg", err.message, false); }
   };

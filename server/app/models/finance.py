@@ -223,6 +223,26 @@ class PaymentOrder(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
+class PaymentRefund(Base):
+    """支付单的逐笔退款流水（P2-730）：每退成一笔追加一行，只增不改。
+
+    `PaymentOrder.refunded_amount` 仍是占额快照——判可退余额、并发占额都靠它；这张表回答「退过几笔、各多少、通道的退款
+    单号、谁退的、为什么退」。原先退款原因收下就丢、退款单号只在回执里回显一次，多次部分退款只剩累计额和最后一次时间：
+    患者说「只到账 30」时答不出是哪一笔，日终对账也没法与通道的退款流水逐笔对上。
+    """
+
+    __tablename__ = "payment_refunds"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    order_id: Mapped[int] = mapped_column(ForeignKey("payment_orders.id"), index=True)
+    amount: Mapped[float] = mapped_column(Money)
+    # 通道返回的退款单号：与通道退款流水逐笔对账的主键
+    refund_no: Mapped[str] = mapped_column(String(64), default="", index=True)
+    reason: Mapped[str] = mapped_column(String(256), default="")
+    operator_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
 class ReconciliationBatch(Base):
     """日终对账单：某自然日本地支付单与通道流水的比对结果汇总。"""
 

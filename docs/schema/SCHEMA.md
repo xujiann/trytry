@@ -1,7 +1,7 @@
 # SCHEMA（自动生成，勿手改）
 
 > 由 `server/scripts/dump_schema.py` 从 ORM 元数据生成。改了模型请重跑该脚本。
-> 表总数：**260**。类型/关系/迁移的解读见 `docs/DATA_MODEL.md`。
+> 表总数：**261**。类型/关系/迁移的解读见 `docs/DATA_MODEL.md`。
 
 ## access_logs
 
@@ -1853,6 +1853,19 @@
 - _index_ ix_payment_orders_settlement_id(settlement_id)
 - _index_ ix_payment_orders_status(status)
 - _index_ ix_payment_orders_trade_no(trade_no)
+
+## payment_refunds
+
+- `id` · INTEGER · PK · NOT NULL
+- `order_id` · INTEGER · NOT NULL · index · → payment_orders.id
+- `amount` · NUMERIC(14, 2) · NOT NULL
+- `refund_no` · VARCHAR(64) · NOT NULL · index
+- `reason` · VARCHAR(256) · NOT NULL
+- `operator_id` · INTEGER · NOT NULL · → users.id
+- `created_at` · DATETIME · NOT NULL · index
+- _index_ ix_payment_refunds_created_at(created_at)
+- _index_ ix_payment_refunds_order_id(order_id)
+- _index_ ix_payment_refunds_refund_no(refund_no)
 
 ## payroll_records
 

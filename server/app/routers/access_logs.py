@@ -95,6 +95,7 @@ RESOURCE_NAMES = {
     "billing": "费用明细与结算",
     "admission_bill": "住院费用清单",
     "deposit": "住院押金",
+    "payment_refund": "支付退款流水",
     "insurance": "医保结算",
     "referral_cert": "转诊证明",
     "special_disease": "特殊病种申报",

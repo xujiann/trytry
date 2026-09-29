@@ -57,6 +57,7 @@ from ..models import (
     InsuranceSettlement,
     Patient,
     PaymentOrder,
+    PaymentRefund,
     ReconciliationBatch,
     ReconciliationDiff,
     Settlement,
@@ -1724,9 +1725,56 @@ def refund_payment(
     order.refunded_at = utcnow()
     if order.refunded_amount >= round(order.amount, 2) - 1e-6:
         order.status = "refunded"  # 全额退回
+    refund_no = str(result.get("refund_no", ""))
+    # 逐笔记一行（P2-730）：原先原因收下就丢、退款单号只回显这一次，多次部分退款只剩累计额和最后一次时间。
+    # 与占额同一次提交——台账上有这笔钱，流水里就有这一行
+    db.add(PaymentRefund(order_id=order.id, amount=amount, refund_no=refund_no[:64], reason=body.reason,
+                         operator_id=user.id))
     db.commit()
     db.refresh(order)
-    return {**_payment_out(order), "refund_no": result.get("refund_no", ""), "refund_amount": amount}
+    return {**_payment_out(order), "refund_no": refund_no, "refund_amount": amount}
+
+
+class PaymentRefundRowOut(BaseModel):
+    id: int
+    order_id: int
+    amount: int | float
+    refund_no: str
+    reason: str
+    operator_name: str
+    created_at: str
+
+
+@router.get("/payments/{order_id}/refunds", response_model=list[PaymentRefundRowOut])
+def list_payment_refunds(
+    order_id: int, response: Response, offset: int = 0, limit: int = 200,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """支付单的逐笔退款流水（P2-730），最新在前：每笔的金额、通道退款单号、原因、经办、时间。
+
+    按支付单所挂结算单的患者判可见性并留痕，与住院押金流水（`list_deposits`）同一口径——退款流水是这位患者的收费记录。
+    本功能上线前的退款只有支付单上的累计额，拆不回逐笔。
+    """
+    order = db.get(PaymentOrder, order_id)
+    if order is None:
+        raise HTTPException(status_code=404, detail="支付单不存在")
+    settlement = db.get(Settlement, order.settlement_id)
+    if settlement is None:
+        raise HTTPException(status_code=404, detail="结算单不存在")
+    assert_patient_visible(db, user, settlement.patient_id, resource="payment_refund")
+    rows = paginate(
+        db.query(PaymentRefund).filter(PaymentRefund.order_id == order_id)
+        .order_by(PaymentRefund.id.desc()),
+        response, offset, limit,
+    )
+    names = {u.id: u.full_name or u.username
+             for u in db.query(User).filter(User.id.in_({r.operator_id for r in rows} or {0}))}
+    return [
+        {"id": r.id, "order_id": r.order_id, "amount": r.amount, "refund_no": r.refund_no, "reason": r.reason,
+         "operator_name": names.get(r.operator_id, ""), "created_at": r.created_at.isoformat()}
+        for r in rows
+    ]
 
 
 # ---------- 日终对账 ----------
