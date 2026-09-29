@@ -2492,6 +2492,9 @@ async function renderPublicHealth() {
   };
 }
 
+// 月度薪酬看的期间（P2-853）：切换后整页重画时记着，空串 = 最近一个有记录的月份
+let PAYROLL_PERIOD = "";
+
 async function renderHrFinance() {
   $("#page-desc").textContent = "人力资源（科室库/变动/合同/薪酬）、派驻下沉、财务集中核算与预算执行、物资出入库";
   const role = currentRole();
@@ -2500,7 +2503,16 @@ async function renderHrFinance() {
     api("/api/mgmt/employees"), api("/api/mgmt/secondments/stats"), api("/api/mgmt/finance/summary"),
     api("/api/mgmt/assets"), api("/api/mgmt/departments"), api("/api/mgmt/staff-contracts/expiring?days=60"),
     api("/api/organizations")]);
-  const payroll = isDirector ? await api("/api/mgmt/payroll").catch(() => null) : null;
+  // 月度薪酬按期间取（P2-853）：原先不带期间，「合计发放」是开账以来所有月份的总和、下面只列最近 500 行——面板叫
+  // 「月度薪酬」，P1-149 的修法与登记也都把它当「全县一个月发薪」的合计。缺省看最近一个有记录的月份，可切换
+  let payroll = null;
+  let payPeriod = PAYROLL_PERIOD;
+  if (isDirector) {
+    const all = payPeriod ? null : await api("/api/mgmt/payroll").catch(() => null);
+    if (!payPeriod && all && all.records.length) payPeriod = all.records.map((r) => r.period).sort().pop();
+    payroll = payPeriod
+      ? await api(`/api/mgmt/payroll?period=${encodeURIComponent(payPeriod)}`).catch(() => null) : all;
+  }
   const EST = { active: ["在岗", "green"], seconded: ["派驻中", "orange"], left: ["离职", ""] };
   const CHG_TYPES = { hire: "入职", regularize: "转正", transfer: "调动", leave: "离职" };
   const MV_TYPES = { inbound: "入库", issue: "领用", return: "归还", scrap: "报废" };
@@ -2555,7 +2567,9 @@ async function renderHrFinance() {
         <input name="perf_bonus" type="number" step="any" placeholder="绩效奖金" value="0">
         <input name="perf_coefficient" type="number" step="any" placeholder="绩效系数" value="1.0">
         <button>录入</button></form>
-      ${payroll ? `<p style="font-size:13px">合计发放：<b>${payroll.total_amount}</b> 元</p>${
+      <form class="inline" id="pay-filter"><label style="font-size:13px">查看期间
+        <input name="period" type="month" value="${esc(payPeriod)}"></label><button class="secondary">查看</button></form>
+      ${payroll ? `<p style="font-size:13px">${payPeriod ? `${esc(payPeriod)} ` : ""}合计发放：<b>${payroll.total_amount}</b> 元</p>${
         table(["ID", "员工", "期间", "基础", "绩效", "系数", "实发"], payroll.records, (r) =>
           `<tr><td>${r.id}</td><td>${r.employee_id}</td><td>${esc(r.period)}</td><td>${r.base_salary}</td>
            <td>${r.perf_bonus}</td><td>${r.perf_coefficient}</td><td><b>${r.total}</b></td></tr>`)}` : ""}`)}
@@ -2586,6 +2600,8 @@ async function renderHrFinance() {
   $("#fin-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/mgmt/finance", formJson(e.target, ["org_id", "amount"]), "#hrf-msg"); };
   $("#asset-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/mgmt/assets", formJson(e.target, ["org_id", "quantity"]), "#hrf-msg"); };
   $("#dept-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/mgmt/departments", formJson(e.target, ["org_id"]), "#hrf-msg"); };
+  const payFilter = $("#pay-filter");
+  if (payFilter) payFilter.onsubmit = (e) => { e.preventDefault(); PAYROLL_PERIOD = e.target.period.value; route(); };
   const payForm = $("#pay-form");
   if (payForm) payForm.onsubmit = (e) => { e.preventDefault(); postAction("/api/mgmt/payroll", formJson(e.target, ["employee_id", "base_salary", "perf_bonus", "perf_coefficient"]), "#hrf-msg"); };
   const budForm = $("#bud-form");
