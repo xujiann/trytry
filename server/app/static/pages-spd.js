@@ -529,17 +529,19 @@ async function renderSpdAdmin() {
           <input name="target_high" type="number" step="any" placeholder="上限" style="width:90px">
           <input name="unit" placeholder="单位" style="width:80px">
           <input name="qualitative" placeholder="定性目标描述">
+          <input name="followup_interval_days" type="number" min="1" max="3650" step="1"
+                 placeholder="随访周期（天，留空 90）" style="width:170px">
           <button>新增目标</button>
         </form>
-        ${table(["ID", "阶段", "指标", "名称", "类型", "下限", "上限", "单位", "定性", "操作"], rows, (t) =>
+        ${table(["ID", "阶段", "指标", "名称", "类型", "下限", "上限", "单位", "定性", "随访周期", "操作"], rows, (t) =>
           `<tr><td>${t.id}</td><td>${esc(t.stage || "—")}</td><td>${esc(t.metric)}</td><td>${esc(t.metric_name || "—")}</td>
            <td>${t.kind === "qualitative" ? "定性" : "定量"}</td><td>${t.target_low ?? "—"}</td><td>${t.target_high ?? "—"}</td>
-           <td>${esc(t.unit || "—")}</td><td>${esc(t.qualitative || "—")}</td>
+           <td>${esc(t.unit || "—")}</td><td>${esc(t.qualitative || "—")}</td><td>${t.followup_interval_days} 天</td>
            <td><button class="btn secondary" data-target-edit="${t.id}" data-prog="${programId}"
                 data-name="${esc(t.metric_name || "")}" data-unit="${esc(t.unit || "")}">编辑</button></td></tr>`)}`);
       $("#spd-target-form").onsubmit = async (e) => {
         e.preventDefault();
-        const body = formJson(e.target, ["target_low", "target_high"]);
+        const body = formJson(e.target, ["target_low", "target_high", "followup_interval_days"]);
         try {
           await api(`/api/spd/programs/${programId}/targets`, { method: "POST", body: JSON.stringify(body) });
           await showTargets(programId);
@@ -660,10 +662,17 @@ async function renderSpdAdmin() {
         { name: "target_high", label: "上限（数值，0 照改）", type: "text" },
         { name: "unit", label: "单位", value: targetEdit.dataset.unit },
         { name: "qualitative", label: "定性目标描述" },
+        // 随访周期（P2-856）：办结随访后下次随访日 = 今天 + 本阶段目标的周期；原先界面配不了，一律缺省 90 天
+        { name: "followup_interval_days", label: "随访周期（天，留空不改）", type: "text" },
       ]);
       if (!form) return;
       const body = {};
       if (form.metric_name) body.metric_name = form.metric_name;
+      if (form.followup_interval_days !== "") {
+        const days = Number(form.followup_interval_days);
+        if (!Number.isInteger(days) || days < 1) return setMsg("#spd-program-msg", "随访周期要填正整数天数", false);
+        body.followup_interval_days = days;
+      }
       for (const [k, label] of [["target_low", "下限"], ["target_high", "上限"]]) {
         if (form[k] === "") continue;
         if (!Number.isFinite(Number(form[k]))) return setMsg("#spd-program-msg", `${label}要填数值`, false);
