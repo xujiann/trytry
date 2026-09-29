@@ -3199,7 +3199,13 @@ async function renderBilling() {
            <td>${esc(d.amount)}</td><td>${d.settled ? `已结算（结算单 ${esc(d.settlement_id)}）` : '<span class="tag orange">未结清</span>'}</td></tr>`)}`;
     } catch (err) { setMsg("#bill-msg", err.message, false); }
   };
-  $("#settle-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/billing/settlements", formJson(e.target, ["admission_id", "encounter_id", "insurance_pay"]), "#bill-msg"); };
+  $("#settle-form").onsubmit = (e) => {
+    e.preventDefault();
+    // 只送结算类型对应的那个号（P2-913）：两个号框并排，报错后表单保留原值，换成门诊结算时上次填的住院号会一起送上去
+    const body = formJson(e.target, ["admission_id", "encounter_id", "insurance_pay"]);
+    delete body[body.bill_type === "inpatient" ? "encounter_id" : "admission_id"];
+    postAction("/api/billing/settlements", body, "#bill-msg");
+  };
   $("#pay-form").onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);

@@ -2066,7 +2066,8 @@ def portal_admission_bill(
 
     settlements = (
         db.query(Settlement)
-        .filter(Settlement.admission_id == admission_id)
+        # 只取住院结算（P2-913，与「我的住院」的结清判定同一句）：存量里带着这次住院号的门诊结算不是这次住院的钱
+        .filter(Settlement.admission_id == admission_id, Settlement.bill_type == "inpatient")
         .order_by(Settlement.id.desc())
         .all()
     )

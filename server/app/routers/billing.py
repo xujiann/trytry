@@ -905,6 +905,13 @@ def create_settlement(
        把"一次住院一张结算单"这条语义下沉到数据库——应用层的判定再怎么写，
        兜底也该在库里（同全域基金池 D-2、居民账户绑定的先例）。
     """
+    # 结算类型对不上的号不收（P2-913）：原先两个号都原样写进结算单——别人的门诊结算带上这次住院的住院号，就出现在
+    # 这次住院的居民端费用清单里；带一个不存在的住院号，写库撞外键被翻成「该住院记录已有结算单」409（P1-90 的规矩是
+    # 不存在 404、不翻成 409）。页面两个号框并排，报错后表单保留原值，换成门诊结算时上次填的住院号会一起送上来
+    if body.bill_type == "inpatient" and body.encounter_id is not None:
+        raise HTTPException(status_code=422, detail="住院结算按住院号结，不带就诊号（encounter_id）")
+    if body.bill_type == "outpatient" and body.admission_id is not None:
+        raise HTTPException(status_code=422, detail="门诊结算按就诊号结，不带住院号（admission_id）")
     if body.bill_type == "inpatient":
         if body.admission_id is None:
             raise HTTPException(status_code=422, detail="住院结算须提供 admission_id")
