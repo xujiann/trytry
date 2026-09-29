@@ -65,6 +65,11 @@ function spdPairs(obj, names) {
 
 // activeOnly：筛查 / 自动识别 / 建档这类「开新业务」的表单只列启用的病种——停用的病种
 // 后端一概拒（P1-89）；筛选栏仍列全部，看历史要用
+/** 逗号 / 顿号 / 空白分隔的一串拆成数组（危险因素、并发症这类 list[str] 字段，P2-858）。 */
+function spdSplitList(text) {
+  return String(text || "").split(/[，,、\s]+/).map((s) => s.trim()).filter(Boolean);
+}
+
 function spdProgramOptions(catalog, blank, activeOnly) {
   return (blank ? '<option value="">全部病种</option>' : "")
     + catalog.programs.filter((p) => !activeOnly || p.active)
@@ -1488,6 +1493,10 @@ async function renderSpdPatients() {
         <input name="sign_date" placeholder="签约日 YYYY-MM-DD">
         <input name="service_start" placeholder="服务起始 YYYY-MM-DD">
         <input name="service_end" placeholder="服务截止 YYYY-MM-DD">
+        <input name="risk_factors" placeholder="危险因素（逗号分隔，如 吸烟,肥胖）" style="min-width:210px">
+        <input name="complications" placeholder="并发症（逗号分隔）" style="min-width:150px">
+        <label style="font-size:13px"><input type="checkbox" name="consent_signed"> 已签知情同意</label>
+        <input name="consent_no" placeholder="同意书号" style="width:110px">
         <button>签约纳管</button>
       </form><p class="msg" id="spd-enroll-msg"></p>
       <form class="inline" id="spd-enroll-filter">
@@ -1662,10 +1671,13 @@ async function renderSpdPatients() {
   };
   $("#spd-enroll-form").onsubmit = (e) => {
     e.preventDefault();
-    return postAction("/api/spd/enrollments",
-      // 签约村医原先没有输入框（P1-217）：档案上的签约村医恒为空，移动端「签约居民」、考核「村医签约数」数成 0
-      formJson(e.target, ["patient_id", "org_id", "team_id", "doctor_user_id", "manager_user_id", "village_doctor_id"]),
-      "#spd-enroll-msg");
+    // 签约村医原先没有输入框（P1-217）：档案上的签约村医恒为空，移动端「签约居民」、考核「村医签约数」数成 0
+    const body = formJson(e.target, ["patient_id", "org_id", "team_id", "doctor_user_id", "manager_user_id",
+                                     "village_doctor_id"]);
+    // 危险因素 / 并发症 / 知情同意（P2-858）：原先界面录不了，「已建档」恒为 false、清单全是「待完善」，考核「建档完整率」恒 0
+    for (const k of ["risk_factors", "complications"]) if (body[k]) body[k] = spdSplitList(body[k]);
+    body.consent_signed = e.target.consent_signed.checked;
+    return postAction("/api/spd/enrollments", body, "#spd-enroll-msg");
   };
   $("#spd-enroll-filter").onsubmit = async (e) => {
     e.preventDefault();
@@ -1708,12 +1720,21 @@ async function renderSpdPatients() {
         // 服务期可补填、更正（P2-576）：改了起始日，在绑服务包的「有效期至」按绑包时的天数跟着重算
         { name: "service_start", label: "服务起始日 YYYY-MM-DD" },
         { name: "service_end", label: "服务截止日 YYYY-MM-DD" },
+        // 「先建档、后补签是常态」（`create_enrollment`）：后补的危险因素 / 并发症 / 知情同意在这里填（P2-858）
+        { name: "risk_factors", label: "危险因素（逗号分隔，整组替换）" },
+        { name: "complications", label: "并发症（逗号分隔，整组替换）" },
+        { name: "consent_signed", label: "知情同意", type: "select", value: "", options: [
+          { value: "", label: "（不改）" }, { value: "true", label: "已签" }, { value: "false", label: "未签" }] },
+        { name: "consent_no", label: "同意书号" },
       ]);
       if (!form) return;
       const body = { risk_level: form.risk_level };
       if (form.stage) body.stage = form.stage;
       for (const k of ["team_id", "doctor_user_id", "manager_user_id", "village_doctor_id"]) if (form[k]) body[k] = form[k];
       for (const k of ["next_followup_at", "service_start", "service_end"]) if (form[k]) body[k] = form[k];
+      for (const k of ["risk_factors", "complications"]) if (form[k]) body[k] = spdSplitList(form[k]);
+      if (form.consent_signed) body.consent_signed = form.consent_signed === "true";
+      if (form.consent_no) body.consent_no = form.consent_no;
       return postAction(`/api/spd/enrollments/${enrEdit.dataset.enrEdit}`, body, "#spd-enroll-msg", "PATCH");
     }
     if (enrBind) {
