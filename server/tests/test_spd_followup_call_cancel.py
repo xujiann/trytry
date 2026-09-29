@@ -127,4 +127,5 @@ def test_死亡结案_随访一并移除_外呼一并取消(client, admin, world
                        json={"event": "death", "reason": "病故"})
     assert resp.status_code == 200, resp.text
     assert resp.json()["closed"]["followups"] >= 1, resp.text
-    assert _call_state(waiting) == ("withdrawn", "随访随档案结束移除（death:病故），撤出待呼叫")   # 修前 pending
+    # 修前 pending；收尾理由写事件中文名（P2-767，原先「death:病故」）
+    assert _call_state(waiting) == ("withdrawn", "随访随档案结束移除（死亡：病故），撤出待呼叫")
