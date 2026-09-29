@@ -169,10 +169,11 @@ async function renderDrgs() {
              ${r.weight_range.min} ~ ${r.weight_range.max}</p>`
           : `<p class="msg">未匹配到任何分组——<b>事前不落兜底组</b>（兜底组是出院入组时保证
              每个病例都有归属用的，事前拿它当预测结果毫无信息量）。</p>`}
-        ${table(["编码", "MDC", "名称", "基准权重", "诊断命中", "手术命中"], r.candidates, (c) =>
+        ${table(["编码", "MDC", "名称", "基准权重", "匹配分", "最长命中词长"], r.candidates, (c) =>
           `<tr><td>${esc(c.code)}</td><td>${esc(c.mdc) || "—"}</td><td>${esc(c.name)}</td>
            <td>${c.base_weight}</td><td>${c.match_score.diagnosis_hits}</td>
            <td>${c.match_score.procedure_hits}</td></tr>`)}
+        <p class="desc">匹配分：每命中一个主诊断关键词 10 分、一个主手术关键词 20 分，再加最长命中词的字数；按匹配分排序。</p>
         <p class="desc">${esc(r.caliber)}</p>`;
     } catch (err) { $("#drg-pre").innerHTML = `<p class="msg err">${esc(err.message)}</p>`; }
   };
