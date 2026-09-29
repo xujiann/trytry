@@ -2091,8 +2091,9 @@ def test_回写通话结果由框自己提交_录音地址写超了框不关(pag
     rule = admin_call("POST", "/api/spd/followup-rules", {"code": "E2E_P2607_CALL", "name": "E2E 通话回写", "points": [0]})
     plan = admin_call("POST", "/api/spd/followup-plans", {
         "patient_id": seed["patient"]["id"], "rule_id": rule["id"], "org_id": seed["org"]["id"]})
-    call = admin_call("POST", "/api/spd/call-tasks", {
-        "patient_id": seed["patient"]["id"], "ref_type": "followup", "ref_id": plan["items"][0]["id"]})
+    call = admin_call("POST", "/api/spd/call-tasks", {   # 种子患者没留电话：转呼叫时带上号码（P2-881 起没号码 422）
+        "patient_id": seed["patient"]["id"], "ref_type": "followup", "ref_id": plan["items"][0]["id"],
+        "phone": "13800002607"})
 
     def status():
         return next(c for c in admin_read("/api/spd/call-tasks?limit=50") if c["id"] == call["id"])["status"]

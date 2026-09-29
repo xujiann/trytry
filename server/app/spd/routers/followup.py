@@ -1229,7 +1229,8 @@ def create_call_task(
     # 没有号码不建待呼叫（P2-881，与宣教短信没号码置失败同一句）：原先建出一条空号任务、回执「待人工外呼」、页面提示已转
     # 呼叫，台账里号码为空谁也拨不出去；电话补上之后再转呼叫，又被这条空号的待呼叫挡住 409
     if not (phone or "").strip():
-        raise HTTPException(status_code=422, detail="患者档案没有电话，无法外呼：先在档案里补上电话，或转呼叫时填写号码")
+        # 文案只说页面上做得到的（页面的「转呼叫」不带号码，请求体的 phone 只有接口调用方传得了）
+        raise HTTPException(status_code=422, detail="患者档案没有电话，无法外呼：请先在档案里补上电话")
     task = SpdCallTask(
         patient_id=body.patient_id, phone=phone, ref_type=body.ref_type,
         ref_id=body.ref_id, operator_id=user.id, status="pending",
