@@ -70,6 +70,21 @@ def legacy_date(value: str | None) -> str | None:
         return None
 
 
+# 时刻同理（P2-894）：P2-46 之前手术排班的时刻不卡形状，存量里有「8:00」「０８:００」这类写法，按字符串比排在一切规范
+# 时刻之后，冲突判定判不出重叠。同样**只给读存量用**
+_LEGACY_TIME = re.compile(r"(\d{1,2})[:：](\d{2})(?:[:：]\d{2})?")
+
+
+def legacy_time(value: str | None) -> str | None:
+    """库里存着的时刻读成 `HH:MM`：规范写法原样，不补零、全角、带秒的写法照读；读不成（含 24:00 这类一天里没有的时刻）
+    返回 None。"""
+    matched = _LEGACY_TIME.fullmatch((value or "").strip())
+    if matched is None:
+        return None
+    hour, minute = int(matched.group(1)), int(matched.group(2))
+    return f"{hour:02d}:{minute:02d}" if hour <= 23 and minute <= 59 else None
+
+
 def _check(value: object, *, allow_blank: bool) -> object:
     if isinstance(value, date):
         return value.isoformat()

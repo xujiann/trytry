@@ -12,6 +12,7 @@ from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
+from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -21,7 +22,7 @@ from ..visibility import assert_obj_org_writable, assert_org_writable, assert_pa
 from ..database import get_db
 from ..numtypes import INT4_MAX
 from ..texttypes import NON_BLANK
-from ..datetypes import DateStr, OptionalDateStr, OptionalDateTimeStr, TimeStr
+from ..datetypes import DateStr, OptionalDateStr, OptionalDateTimeStr, TimeStr, legacy_date, legacy_time
 from ..deps import get_current_user, paginate, require_admin, require_date, require_roles
 from ..notify import notify_patient
 from .followups import FOLLOWUP_TITLE_MAX
@@ -307,6 +308,24 @@ def approve_request(
 # ---------------------------------------------------------------- 排班
 
 
+def _canonical_date(model):
+    """日期列是规范的 `YYYY-MM-DD`（十个字符、第 5 / 8 位是 '-'）：按字符串比、等值查都可信的那些行。"""
+    return model.scheduled_date.like("____-__-__")
+
+
+def _occupies(s: "SurgerySchedule", body: "ScheduleIn") -> bool:
+    """这条已排的占不占新排的时段：同一天，且 `已排 start < 新 end`、`已排 end > 新 start`。
+
+    存量行按日历读（P2-894）：P1-61 / P2-46 之前日期、时刻都不卡形状，「2026-10-5」等值比不上「2026-10-05」、
+    「０８:００」按字符串比排在一切半角时刻之后——同一手术间同一时段又排进一台（与 P1-117 同一个后果）。时刻认不出
+    的按占满当天算：宁可拦下让人核对，也不把两台排进同一手术间。
+    """
+    if legacy_date(s.scheduled_date) != body.scheduled_date:
+        return False
+    start, end = legacy_time(s.start_time), legacy_time(s.end_time)
+    return start is None or end is None or (start < body.end_time and end > body.start_time)
+
+
 class ScheduleIn(BaseModel):
     room_id: int
     scheduled_date: DateStr
@@ -351,16 +370,17 @@ def schedule_surgery(
         raise HTTPException(status_code=422, detail="结束时间须晚于开始时间")
 
     with serialized_on(db, OperatingRoom, room.id):
-        conflict = (
+        # 同手术间当天的，加上日期不是规范写法的存量行（P2-894），逐条按日历读了再判重叠
+        candidates = (
             db.query(SurgerySchedule)
             .filter(
                 SurgerySchedule.room_id == body.room_id,
-                SurgerySchedule.scheduled_date == body.scheduled_date,
-                SurgerySchedule.start_time < body.end_time,
-                SurgerySchedule.end_time > body.start_time,
+                or_(SurgerySchedule.scheduled_date == body.scheduled_date, ~_canonical_date(SurgerySchedule)),
             )
-            .first()
+            .order_by(SurgerySchedule.start_time, SurgerySchedule.id)
+            .all()
         )
+        conflict = next((s for s in candidates if _occupies(s, body)), None)
         if conflict is not None:
             raise HTTPException(
                 status_code=409,
@@ -413,17 +433,26 @@ def list_schedules(
     query = db.query(SurgerySchedule, SurgeryRequest, OperatingRoom).join(
         SurgeryRequest, SurgerySchedule.request_id == SurgeryRequest.id
     ).join(OperatingRoom, SurgerySchedule.room_id == OperatingRoom.id)
+    # 日期不是规范写法的存量行（P1-61 之前存下的「2026-9-5」「2026/10/05」）按日历读了再筛再排（P2-894）：原先按字符串比，
+    # 「2026-9-5」同一年里比任何规范日期都「晚」，早过去的旧排班一直挂在「今天及以后」；查某一天也漏掉同一天的旧写法
+    today = clock.today().isoformat()
     if scheduled_date:
         # 等值匹配：`2026-9-1` 会让"这天没有手术排班"，不报错（P1-58）
         scheduled_date = require_date(scheduled_date, field="scheduled_date")
-        query = query.filter(SurgerySchedule.scheduled_date == scheduled_date)
+        query = query.filter(or_(SurgerySchedule.scheduled_date == scheduled_date, ~_canonical_date(SurgerySchedule)))
     else:
-        query = query.filter(SurgerySchedule.scheduled_date >= clock.today().isoformat())
+        query = query.filter(or_(SurgerySchedule.scheduled_date >= today, ~_canonical_date(SurgerySchedule)))
     if room_id is not None:
         query = query.filter(SurgerySchedule.room_id == room_id)
-    rows = query.order_by(
+    found = []
+    for s, r, room in query.order_by(
         SurgerySchedule.scheduled_date, SurgerySchedule.room_id, SurgerySchedule.start_time
-    ).limit(300).all()
+    ).all():
+        day = legacy_date(s.scheduled_date)
+        if day is not None and (day == scheduled_date if scheduled_date else day >= today):
+            found.append((day, s, r, room))
+    found.sort(key=lambda row: (row[0], row[1].room_id, legacy_time(row[1].start_time) or row[1].start_time))
+    rows = [(s, r, room) for _, s, r, room in found[:300]]
     return [
         {
             "id": s.id,
