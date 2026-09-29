@@ -1033,14 +1033,19 @@ function spdGroupMembersHtml(groupId, rows) {
 async function renderSpdCenter() {
   $("#page-desc").textContent =
     "统筹调度中枢：统一待办、目标池分发与认领、在途转诊、生命周期确认、上报任务配置";
-  const [wb, candidates, catalog, reportTasks, applies, recalls] = await Promise.all([
+  const [wb, candidates, catalog, reportTasks, applies, recentRecalls, pendingRecalls, contactedRecalls] = await Promise.all([
     api("/api/spd/workbench/center"),
     api("/api/spd/candidates?status=target&limit=50"),
     spdCatalog(),
     api("/api/spd/case-report-tasks"),
     api("/api/spd/service-applies?status=pending&limit=30"),
+    // 还在跟进的召回（待联系 / 已联系）单独取一遍、排在最前（P2-782）：原先只取最新 30 条，已召回 / 召回失败的一多，
+    // 还要「登记进度」的那几条就被挤出窗口
     api("/api/spd/recalls?limit=30"),
+    api("/api/spd/recalls?status=pending&limit=200"),
+    api("/api/spd/recalls?status=contacted&limit=200"),
   ]);
+  const recalls = actionableFirst(recentRecalls, pendingRecalls, contactedRecalls);
   // ADR-0009 第三批：面板外壳改用 `panel()`（定义见 core.js），迁一页、人工过一页。
   // 顶部的 spdCards 卡片区不是面板，原样保留。
   $("#page-body").innerHTML = `
@@ -1522,7 +1527,11 @@ async function renderSpdPatients() {
   syncScreenScales();
   $("#spd-screen-form select[name=program_code]").onchange = syncScreenScales;
   const drawScreenings = async () => {
-    const rows = await api("/api/spd/screenings?limit=30");
+    // 待复核的单独取一遍、排在最前（P2-782，与平台侧 P2-456 同一做法、共用 core.js 的 actionableFirst）：原先只取最新
+    // 30 条，按规则自动识别、登记筛查一多，早一点的疑似被挤出窗口——中心工作台「待复核筛查」有数，这一页上没有一行能点
+    const [recent, pending] = await Promise.all([
+      api("/api/spd/screenings?limit=30"), api("/api/spd/screenings?result=suspect&reviewed=false&limit=200")]);
+    const rows = actionableFirst(recent, pending);
     $("#spd-screen-list").innerHTML = table(
       ["ID", "患者", "病种", "来源", "得分", "风险", "结论", "复核", "操作"], rows, (s) =>
       `<tr><td>${s.id}</td><td>${esc(s.patient_name || s.patient_id)}</td>
@@ -1584,7 +1593,11 @@ async function renderSpdPatients() {
     };
   };
   const drawLifecycle = async () => {
-    const rows = await api("/api/spd/lifecycle-events?limit=20");
+    // 待确认的迁入单独取一遍、排在最前（P2-782）：原先只取最新 20 条，别家的排除 / 恢复一多，「确认迁入」就被挤出窗口，
+    // 工作台「待确认迁入」有数、这里没有按钮。已作废的（原档案已结束）没有可点的，不往前排
+    const [recent, pending] = await Promise.all([
+      api("/api/spd/lifecycle-events?limit=20"), api("/api/spd/lifecycle-events?event=migrate&confirmed=false&limit=200")]);
+    const rows = actionableFirst(recent, pending.filter((v) => !v.void_reason));
     $("#spd-life-list").innerHTML = table(
       ["ID", "档案", "患者", "事件", "原因", "发生日期", "确认", "操作"], rows, (v) =>
       `<tr><td>${v.id}</td><td>${v.enrollment_id}</td><td>${esc(v.patient_name || "")}</td>
@@ -2089,7 +2102,12 @@ async function renderSpdPath() {
 
   let lastTaskQuery = {};
   const drawInstances = async () => {
-    const rows = await api("/api/spd/path-instances?limit=20");
+    // 执行中 / 已暂停的单独取一遍、排在最前（P2-782）：原先只取最新 20 条，已完成 / 已取消的一多，还要「推进节点」「调整」
+    // 的实例就被挤出窗口
+    const [recent, running, paused] = await Promise.all([
+      api("/api/spd/path-instances?limit=20"), api("/api/spd/path-instances?status=running&limit=200"),
+      api("/api/spd/path-instances?status=paused&limit=200")]);
+    const rows = actionableFirst(recent, running, paused);
     $("#spd-inst-list").innerHTML = table(
       ["ID", "患者", "路径", "当前节点", "阶段", "进度", "状态", "操作"], rows, (i) =>
       `<tr><td>${i.id}</td><td>${esc(i.patient_name || i.patient_id || "")}</td>
@@ -2437,13 +2455,17 @@ function spdReferralRowOps(c) {
 async function renderSpdReferral() {
   $("#page-desc").textContent =
     "村医 → 乡镇卫生院 → 区市县医院三级转诊：分级审核、到院有效判定、下转随访接收闭环";
-  const [closure, cases, alerts, rules, catalog] = await Promise.all([
+  const [closure, recentCases, openCases, alerts, rules, catalog] = await Promise.all([
     api("/api/spd/referrals-stats/closure"),
+    // 在途的单独取一遍、排在最前（P2-782）：原先只取最新 30 条，已结案 / 已退回的一多，要审核、接收的单子就被挤出窗口——
+    // 「超时未推进」面板列出了单子，清单里却没有它的按钮
     api("/api/spd/referrals?open_only=false&limit=30"),
+    api("/api/spd/referrals?open_only=true&limit=200"),
     api("/api/spd/referrals-alerts?hours=48"),
     api("/api/spd/referral-rules"),
     spdCatalog(),
   ]);
+  const cases = actionableFirst(recentCases, openCases);
   $("#page-body").innerHTML = `
     ${spdCards([
       ["转诊总量", closure.total], ["计入闭环分母", closure.denominator],
@@ -2975,12 +2997,14 @@ const SPD_REPORT_SCOPES = { center: "专病中心", dept: "科室团队", grassr
 async function renderSpdFollowup() {
   $("#page-desc").textContent =
     "通用随访能力：方案规则与问卷、多时间点任务生成、多渠道执行、呼叫录音、抽查质控";
-  const [rules, questionnaires, stats, calls, qcSamples, catalog] = await Promise.all([
+  const [rules, questionnaires, stats, recentCalls, pendingCalls, qcSamples, catalog] = await Promise.all([
     // 问卷连停用的一起取（P2-294）：管理表要能把停用的再启用；新建方案的下拉只列启用的
     api("/api/spd/followup-rules"), api("/api/spd/questionnaires?include_inactive=true"),
-    api("/api/spd/followup-stats"), api("/api/spd/call-tasks?limit=20"),
+    // 待呼叫的单独取一遍、排在最前（P2-782）：原先只取最新 20 条，已接通 / 未接通的一多，还等回写的就被挤出窗口
+    api("/api/spd/followup-stats"), api("/api/spd/call-tasks?limit=20"), api("/api/spd/call-tasks?status=pending&limit=200"),
     api("/api/spd/qc-samples?limit=50"), spdCatalog(),
   ]);
+  const calls = actionableFirst(recentCalls, pendingCalls);
   // 关键词与时间点都是逗号分隔录入；关键词不按空格拆——诊断名里带空格的（「冠状动脉 粥样硬化」）拆开会各自命中一大片
   const keywordList = (text) => String(text || "").split(/[,，、;；]/).map((s) => s.trim()).filter(Boolean);
   const pointList = (text) => String(text || "").split(/[，,\s]+/).filter(Boolean).map(Number);
@@ -3553,19 +3577,27 @@ const SPD_REPORT_TYPE = { review: "复核", referral: "转诊", followup: "随�
 async function renderSpdMember() {
   $("#page-desc").textContent =
     "基层服务执行：监测录入与趋势、量表评估与统计、干预模板与批量干预、宣教推送、异常上报";
-  const [catalog, templates, materials, interventions, assessStats, eduStats, pushes,
-         reportTasks, reports, meta] = await Promise.all([
+  const [catalog, templates, materials, recentItv, plannedItv, doingItv, assessStats, eduStats, pushes,
+         reportTasks, recentReports, pendingReports, handlingReports, meta] = await Promise.all([
     spdCatalog(),
     api("/api/spd/intervention-templates"),
     api("/api/spd/edu-materials?limit=100"),
+    // 未办结的干预、待处置 / 处置中的上报单独取一遍、排在最前（P2-782）：原先各取最新 30 条，已办结 / 已移除、已办结的上报
+    // 一多，还要「办结」「处置」的就被挤出窗口
     api("/api/spd/interventions?limit=30"),
+    api("/api/spd/interventions?status=planned&limit=200"),
+    api("/api/spd/interventions?status=doing&limit=200"),
     api("/api/spd/assessments/stats"),
     api("/api/spd/edu-pushes/stats"),
     api("/api/spd/edu-pushes?limit=20"),
     api("/api/spd/case-report-tasks?active=true"),
     api("/api/spd/case-reports?limit=30"),
+    api("/api/spd/case-reports?status=pending&limit=200"),
+    api("/api/spd/case-reports?status=handling&limit=200"),
     spdMeta(),
   ]);
+  const interventions = actionableFirst(recentItv, plannedItv, doingItv);
+  const reports = actionableFirst(recentReports, pendingReports, handlingReports);
   const programOptions = spdProgramOptions(catalog, true);
   $("#page-body").innerHTML = `
     ${panel("监测数据录入（成员端 #12）", `
@@ -3849,11 +3881,14 @@ const SPD_REVISIT_SOURCE = { path: "路径生成", discharge: "出院计划", hi
 async function renderSpdManager() {
   $("#page-desc").textContent =
     "专属服务衔接：应答居民在线咨询并可转随访、复诊计划看板与邀约留痕、健康处方";
-  const [catalog, consults, revisits] = await Promise.all([
+  const [catalog, recentConsults, openConsults, revisits] = await Promise.all([
     spdCatalog(),
+    // 还开着的咨询单独取一遍、排在最前（P2-782）：原先只取最新 50 条，已关闭的一多，还等应答的就被挤出窗口
     api("/api/spd/consults?limit=50"),
+    api("/api/spd/consults?status=open&limit=200"),
     api("/api/spd/revisits?limit=50"),
   ]);
+  const consults = actionableFirst(recentConsults, openConsults);
   const programOptions = spdProgramOptions(catalog, true);
   $("#page-body").innerHTML = `
     ${panel("在线咨询（个案管理师端 #6）", `
