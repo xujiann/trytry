@@ -5,8 +5,10 @@
 移动端早在 P2-101 按状态给了（`spdReferralOps`），管理端没改。
 
 这里不抄一份状态表来对：对每个状态、每个动作真去调一遍接口，页面给不给这个按钮，必须恰好等于后端收不收（非 409）。
+
+P2-794 起页面不再自己按状态摆，改按清单行上后端现算的 `actions`（状态之外还看机构，按机构的那一半见
+`test_spd_referral_row_actions.py`）；这里以管理员（机构判据全放行）取 `actions`，对的仍是「状态」这一维。
 """
-import re
 from pathlib import Path
 
 import pytest
@@ -21,10 +23,10 @@ STATUSES = ["submitted", "station_reviewed", "township_reviewed", "accepted", "a
             "closed", "rejected", "withdrawn"]
 
 
-def _page_ops() -> dict[str, set[str]]:
-    block = re.search(r"const SPD_REF_OPS = \{(.*?)\};", SOURCE, re.S)
-    assert block, "pages-spd.js 里找不到 SPD_REF_OPS"
-    return {op: set(re.findall(r'"(\w+)"', statuses)) for op, statuses in re.findall(r"(\w+): \[([^\]]*)\]", block.group(1))}
+def _row_actions(client, headers, case_id: int) -> list[str]:
+    """清单行上后端给的 `actions`（页面按它摆按钮，P2-794）。"""
+    rows = client.get("/api/spd/referrals", headers=headers, params={"limit": 200}).json()
+    return {r["id"]: r["actions"] for r in rows}[case_id]
 
 
 @pytest.fixture(scope="module")
@@ -55,6 +57,7 @@ ACTIONS = {
     "arrive": lambda w: ("arrive", {}),
     "down": lambda w: ("down", {"target_org_id": w["county"]}),
     "recv": lambda w: ("receive-followup", {}),
+    "withdraw": lambda w: ("withdraw", None),
 }
 
 
@@ -62,19 +65,21 @@ ACTIONS = {
 @pytest.mark.parametrize("status", STATUSES)
 def test_页面给不给这个动作恰好等于后端收不收(client, admin, world, op, status):
     _set_status(world["case"], status)
+    offered = op in _row_actions(client, admin, world["case"])
     path, body = ACTIONS[op](world)
     resp = client.post(f"/api/spd/referrals/{world['case']}/{path}", headers=admin, json=body)
-    offered = status in _page_ops()[op]
     assert (resp.status_code != 409) == offered, (status, op, resp.status_code, resp.text)
     if offered:
         assert resp.status_code == 200, resp.text
 
 
 def test_退回与通过同一组状态_撤回只在进上级审核之前():
-    ops = _page_ops()
-    assert ops["withdraw"] == {"submitted", "station_reviewed"}   # 后端 withdraw 的守卫（发起人另判）
+    from app.spd.routers.referral import _ACTION_STATUSES
+
+    assert _ACTION_STATUSES["withdraw"] == ("submitted", "station_reviewed")   # 后端 withdraw 的守卫（发起人另判）
     row = SOURCE[SOURCE.index("function spdReferralRowOps(c)"):]
     row = row[:row.index("\n}\n")]
+    assert "const on = (op) => (c.actions || []).includes(op);" in row   # P2-794：按后端现算的动作摆，不再自己按状态摆
     assert 'on("review") ? `<button class="btn secondary" data-ref-pass=' in row
     assert "data-ref-reject" in row.split('on("arrive")')[0]   # 退回与通过挂同一个条件
     listing = SOURCE[SOURCE.index('table(["ID", "患者", "病种", "方向", "当前层级", "状态", "有效就诊", "操作"]'):]

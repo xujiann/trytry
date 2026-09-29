@@ -117,6 +117,12 @@ class ReferralCaseOut(BaseModel):
     closed_at: str
 
 
+class ReferralCaseRowOut(ReferralCaseOut):
+    """转诊清单的一行：比单据回执多一个 `actions`（这位用户此刻能做的动作，见 `_case_actions`，P2-794）。只加在清单上，
+    各写接口的回执照旧。"""
+    actions: list[str]
+
+
 class ReferralStepOut(BaseModel):
     id: int
     step: str
@@ -396,14 +402,19 @@ def _assert_review_authority(db: Session, user: User, case: SpdReferralCase) -> 
     （`parent_id` 为空）时，非全域账号无法推进——宁可要求先把机构树建好，也不放行
     "任意机构推任意单"这个越权面。
     """
-    if user.role in GLOBAL_ROLES:
-        return
-    current = db.get(Organization, case.current_org_id) if case.current_org_id else None
-    parent_id = current.parent_id if current else None
-    if user.org_id is None or parent_id is None or user.org_id != parent_id:
+    if not _can_review(db, user, case):
         raise HTTPException(
             status_code=403, detail="仅本单当前机构的上级机构可审核推进该转诊"
         )
+
+
+def _can_review(db: Session, user: User, case: SpdReferralCase) -> bool:
+    """审核权的判据本身（`_assert_review_authority` 与清单行上的 `actions` 共用，P2-794）。"""
+    if user.role in GLOBAL_ROLES:
+        return True
+    current = db.get(Organization, case.current_org_id) if case.current_org_id else None
+    parent_id = current.parent_id if current else None
+    return user.org_id is not None and parent_id is not None and user.org_id == parent_id
 
 
 def _assert_holds_case(user: User, case: SpdReferralCase) -> None:
@@ -417,10 +428,44 @@ def _assert_holds_case(user: User, case: SpdReferralCase) -> None:
     （admin/director，`org_id` 常为空）代驱动，锚点会滞留在发起机构——这类"中心代录"
     场景本就由全域角色兜底操作（下面直接放行），不受此处机构校验限制。
     """
-    if user.role in GLOBAL_ROLES:
-        return
-    if user.org_id is None or user.org_id != case.current_org_id:
+    if not _holds_case(user, case):
         raise HTTPException(status_code=403, detail="仅本单当前处理机构可执行该操作")
+
+
+def _holds_case(user: User, case: SpdReferralCase) -> bool:
+    """持有机构的判据本身（`_assert_holds_case` 与清单行上的 `actions` 共用，P2-794）。"""
+    return user.role in GLOBAL_ROLES or (user.org_id is not None and user.org_id == case.current_org_id)
+
+
+def _can_withdraw(user: User, case: SpdReferralCase) -> bool:
+    """撤回只有发起人本人（管理员 / 管理层代办放行）；`withdraw_referral` 与清单行上的 `actions` 共用（P2-794）。"""
+    return case.initiator_id == user.id or user.role in ("admin", "director")
+
+
+#: 清单行上的动作 → 后端收它的状态，与各端点的状态前置同一口径（页面按 `actions` 摆按钮，P2-794）。
+#: 动作名与页面按钮一一对应：review 通过 / 退回、arrive 到院、down 下转、recv 随访接收、withdraw 撤回
+_ACTION_STATUSES: dict[str, tuple[str, ...]] = {
+    "review": tuple(_NEXT),
+    "arrive": ("accepted",),
+    "down": ("accepted", "arrived"),
+    "recv": ("down_referred",),
+    "withdraw": ("submitted", "station_reviewed"),
+}
+
+
+def _case_actions(db: Session, user: User, case: SpdReferralCase) -> list[str]:
+    """这张单此刻**这位用户**能做的动作（P2-794）：状态之外还看机构——审核只有当前机构的直接上级，到院 / 下转 / 随访
+    接收只有当前持有机构，撤回只有发起人。页面原先只按状态摆，村医发起的上转单自己卡片上有「通过 / 退回」、县医院接收
+    之后村医卡片上有「登记到院」，点了都是 403。与 `_can_review` / `_holds_case` / `_can_withdraw` 同一判据现算。"""
+    ops = []
+    if case.status in _ACTION_STATUSES["review"] and _can_review(db, user, case):
+        ops.append("review")
+    for op in ("arrive", "down", "recv"):
+        if case.status in _ACTION_STATUSES[op] and _holds_case(user, case):
+            ops.append(op)
+    if case.status in _ACTION_STATUSES["withdraw"] and _can_withdraw(user, case):
+        ops.append("withdraw")
+    return ops
 
 
 def _add_step(
@@ -560,7 +605,7 @@ def create_referral(
     return _case_out(db, case)
 
 
-@router.get("/referrals", response_model=list[ReferralCaseOut])
+@router.get("/referrals", response_model=list[ReferralCaseRowOut])
 def list_referrals(
     response: Response,
     patient_id: int | None = None,
@@ -600,7 +645,7 @@ def list_referrals(
     if open_only:
         query = query.filter(SpdReferralCase.status.notin_(_TERMINAL))
     rows = paginate(query.order_by(SpdReferralCase.id.desc()), response, offset, limit)
-    return [_case_out(db, r) for r in rows]
+    return [{**_case_out(db, r), "actions": _case_actions(db, user, r)} for r in rows]
 
 
 @router.get("/referrals/{case_id}", response_model=ReferralCaseDetailOut)
@@ -806,7 +851,7 @@ def withdraw_referral(
     case = db.get(SpdReferralCase, case_id)
     if case is None:
         raise HTTPException(status_code=404, detail="转诊单不存在")
-    if case.initiator_id != user.id and user.role not in ("admin", "director"):
+    if not _can_withdraw(user, case):
         raise HTTPException(status_code=403, detail="只有发起人可以撤回转诊单")
     # station_reviewed 为存量在途单兼容（ADR-0005 前的四级链）：该状态尚未进入
     # 卫生院审核，与 submitted 同样允许撤回；新单不再产生该状态。

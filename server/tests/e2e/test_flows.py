@@ -5127,6 +5127,40 @@ def test_spd_doctor_mobile_todo_and_referral(page, base_url, spd_seed):
         == [("pass", "同意上转")], steps
 
 
+def test_医生移动端_发起人撤回自己的转诊单_不摆审核(page, base_url, spd_seed):
+    """P2-794：转诊卡片原先按状态摆「通过 / 退回」——村医发起的上转单自己卡片上也有，点了 403；发起人要撤回，移动端又没有
+    按钮（接口收）。修后按清单行上的 `actions` 摆：发起人只看到「撤回」，确认后单子撤回。"""
+    import json
+    from urllib.request import Request
+
+    def call(path, payload=None, token=None):
+        req = Request(f"{base_url}{path}", data=json.dumps(payload).encode() if payload is not None else None,
+                      headers={"Content-Type": "application/json",
+                               **({"Authorization": f"Bearer {token}"} if token else {})})
+        with urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read())
+
+    village = call("/api/auth/login", {"username": "e2e_spd_vill", "password": "passw0rd1"})["access_token"]
+    case = call("/api/spd/referrals", {"patient_id": spd_seed["patient"]["id"], "program_code": "hypertension",
+                                       "direction": "up", "reason": "E2E 发起人撤回", "target_org_id": spd_seed["org"]["id"]},
+                village)
+    page.goto(f"{base_url}/m/doctor")
+    page.fill("#lg-user", "e2e_spd_vill")
+    page.fill("#lg-pass", "passw0rd1")
+    page.click('#login-form button[type="submit"]')
+    expect(page.locator("#workbench")).to_be_visible()
+    page.click('[data-tab="spd"]')
+    page.click('[data-dspd="referral"]')
+    card = page.locator(".m-card", has_text="E2E 发起人撤回")
+    expect(card.locator(f'[data-spd-withdraw="{case["id"]}"]')).to_be_visible()   # 修前移动端没有撤回
+    expect(card.locator(f'[data-spd-pass="{case["id"]}"], [data-spd-reject="{case["id"]}"]')).to_have_count(0)
+    card.locator(f'[data-spd-withdraw="{case["id"]}"]').click()
+    form = card.locator("form.spd-withdraw-form")
+    form.locator("button[type=submit]").click()
+    expect(page.locator("#spd-msg")).to_contain_text("操作成功")
+    assert spd_seed["read"](f"/api/spd/referrals/{case['id']}")["status"] == "withdrawn"
+
+
 def test_医生移动端要佐证的任务_传了佐证才办得结(page, base_url, spd_seed, admin_call, admin_read, tmp_path):
     """P2-84：医生移动端待办卡片原先一律摆着「接收」「办结」、没有上传佐证的入口——要佐证的任务在手机上点办结恒 422
     「该任务要求上传佐证材料后才能办结」，只能回管理端传。现在按状态给按钮：要佐证的多一个「上传佐证」（与管理端同一走法：

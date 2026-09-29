@@ -369,7 +369,8 @@ def test_列表行与发起回执同形无steps(client, auth, world):
     resp = client.get(f"{B}/referrals", headers=auth)
     rows = resp.json()
     assert resp.headers["x-total-count"] == "5"
-    assert [list(r.keys()) for r in rows] == [CASE_KEYS] * 5  # 谁都不带 steps
+    # 清单行比单据回执多一个 actions（这位用户此刻能做的动作，P2-794）；谁都不带 steps
+    assert [list(r.keys()) for r in rows] == [CASE_KEYS + ["actions"]] * 5
     assert [r["id"] for r in rows] == [
         world["case4"]["id"], world["case3"]["id"], world["case2"]["id"],
         world["case1"]["id"], world["check_auto"]["case"]["id"],
@@ -380,6 +381,7 @@ def test_列表行与发起回执同形无steps(client, auth, world):
                  target_org_id=world["township"]["id"], effective_visit=True,
                  stable_for_down=True, created_at=_ts(rows[3]["created_at"]),
                  closed_at=_ts(rows[3]["closed_at"])),
+        "actions": [],   # 已闭环：什么也不能做
     }
     only_open = client.get(f"{B}/referrals", params={"open_only": True},
                            headers=auth).json()

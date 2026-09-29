@@ -69,7 +69,8 @@ function cardForm(card, className, fieldsHtml, submitLabel, onSubmit) {
   form.onsubmit = (e) => { e.preventDefault(); onSubmit(form.elements); };
   form.querySelector("[data-cancel]").onclick = () => form.remove();
   card.appendChild(form);
-  form.querySelector("textarea, input, select").focus();
+  const first = form.querySelector("textarea, input, select");
+  if (first) first.focus();   // 纯确认的框（转诊撤回，P2-794）没有输入项
 }
 
 /* 附件上传（multipart）：绕过 api()——它写死 JSON 的 Content-Type；会话口径与 api() 相同（存量 Header 令牌照带，
@@ -283,16 +284,19 @@ async function loadSpdTodo(box) {
   }));
 }
 
-/** 转诊卡片按状态给按钮（与后端的状态前置同一口径）：审核只对待审核的，登记到院只对已接收的，承接随访只对已下转的。
- *  原先四个按钮一律摆着，点错一个就是 409「只有已接收的转诊单可登记到院」——与 P2-84 的待办卡片同一个毛病。 */
+/** 转诊卡片按后端出参 `actions` 给按钮（P2-794）：原先按状态给（P2-101，免得点错一个就 409），可推进权还看机构——
+ *  审核只有当前机构的直接上级、登记到院 / 承接随访只有当前持有机构、撤回只有发起人。村医自己发起的单子卡片上有
+ *  「通过 / 退回」、县医院接收之后有「登记到院」，点了都是 403；发起人又没有撤回。`actions` 由后端按同一判据现算。 */
 function spdReferralOps(r) {
+  const on = (op) => (r.actions || []).includes(op);
   const ops = [];
-  if (["submitted", "station_reviewed", "township_reviewed"].includes(r.status)) {
+  if (on("review")) {
     ops.push(`<button type="button" class="ghost-btn" data-spd-pass="${r.id}">通过</button>`,
       `<button type="button" class="ghost-btn" data-spd-reject="${r.id}">退回</button>`);
   }
-  if (r.status === "accepted") ops.push(`<button type="button" class="ghost-btn" data-spd-arrive="${r.id}">登记到院</button>`);
-  if (r.status === "down_referred") ops.push(`<button type="button" class="ghost-btn" data-spd-recv="${r.id}">承接随访</button>`);
+  if (on("arrive")) ops.push(`<button type="button" class="ghost-btn" data-spd-arrive="${r.id}">登记到院</button>`);
+  if (on("recv")) ops.push(`<button type="button" class="ghost-btn" data-spd-recv="${r.id}">承接随访</button>`);
+  if (on("withdraw")) ops.push(`<button type="button" class="ghost-btn" data-spd-withdraw="${r.id}">撤回</button>`);
   return ops.join("\n    ");
 }
 
@@ -323,6 +327,10 @@ async function loadSpdReferral(box) {
     () => ({ effective_visit: true }));
   bind("data-spd-recv", (b) => `/api/spd/referrals/${b.dataset.spdRecv}/receive-followup`,
     () => ({ opinion: "已接收随访" }));
+  // 撤回（P2-794）：发起人本人、上级审核之前。撤回不可逆（后端没有反向动作），先在卡片里确认一下
+  box.querySelectorAll("[data-spd-withdraw]").forEach((b) => b.addEventListener("click", () =>
+    cardForm(b.closest(".m-card"), "spd-withdraw-form", '<p class="hint">撤回后这张转诊单结束，要转诊需重新发起。</p>',
+      "确认撤回", () => spdPost(`/api/spd/referrals/${b.dataset.spdWithdraw}/withdraw`, null))));
 }
 
 async function loadSpdPatients(box) {

@@ -2432,15 +2432,11 @@ const SPD_HANDLE_LEVELS = { village: "村医处置", station: "服务站处置",
  * 每行都画，清单又含已结束的单子（open_only=false）——已闭环 / 已退回 / 已撤回的单子五个点下去全是 409。
  * 审核链见 referral._NEXT；到院只收已接收；下转收已接收 / 已到院；随访接收只收已下转；撤回只收还没进上级审核的。
  * 医生移动端 spdReferralOps 同一口径（P2-101），它没有下转这一步。 */
-const SPD_REF_OPS = {
-  review: ["submitted", "station_reviewed", "township_reviewed"],
-  arrive: ["accepted"],
-  down: ["accepted", "arrived"],
-  recv: ["down_referred"],
-  withdraw: ["submitted", "station_reviewed"],
-};
+/** 每行给哪些动作按后端出参 `actions` 摆（P2-794）：原先按状态摆（P2-580），可推进权还看机构——审核只有当前机构的
+ *  直接上级、到院 / 下转 / 随访接收只有当前持有机构、撤回只有发起人。村医发起的上转单自己这一行照样有「通过 / 退回」，
+ *  县医院接收之后村医这一行有「到院」，点了都是 403。`actions` 由后端按同一判据现算（状态也在里面） */
 function spdReferralRowOps(c) {
-  const on = (op) => SPD_REF_OPS[op].includes(c.status);
+  const on = (op) => (c.actions || []).includes(op);
   return [
     `<button class="btn secondary" data-ref-detail="${c.id}">全轨迹</button>`,
     on("review") ? `<button class="btn secondary" data-ref-pass="${c.id}">通过</button>
