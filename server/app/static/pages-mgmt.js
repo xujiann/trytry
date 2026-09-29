@@ -157,9 +157,13 @@ async function renderSurgery() {
   $("#page-desc").textContent = "申请 → 审批（申请人不得自批）→ 手术间排班（区间重叠拦截）→ 术中记录；填病案首页时手术栏留空即取已完成的术式（先记术中记录、再填首页）";
   // 还要办的三个状态单独取、并进最新 100 条（P2-361）：原先只取最新 100 条，提前申请的择期手术排到 100 条之外，
   // 审批 / 排班 / 术中记录的按钮跟着消失
+  // 手术量统计只给管理层（后端 require_roles("director")），原先也在这个 Promise.all 里：医师、经办一进这页，统计一个 403
+  // 整页只剩一句报错——提申请（只收医师）、排班（经办 / 管理层）、术中记录都只在这一页（P1-220，P1-175 / P2-459 同形）。
+  // 统计只在管理层登录时取；各个按钮摆给谁是 P2-447 的事
+  const canStats = ["admin", "director"].includes(currentRole());
   const [recent, rooms, schedules, stats, ...open] = await Promise.all([
     api("/api/surgery/requests"), api("/api/surgery/rooms"),
-    api("/api/surgery/schedules"), api("/api/surgery/stats"),
+    api("/api/surgery/schedules"), canStats ? api("/api/surgery/stats") : Promise.resolve([]),
     ...["requested", "approved", "scheduled"].map((s) => api(`/api/surgery/requests?status=${s}`))]);
   const requests = [...new Map([...recent, ...open.flat()].map((r) => [r.id, r])).values()]
     .sort((a, b) => b.id - a.id);

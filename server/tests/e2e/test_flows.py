@@ -5371,3 +5371,40 @@ def test_体检只按分项标了异常_清单上列出异常分项而不是空�
     _open_page(page, "certs", "证明与体检")
     row = page.locator(f'tr:has(td[data-chkstate="{chk["id"]}"])')
     expect(row.locator(".tag.red")).to_have_text("E2E血红蛋白")   # 修前是空的红标签
+
+
+#: 管理端的内置角色（admin 什么页都看得见、什么接口都调得动，不在此列）。
+ROLE_SWEEP = ("director", "doctor", "pharmacist", "public_health", "operator")
+
+#: 已登记、还没修的「导航给了、一进页整页报错」：页面 id → 报错的角色。只减不增——修好一页就划掉一页，不划掉也红。
+KNOWN_BROKEN_PAGES = {
+    "spdexpert": {"pharmacist", "public_health", "operator"},   # 第二十一批扫描 N4-9：渲染只取医师 / 管理层的专家工作台
+    "consents": {"operator"},   # N4-2：渲染末尾连带取只给管理层的更正 / 注销申请清单
+}
+
+
+@pytest.mark.parametrize("role", ROLE_SWEEP)
+def test_导航里给了的页_这个角色打开都不整页报错(page, base_url, seed, admin_call, role):
+    """P1-220 的防复发（第二十一批「页面给出的动作 vs 后端允许的角色与状态」扫描 N4）：页面注册表对这个角色放行，一进页
+    却整页只剩一行报错——render 抛出的错被 `route()` 整页换成一句（core.js）。成因是同一个形状：render 连带取了一份只给
+    别的角色的数据、没兜住 403（P1-175 医保协同、P2-459 DRGs 修过；手术麻醉是 P1-220）。静态看不全（取数可能藏在 render
+    末尾调用的内层函数里），于是逐角色、逐页真打开一遍：导航里给了的页，打开后不得只剩整页报错。"""
+    username = f"e2e_sweep_{role}"
+    _p2429_user(admin_call, seed, username, role)
+    _login(page, base_url, username, "passw0rd1")
+    page.wait_for_function("() => !routing")
+    ids = page.eval_on_selector_all("#nav a[data-page]", "links => links.map((a) => a.dataset.page)")
+    assert len(ids) >= 40, ids   # 判据自证：确实按角色建出了导航
+    broken = {}
+    for page_id in ids:
+        page.evaluate("""(id) => new Promise((resolve) => {
+            if (location.hash === "#" + id) { resolve(); return; }
+            window.addEventListener("hashchange", () => resolve(), { once: true });
+            location.hash = id;
+        })""", page_id)
+        page.wait_for_function("() => !routing")   # 等 render 整个跑完（含末尾的内层取数），不是等「加载中…」消失
+        error = page.locator("#page-body > p.msg.err:only-child")
+        if error.count():
+            broken[page_id] = error.inner_text()
+    known = {page_id for page_id, roles in KNOWN_BROKEN_PAGES.items() if role in roles}
+    assert set(broken) == known, (broken, known)   # 修前 surgery 对医师、药师、公卫、经办都整页报错
