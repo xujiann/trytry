@@ -526,14 +526,19 @@ async function renderEsb() {
         <select name="system_type">${Object.entries(ESB_SYSTEMS).map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>
         <select name="direction"><option value="inbound">入站</option><option value="outbound">出站</option></select>
         <input name="rate_limit_per_min" type="number" min="1" value="60" style="width:110px" title="每分钟限流">
+        <input name="endpoint_url" placeholder="出站投递地址 https://…（入站留空）" style="min-width:240px">
         <button>注册并生成令牌</button></form>
       <p class="msg" id="esb-ep-msg"></p>
-      ${table(["编码", "名称", "系统类型", "方向", "限流/分钟", "状态", "操作"], endpoints, (e) =>
+      ${table(["编码", "名称", "系统类型", "方向", "投递地址", "限流/分钟", "状态", "操作"], endpoints, (e) =>
         `<tr><td><span class="tag">${esc(e.code)}</span></td><td>${esc(e.name)}</td><td>${esc(e.system_type_name)}</td>
-         <td>${esc(e.direction_name)}</td><td>${e.rate_limit_per_min}</td>
+         <td>${esc(e.direction_name)}</td>
+         <td>${e.direction !== "outbound" ? "—" : e.endpoint_url ? esc(e.endpoint_url)
+           : '<span class="tag orange">未配（仅登记不投递）</span>'}</td><td>${e.rate_limit_per_min}</td>
          <td>${e.active ? '<span class="tag green">启用</span>' : '<span class="tag">停用</span>'}</td>
          <td><button class="btn secondary" data-esbtoggle="${e.id}" data-active="${e.active ? 1 : 0}">${e.active ? "停用" : "启用"}</button>
-           <button class="btn secondary" data-esbrotate="${e.id}">轮换令牌</button></td></tr>`)}`)
+           <button class="btn secondary" data-esbrotate="${e.id}">轮换令牌</button>
+           ${e.direction === "outbound" ? `<button class="btn secondary" data-esburl="${e.id}"
+             data-url="${esc(e.endpoint_url || "")}">改投递地址</button>` : ""}</td></tr>`)}`)
     + panel("消息队列", `
       <form class="inline" id="esb-msg-filter">
         <select name="status"><option value="">全部状态</option>${Object.entries(ESB_MSG_STATUS).map(([v, t]) => `<option value="${v}">${t[0]}</option>`).join("")}</select>
@@ -588,10 +593,13 @@ async function renderEsb() {
   $("#esb-ep-form").onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
+    // 出站投递地址（P2-860）：原先注册表单与行上操作都不收，界面建的出站接入方全部「仅登记不投递」，消息却记成「已成功」。
+    // 签名密钥（可选，仅入库不回显）仍只经接口配
+    const body = { code: f.get("code"), name: f.get("name"), system_type: f.get("system_type"),
+                   direction: f.get("direction"), rate_limit_per_min: Number(f.get("rate_limit_per_min")) || 60 };
+    if (String(f.get("endpoint_url") || "").trim()) body.endpoint_url = String(f.get("endpoint_url")).trim();
     try {
-      const created = await api("/api/esb/endpoints", { method: "POST", body: JSON.stringify({
-        code: f.get("code"), name: f.get("name"), system_type: f.get("system_type"),
-        direction: f.get("direction"), rate_limit_per_min: Number(f.get("rate_limit_per_min")) || 60 }) });
+      const created = await api("/api/esb/endpoints", { method: "POST", body: JSON.stringify(body) });
       alert(`接入令牌（仅此一次可见，请妥善保存）：\n${created.auth_token}`);
       route();
     } catch (err) { setMsg("#esb-ep-msg", err.message, false); }
@@ -610,7 +618,7 @@ async function renderEsb() {
   };
   $("#page-body").onclick = async (e) => {
     const { esbproc, esbpayload, esbtoggle, active, esbrotate, esbrun,
-            esbflowedit, esbruns, esbrerun, flow } = e.target.dataset;
+            esbflowedit, esbruns, esbrerun, flow, esburl, url } = e.target.dataset;
     try {
       if (esbruns) return await drawRuns(esbruns);
       if (esbflowedit) {
@@ -650,6 +658,13 @@ async function renderEsb() {
         alert(msg ? JSON.stringify(msg.payload, null, 2) : "这条消息已不在当前列表，请重新查询后再看");
       } else if (esbtoggle) {
         await api(`/api/esb/endpoints/${esbtoggle}`, { method: "PATCH", body: JSON.stringify({ active: active !== "1" }) });
+        route();
+      } else if (esburl) {
+        const form = await spdModal("改出站投递地址", [
+          { name: "endpoint_url", label: "投递地址（http / https）", value: url || "", required: true }]);
+        if (!form) return;
+        await api(`/api/esb/endpoints/${esburl}`, { method: "PATCH",
+          body: JSON.stringify({ endpoint_url: String(form.endpoint_url).trim() }) });
         route();
       } else if (esbrotate) {
         const res = await api(`/api/esb/endpoints/${esbrotate}/rotate-token`, { method: "POST" });
