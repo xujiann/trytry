@@ -1066,6 +1066,14 @@ def push_education(
     if material is None or not material.active:
         raise HTTPException(status_code=404, detail="宣教素材不存在或已停用")
     patient_ids = list(dict.fromkeys(body.patient_ids))
+    # 不存在的患者号先全部查完（P2-726）：全域角色过守卫不查存在（P2-52），混进一个错号，立即推送发到它那一条才撞外键
+    # 500——前面几位的短信已经发出、已经逐条提交（P2-641），回执却没有，经办以为没发出去再点一次，前面的人收两遍。
+    # 与同子系统批量加分组（P0-50）同一顺序：先查存在再判可见性，不给不存在的号写调阅留痕（写不进去、只落一条错误日志）
+    known = {pid for (pid,) in db.query(Patient.id).filter(Patient.id.in_(patient_ids))}
+    missing = [pid for pid in patient_ids if pid not in known]
+    if missing:
+        raise HTTPException(status_code=404,
+                            detail=f"患者不存在（patient_id={'、'.join(str(pid) for pid in missing[:20])}），一条都没有发")
     for patient_id in patient_ids:
         assert_patient_visible(db, user, patient_id, resource="spd_edu")
     created, sent, failed = 0, 0, 0
