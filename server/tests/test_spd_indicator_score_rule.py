@@ -44,9 +44,11 @@ def test_建指标_未知或漏写的类型422(client, admin, rule):
 
 @pytest.mark.parametrize(("code", "rule"), [
     ("P279_OK1", {}), ("P279_OK2", {"type": "ratio"}), ("P279_OK3", {"type": "ratio", "full": 100, "target": None}),
-    ("P279_OK4", {"type": "ratio", "full": 100, "target": 0}), ("P279_OK5", {"type": "step", "steps": []}),
+    # 目标值写正数：0 原先被 `preset or 100` 悄悄换成 100 才「照收」，自 P2-718 起按比例计分的目标须大于 0（422，
+    # 见 test_spd_indicator_ratio_target_positive.py）
+    ("P279_OK4", {"type": "ratio", "full": 100, "target": 0.5}), ("P279_OK5", {"type": "step", "steps": []}),
     ("P279_OK6", {"type": "step", "steps": [{"min": 1, "score": 100}, {"max": 0}]}),
-], ids=["不配", "按比例全缺省", "目标值留空", "目标值为0", "空分档", "开区间分档"])
+], ids=["不配", "按比例全缺省", "目标值留空", "目标值为小数", "空分档", "开区间分档"])
 def test_合法的评分规则照收(client, admin, code, rule):
     resp = _indicator(client, admin, code, rule)
     assert resp.status_code == 201, resp.text[:300]

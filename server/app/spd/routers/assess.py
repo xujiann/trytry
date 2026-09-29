@@ -385,6 +385,9 @@ def create_indicator(body: IndicatorIn, db: Session = Depends(get_db)):
     rule_problem = score_rule_problem(body.score_rule)   # 评分规则写坏了计分时 500（P2-79）
     if rule_problem:
         raise HTTPException(status_code=422, detail=f"评分规则非法：{rule_problem}")
+    target_problem = ratio_target_problem(body.score_rule, body.target_value)   # P2-718
+    if target_problem:
+        raise HTTPException(status_code=422, detail=target_problem)
     program_problem = unknown_programs(db, body.program_codes)  # 病种列表先查在不在（P1-120 第二层）
     if program_problem:
         raise HTTPException(status_code=404, detail=program_problem)
@@ -464,6 +467,11 @@ def update_indicator(indicator_id: int, body: IndicatorPatch, db: Session = Depe
         rule_problem = score_rule_problem(changes["score_rule"])
         if rule_problem:
             raise HTTPException(status_code=422, detail=f"评分规则非法：{rule_problem}")
+    if "score_rule" in changes or "target_value" in changes:   # 改完之后的组合与建指标同一句（P2-718）
+        target_problem = ratio_target_problem(changes.get("score_rule", indicator.score_rule),
+                                              changes.get("target_value", indicator.target_value))
+        if target_problem:
+            raise HTTPException(status_code=422, detail=target_problem)
     # 病种列表同建档一句（P1-120 第二层）；原有的编码不再查
     program_problem = unknown_programs(db, changes.get("program_codes"), already=indicator.program_codes)
     if program_problem:
@@ -845,6 +853,8 @@ def score_rule_problem(rule: dict, *, known_type_only: bool = True) -> str:
             return "按比例计分的满分（full）必须是数"
         if rule.get("target") is not None and not _is_number(rule["target"]):
             return "按比例计分的目标值（target）必须是数"
+        if rule.get("target") is not None and rule["target"] <= 0:
+            return f"按比例计分的目标值（target）须大于 0（收到 {rule['target']}）：{_RATIO_TARGET_WHY}"   # P2-718
         return ""
     steps = rule.get("steps", [])
     if not isinstance(steps, list) or not all(isinstance(step, dict) for step in steps):
@@ -856,6 +866,21 @@ def score_rule_problem(rule: dict, *, known_type_only: bool = True) -> str:
             return f"分档的下限 {step['min']} 大于上限 {step['max']}，这一档永远命中不了"   # P2-712
         if "score" in step and not _is_number(step["score"]):
             return "分档的分值（score）必须是数"
+    return ""
+
+
+#: 按比例计分的目标值不是正数时的后果（P2-718）：负数目标谁都达标、一件事没做也满分；0 原先被悄悄换成 100
+_RATIO_TARGET_WHY = "负数目标谁都算达标、一件事没做也满分，0 没法按比例折算"
+
+
+def ratio_target_problem(rule: dict | None, target_value: float | None) -> str:
+    """按比例计分的指标，目标值（`target_value`）须大于 0，没问题返回空串（P2-718）。
+
+    `ratio` 未达标按 `满分 × 实际 / 目标` 折算：目标是负数时 `实际 >= 目标` 恒成立，人人满分；目标是 0 时原先被
+    `preset or 100` 悄悄换成 100。只管按比例计分的——分档计分的目标值只作展示（「目标 0 例投诉」是合法的）。
+    建 / 改指标时 422；计分时存量里的逐指标记错、不计分，与坏评分规则同一个处理（P2-79）。"""
+    if (rule or {}).get("type") == "ratio" and target_value is not None and target_value <= 0:
+        return f"按比例计分的指标目标值须大于 0（收到 {target_value:g}）：{_RATIO_TARGET_WHY}"
     return ""
 
 
@@ -878,7 +903,7 @@ def score_of(indicator: SpdIndicator, value: float) -> tuple[float, str]:
     if kind == "ratio":
         full = float(rule.get("full", 100))
         preset = indicator.target_value if indicator.target_value is not None else rule.get("target")
-        target = float(preset or 100)
+        target = float(preset) if preset is not None else 100.0   # 0 不再悄悄换成 100（P2-718，写入与计分前都挡了非正数）
         if value >= target:
             return full, ""
         got = round(full * value / target, 2) if target else 0.0
@@ -1113,6 +1138,10 @@ def run_scoring(body: RunScoreIn, db: Session = Depends(get_db)):
             rule_problem = score_rule_problem(indicator.score_rule or {}, known_type_only=False)
             if rule_problem:
                 detail.append({"indicator_code": code, "error": f"评分规则非法：{rule_problem}"})
+                continue
+            target_problem = ratio_target_problem(indicator.score_rule, indicator.target_value)   # 存量非正目标（P2-718）
+            if target_problem:
+                detail.append({"indicator_code": code, "error": f"目标值非法：{target_problem}"})
                 continue
             weight_problem = plan_weight_problem([item])   # 修前存进去的坏权重：逐指标记错、不 500（P2-108）
             if weight_problem:
