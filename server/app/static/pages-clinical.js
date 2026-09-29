@@ -913,7 +913,9 @@ async function renderMedication() {
   $("#page-body").innerHTML += `
     ${panel("缺药登记", `
       <form class="inline" id="short-form">
-        <input name="org_id" type="number" placeholder="机构ID" required><input name="drug_code" placeholder="药品编码" required>
+        <input name="org_id" type="number" placeholder="机构ID" required>
+        <input name="patient_id" type="number" placeholder="患者ID（按患者登记；按机构补货留空）" style="min-width:230px">
+        <input name="drug_code" placeholder="药品编码" required>
         <input name="drug_name" placeholder="药品名称" required><input name="quantity" type="number" value="1" min="1" style="min-width:70px"><button>登记</button>
       </form><p class="msg" id="short-msg"></p>
       ${table(["ID", "机构", "药品", "数量", "状态", "操作"], shortages, (s) => {
@@ -954,7 +956,8 @@ async function renderMedication() {
       <div id="prof-result"></div>`)}
     ${panel("全县用药地图（品种排名）",
       stats.length ? barChart(stats.slice(0, 8).map((s) => [s.drug_name, s.rx_count]), { unit: " 方" }) : "暂无数据")}`;
-  $("#short-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/medication/shortages", formJson(e.target, ["org_id", "quantity"]), "#short-msg"); };
+  // 患者可选（P2-859）：只有按患者登记才谈得上「登记后不来取药」、才过得了黑名单拦截；原先表单没有这一项，登的全是按机构报缺
+  $("#short-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/medication/shortages", formJson(e.target, ["org_id", "patient_id", "quantity"]), "#short-msg"); };
   $("#prof-form").onsubmit = async (e) => {
     e.preventDefault();
     // 先清掉上一位的结果、查不到就把原因写出来（P2-358）：原先 api() 抛错没人接，患者号输错（404）或无权查看（403）时
