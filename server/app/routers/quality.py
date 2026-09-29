@@ -518,10 +518,13 @@ def _record_context(db: Session, record: MedicalRecord) -> tuple[dict, dict]:
         .first()
         is not None
     )
+    # 「最近一次出院」按出院时刻取、编号兜底（P2-877，与出院随访匹配 P2-692 同一句）：补导的历史住院编号更大（ADR-0018），
+    # 原先按编号取，2026 年平台出院有首页、之后补导一条 2019 年的出院，就按那条没首页的扣 MRQC12。门诊病历参不参与、
+    # HIS 同步的出院怎么算随 P2-870 待裁定
     admission = (
         db.query(Admission)
         .filter(Admission.patient_id == patient_id, Admission.status == "discharged")
-        .order_by(Admission.id.desc())
+        .order_by(func.coalesce(Admission.discharged_at, Admission.admitted_at).desc(), Admission.id.desc())
         .first()
     )
     summary = (
