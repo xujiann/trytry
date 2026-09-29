@@ -59,6 +59,7 @@ from ..schemas import EncounterCreate, ExamReportCreate, FollowUpCreate, Patient
 from ..texttypes import NON_BLANK
 from .chronic import _evaluate_level
 from .encounters import create_encounter
+from .dataquality import id_card_invalid_reason
 from .exams import EXAM_REQUEST_STATUS_NAMES, submit_report
 from .inpatient import (AdmissionCreate, _mark_discharged, _release_bed, create_admission,
                         spawn_discharge_followup)
@@ -246,7 +247,7 @@ def parse_hl7v2_patient(message: str) -> tuple[dict, str]:
     def field(i: int) -> str:
         return fields[i] if i < len(fields) else ""
 
-    id_card = field(3).split("^")[0].strip()
+    id_card = _pid3_id_card(field(3))
     name = field(5).replace("^", "").strip()
     birth_raw = field(7).strip()
     gender = _GENDER_HL7.get(field(8).strip(), "未知")
@@ -271,6 +272,41 @@ def parse_hl7v2_patient(message: str) -> tuple[dict, str]:
         },
         control_id,
     )
+
+
+#: 身份证那一项的标识类型码：HL7 表 0203 的 NI（国家统一个人标识）/ NNCHN（中国国民身份号），与国内常见写法 ID
+_ID_CARD_ID_TYPES = {"ID", "NI", "NNCHN"}
+
+
+def _pid3_id_card(raw: str) -> str:
+    """PID-3（患者标识列表）里取身份证号（P2-723）。
+
+    PID-3 可重复：`证件号^^^CN^ID~病案号^^^HIS^MR`。原先不按 `~` 拆、只取第一个组件——整串「证件号~病案号」当证件号
+    另建一份主档；病案号排在前面时拿病案号建档（16 位的）或整条 422（短的）。先取标识类型（CX.5）是身份证的那一项，
+    其次校验位对得上的 18 位号、再次 15 位纯数字的老证号；都没有时照旧取第一项（长度够不够照旧由调用方判，P1-61）。
+    """
+    reps = [rep.split("^") for rep in raw.split("~") if rep.strip()]
+
+    def rank(parts: list[str]) -> int:
+        value = parts[0].strip()
+        if len(parts) > 4 and parts[4].strip().upper() in _ID_CARD_ID_TYPES and value:
+            return 0
+        if len(value) == 18 and not id_card_invalid_reason(value):
+            return 1
+        if len(value) == 15 and value.isascii() and value.isdigit():
+            return 2
+        return 3
+
+    return min(reps, key=rank)[0].strip() if reps else ""   # 同一档里取靠前的
+
+
+def _is_id_card_identifier(ident: dict) -> bool:
+    """FHIR identifier 是不是身份证号（P2-723）：system 认 OID 带不带 `urn:oid:` 前缀两种写法，也认 type 里的身份证类型码。"""
+    system = str(ident.get("system") or "").strip()
+    if system in (ID_CARD_SYSTEM, ID_CARD_SYSTEM.removeprefix("urn:oid:")):
+        return True
+    coding = (ident.get("type") or {}).get("coding") or [] if isinstance(ident.get("type"), dict) else []
+    return any(isinstance(c, dict) and str(c.get("code") or "").upper() in _ID_CARD_ID_TYPES for c in coding)
 
 
 def _do_hl7v2_patient(body: Hl7Message, db: Session, user: User):
@@ -320,7 +356,7 @@ def parse_fhir_patient(resource: dict) -> dict:
     for ident in resource.get("identifier", []):
         if ident.get("value"):
             id_card = ident["value"]
-            if ident.get("system") == ID_CARD_SYSTEM:
+            if _is_id_card_identifier(ident):   # 原先只认带 urn:oid: 前缀的写法，认不出就落到最后一个（常是病案号）
                 break
     if not id_card or len(id_card) < 15:
         raise HTTPException(status_code=422, detail="identifier 中缺少有效身份证号")
@@ -948,7 +984,7 @@ def _oru_request(db: Session, obr: str, pid: str | None) -> ExamRequest:
         )
     # PID 一致性核验（可选段）：报文声明的患者与申请单不一致时拒收，防串单
     if pid is not None:
-        id_card = _hl7_field(pid, 3).split("^")[0].strip()
+        id_card = _pid3_id_card(_hl7_field(pid, 3))   # 与建档同一个取法（P2-723）
         if id_card:
             # 核的是**申请单患者本人**的证件号（两种写法都认，P1-114）。原先是「平台上另有一位持这个证件号的患者才拒收」：
             # 证件号不属于平台上任何人（院内自建档、没进平台的患者）的结果照样写进申请单患者名下——别人的检验结果、
