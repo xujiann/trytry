@@ -3376,11 +3376,17 @@ async function renderSpdFollowup() {
         { name: "channel", label: "随访渠道", type: "select", value: "phone",
           options: [{ value: "phone", label: "电话" }, { value: "wechat", label: "微信" },
                     { value: "sms", label: "短信" }, { value: "visit", label: "面访" }] },
+        // 失访单独一个状态（P2-854，后端 `unreachable` 早就收）：原先打不通也只能记成「已完成」，完成率被算高——
+        // 分母含失访、分子不含。记失访时问卷不看
+        { name: "outcome", label: "联系结果", type: "select", value: "done",
+          options: [{ value: "done", label: "已联系上，完成随访" },
+                    { value: "unreachable", label: "未联系上（记失访，不计完成）" }] },
         ...spdQuestionFields(items, "q_"),
         { name: "result", label: "随访结果", type: "textarea" },
       ], { submit: (form) => api(`/api/spd/followup-records/${exec.dataset.fuExec}/execute`, { method: "POST",
         body: JSON.stringify({ channel: form.channel || "phone", result: form.result,
-                               answers: spdCollectAnswers(items, form, "q_") }) }) });
+                               answers: spdCollectAnswers(items, form, "q_"),
+                               unreachable: form.outcome === "unreachable" }) }) });
       if (ok) route();
       return;
     }
