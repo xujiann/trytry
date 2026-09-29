@@ -1337,7 +1337,8 @@ def _management_ended(db: Session, patient_id: int, program_code: str) -> str:
 class RevisitUpdate(BaseModel):
     # 不可空的列可以不传、不能传 null（P1-95，写法见 app/patchtypes.py）：原先显式 null 照写进 NOT NULL 列，500
     status: str = Field(default=UNSET, pattern="^(planned|done|overdue|removed)$")
-    plan_date: OptionalDateStr = Field(default=UNSET)
+    # 计划日期与新建（`RevisitIn.plan_date`）同一个必填口径（P2-715）：原先改档收空串，扫描永不置逾期、工作台天天算它到期
+    plan_date: DateStr = Field(default=UNSET)
     actual_date: OptionalDateStr = Field(default=UNSET)
     remind_status: str = Field(default=UNSET, pattern="^(none|sent|contacted)$")
     note: str = Field(default="", max_length=256)

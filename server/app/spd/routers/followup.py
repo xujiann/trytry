@@ -22,7 +22,7 @@ from ...clock import now_naive
 from ...concurrency import insert_if_absent, insert_or_conflict, serialized_on
 from ...database import get_db
 from ...patchtypes import UNSET
-from ...datetypes import OptionalDateStr
+from ...datetypes import DateStr, OptionalDateStr
 from ...deps import (
     BUSINESS_DATE_MAX,
     BUSINESS_DATE_MIN,
@@ -1055,7 +1055,8 @@ def execute_followup(
 class RecordPatchIn(BaseModel):
     # 不可空的列可以不传、不能传 null（P1-95，写法见 app/patchtypes.py）：原先显式 null 照写进 NOT NULL 列，500
     status: str = Field(default=UNSET, pattern="^(planned|removed)$")
-    planned_at: OptionalDateStr = Field(default=UNSET)
+    # 改期只能改成一个日期、不能改成空（P2-715，与生成计划同口径）：原先空串照收，扫描不把它置超期、工作台天天算它到期
+    planned_at: DateStr = Field(default=UNSET)
     executor_id: int | None = None
     # 与执行随访、生成计划同一条枚举（P1-98）：原先改档可把渠道改成枚举外的任意串，按渠道统计对不上
     channel: str = Field(default=UNSET, pattern="^(phone|wechat|sms|self|visit)$")
