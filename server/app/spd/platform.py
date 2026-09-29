@@ -28,6 +28,7 @@
 | 列类型 | `Money` / `utcnow` | 与平台其余表同一套金额与时间口径 |
 | PII 检索 | `pii_filter` | 加密态证件号等值检索：开态密文列 contains 恒空，必须走索引列（P1-25） |
 | 证件号写法 | `id_card_variants` | 末位校验码 X 大小写两种写法都认（P1-114）：主索引按录入原样存，检索不能只认一种 |
+| 角色 | `ROLE_NAMES` / `GLOBAL_ROLES` | 挑责任人时认内置角色：角色办不了这项工作的不派（第二十二批 X3-1）、全域角色不按机构拦 |
 
 清单之外的平台模块（处方、医保、库存……）**不在依赖范围内**。确有需要时，
 先在这里加一行并说明理由，让依赖面始终是可数的。
@@ -78,6 +79,7 @@ from ..routers.portal import register_referral_source as _register_referral_sour
 from ..sms import get_sms_provider as _get_sms_provider
 from ..ws import manager as _ws_manager
 from ..alerting import send_alert as _send_alert
+from ..deps import ROLE_NAMES as _ROLE_NAMES
 from ..visibility import GLOBAL_ROLES as _GLOBAL_ROLES
 
 def patient_of(db: Session, patient_id: int) -> Patient | None:
@@ -113,14 +115,36 @@ def assignee_outside_org(db: Session, assignee_id: int, org_id: int | None) -> b
     return assignee is not None and assignee.role not in _GLOBAL_ROLES and assignee.org_id != org_id
 
 
-def usable_or_none(db: Session, user_id: int | None) -> int | None:
-    """系统替人挑责任人（取档案上的主管医生、转诊发起人）时用：能承接新业务就原样返回，停用或已不存在的落成 None。
+def role_unfit(db: Session, user_id: int, roles: tuple[str, ...]) -> str:
+    """这个账号的角色办不了这项工作：返回角色的中文名（「经办人员」「药师」……），办得了返回空串（第二十二批 X3-1）。
+
+    各办理端点按角色把门（`require_roles`）：慢专病任务、目标患者、复诊、干预是医师 / 公卫 / 管理层，在线咨询的回复是
+    医师 / 管理层。主管医生后来被改成经办、药师（改角色只改 `role`，名下的档案一概不动），系统照旧把新派生的工作挂给他——
+    他打开 403，别人接收又 409（已有责任人），这件事就没人办了；显式指派给这样的人也一样。后果与停用（`unusable_user`）
+    相同，分开判是因为报错不同：人在、角色不对，是 422（与 `assignee_outside_org` 同一类），不是 404。
+
+    只认六个内置角色：平台管理员过一切角色门，不拦；自定义角色按权限点放行（`deps.require_roles`），哪几个权限点算
+    「办得了」要看具体动作，这里不猜，照旧当办得了。`roles` 为空不筛。不存在的返回空串——调用前先经 `unusable_user`
+    查过存在与停用。
+    """
+    user = db.get(User, user_id)
+    if user is None or not roles or user.role == "admin" or user.role in roles or user.role not in _ROLE_NAMES:
+        return ""
+    return _ROLE_NAMES[user.role]
+
+
+def usable_or_none(db: Session, user_id: int | None, *, roles: tuple[str, ...]) -> int | None:
+    """系统替人挑责任人（取档案上的主管医生、转诊发起人）时用：能承接这项工作就原样返回，停用、已不存在、角色办不了
+    的落成 None。
 
     落成 None 的工作是「待接收 / 未分配」：中心端待办里数得到、别人认领得了。原先照挂停用账号——认领要么是空着要么
     是本人，别人认领 409，中心端「未分配」也不数它，新派生的处置任务进了一个没人登得上的待办箱（第十五批 S1-1）。
-    显式指定的人仍由各写接口经 `unusable_user` 拒掉（P1-106）；已经挂在停用账号名下的存量怎么转交另行裁定。
+    角色办不了的同一个后果（第二十二批 X3-1）：主管医生改成经办之后，新派生的任务照挂给他，他办理 403、别人接收 409。
+    `roles` 是这项工作的办理角色（各办理端点 `require_roles` 的那一组），必传：挑人的地方各自说清这活谁办得了；只是
+    知会（发站内信）的传空元组，不按角色筛。
+    显式指定的人仍由各写接口经 `unusable_user` / `role_unfit` 拒掉（P1-106）；已经挂在停用账号名下的存量怎么转交另行裁定。
     """
-    if user_id is None or unusable_user(db, user_id):
+    if user_id is None or unusable_user(db, user_id) or role_unfit(db, user_id, roles):
         return None
     return user_id
 

@@ -25,7 +25,7 @@ from ...database import get_db
 from ...patchtypes import UNSET
 from ...texttypes import NON_BLANK
 from ...deps import get_current_user, paginate, require_date, require_roles, resolve_business_date, row_dict
-from ..platform import (Patient, User, assignee_outside_org, evidence_urls, notify_user, unusable_user,
+from ..platform import (Patient, User, assignee_outside_org, evidence_urls, notify_user, role_unfit, unusable_user,
                         valid_task_evidence)
 from ..models import (
     SpdEnrollment,
@@ -477,6 +477,10 @@ def adjust_path_instance(
         if state:
             raise HTTPException(status_code=404,
                                 detail=f"路径负责人{state}（owner_user_id={data['owner_user_id']}）")
+        role = role_unfit(db, data["owner_user_id"], SERVICE_ROLES)   # 角色办不了路径的也不收（第二十二批 X3-1）
+        if role:
+            raise HTTPException(status_code=422,
+                                detail=f"路径负责人是{role}，办不了路径（owner_user_id={data['owner_user_id']}）")
     if data.get("status") == "running" and instance.status == "paused":
         # 恢复与推进接口同一套（P1-131）：原先这里只把状态改回去，因条件暂停的路径不判条件、不派任务
         with serialized_on(db, SpdPathInstance, instance.id):
@@ -701,6 +705,9 @@ def create_task(
         state = unusable_user(db, body.assignee_id)
         if state:
             raise HTTPException(status_code=404, detail=f"责任人{state}")
+        role = role_unfit(db, body.assignee_id, SERVICE_ROLES)   # 改成了经办 / 药师的人办理 403（第二十二批 X3-1）
+        if role:
+            raise HTTPException(status_code=422, detail=f"责任人是{role}，派过去办不了这条任务")
         if assignee_outside_org(db, body.assignee_id, org_id):
             raise HTTPException(status_code=422, detail="责任人不在任务所属机构，派过去打不开这条任务")
     if body.team_id is not None:
@@ -940,6 +947,9 @@ def assign_task(
     state = unusable_user(db, body.assignee_id)  # 停用的账号登录不了，转过去就没人办（P1-106）
     if state:
         raise HTTPException(status_code=404, detail=f"责任人{state}")
+    role = role_unfit(db, body.assignee_id, SERVICE_ROLES)   # 与建任务同一句（第二十二批 X3-1）
+    if role:
+        raise HTTPException(status_code=422, detail=f"责任人是{role}，派过去办不了这条任务")
     if assignee_outside_org(db, body.assignee_id, task.org_id):
         raise HTTPException(status_code=422, detail="责任人不在任务所属机构，派过去打不开这条任务")
     if task.assignee_id is not None and task.assignee_id != body.assignee_id:
@@ -1268,6 +1278,9 @@ def batch_tasks(
         state = unusable_user(db, body.assignee_id)
         if state:
             raise HTTPException(status_code=404, detail=f"责任人{state}")
+        role = role_unfit(db, body.assignee_id, SERVICE_ROLES)   # 与单条转派同一句，整批拒收（第二十二批 X3-1）
+        if role:
+            raise HTTPException(status_code=422, detail=f"责任人是{role}，派过去办不了这些任务")
     done, skipped = 0, []
     for task in tasks:
         if body.action in ("claim", "urge", "escalate", "cancel") and task.status not in OPEN_STATUSES:

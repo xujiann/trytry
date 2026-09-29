@@ -46,6 +46,13 @@ from .models import (
 )
 from .rules import FIELD_SOURCES, evaluate, judge_level, scale_problem
 
+#: 慢专病服务工作（任务、目标患者、复诊、干预、路径）的办理角色：各路由文件 `require_roles(*SERVICE_ROLES)` 的那一组。
+#: 路由各自留一份同名常量（角色守卫的静态扫描按文件内的模块级常量认星号展开），这一份给系统替人挑责任人用
+#: （`usable_or_none`，第二十二批 X3-1），两边相等由 `tests/test_spd_role_unfit_assignee.py` 钉住
+SERVICE_ROLES = ("doctor", "public_health", "director")
+#: 在线咨询接诊的角色：`care.py` 咨询回复 / 结束两个端点的 `require_roles("doctor", "director")`，同由上面的用例钉住
+CONSULT_ROLES = ("doctor", "director")
+
 #: 监测指标在 facts 里的键就是 `SpdMeasurement.metric`，与 `spd/rules.py::FIELD_SOURCES` 对齐。
 MEASURE_FIELDS = (
     "bp_sys", "bp_dia", "glucose_fasting", "glucose_pp2h", "hba1c", "ua", "spo2",
@@ -519,7 +526,8 @@ def spawn_task(
     找不到人也照样建任务，落成待接收（`pending`）而不是报错——
     "没人认领的任务"在中心端待办里看得见，"没建出来的任务"谁也看不见。
     停用的账号同样算「找不到人」（第十五批 S1-1）：主管医生后来停用了、转诊发起人离开了，任务照旧挂给他，别人认领
-    409、中心端「未分配」不数它，就没人办了——落成待接收，谁都认领得了。
+    409、中心端「未分配」不数它，就没人办了——落成待接收，谁都认领得了。角色办不了任务的同样（第二十二批 X3-1）：主管
+    医生后来被改成经办 / 药师，他办理 403，别人接收 409。
     """
     due = clock.today() + timedelta(days=max(due_days, 0))
     task = SpdTask(
@@ -532,7 +540,8 @@ def spawn_task(
         title=title,
         org_id=org_id or (enrollment.org_id if enrollment else None),
         team_id=team_id or (enrollment.team_id if enrollment else None),
-        assignee_id=usable_or_none(db, assignee_id or (enrollment.doctor_user_id if enrollment else None)),
+        assignee_id=usable_or_none(db, assignee_id or (enrollment.doctor_user_id if enrollment else None),
+                                   roles=SERVICE_ROLES),
         exec_role=node.exec_role if node else "",
         status="pending",
         priority=priority,
@@ -860,8 +869,10 @@ def advance_path(db: Session, instance: SpdPathInstance) -> dict:
         # 通知主管医生与路径负责人（P2-503）：原先只通知主管医生——档案没配主管医生时一条都不发，正是上面说的「停在那里
         # 且没人知道为什么」；启动路径、在路径页调整它的负责人也不知道。两人是同一个的只发一条。
         # 停用的账号不发（第十六批 T2-2，与派任务的 `usable_or_none` 同一口径）：原先照发，消息落进一个登不上的收件箱，
-        # 在岗的人照样不知道路径停了；两人都停用时一个都不剩，该回落给谁另行裁定
-        recipients = (usable_or_none(db, uid) for uid in (enrollment.doctor_user_id, instance.owner_user_id))
+        # 在岗的人照样不知道路径停了；两人都停用时一个都不剩，该回落给谁另行裁定。角色不筛（`roles=()`）：这是知会不是
+        # 派活，改成经办 / 药师的人登得上、看得到、能转告；派活才按角色挑人（第二十二批 X3-1）
+        recipients = (usable_or_none(db, uid, roles=())
+                      for uid in (enrollment.doctor_user_id, instance.owner_user_id))
         for recipient in dict.fromkeys(uid for uid in recipients if uid):
             notify_user(
                 db, recipient, category="spd_path",

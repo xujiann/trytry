@@ -35,7 +35,8 @@ from ...deps import (
     through_day,
     keyword_like,
 )
-from ..platform import ENCOUNTER_TYPE_NAMES, Admission, Encounter, Organization, Patient, User, unusable_user
+from ..platform import (ENCOUNTER_TYPE_NAMES, Admission, Encounter, Organization, Patient, User, role_unfit,
+                        unusable_user)
 from ..models import (
     SpdCallTask,
     SpdFollowupRecord,
@@ -715,6 +716,10 @@ def generate_followup_plan(
         state = unusable_user(db, body.executor_id)
         if state:
             raise HTTPException(status_code=404, detail=f"随访执行人{state}（executor_id={body.executor_id}）")
+        # 角色执行不了随访的（药师）也不收：执行过 FOLLOWUP_ROLES，派给他整条计划到点打开 403（第二十二批 X3-1）
+        role = role_unfit(db, body.executor_id, FOLLOWUP_ROLES)
+        if role:
+            raise HTTPException(status_code=422, detail=f"随访执行人是{role}，办不了随访（executor_id={body.executor_id}）")
     base = date.fromisoformat(body.base_date) if body.base_date else clock.today()
     created = []
     for offset in plan_offsets(rule):
@@ -1088,6 +1093,10 @@ def update_followup_record(
         if state:
             raise HTTPException(status_code=404,
                                 detail=f"随访执行人{state}（executor_id={changes['executor_id']}）")
+        role = role_unfit(db, changes["executor_id"], FOLLOWUP_ROLES)   # 与派随访同一句（第二十二批 X3-1）
+        if role:
+            raise HTTPException(status_code=422,
+                                detail=f"随访执行人是{role}，办不了随访（executor_id={changes['executor_id']}）")
     # 改的列与「还没完成」同一条条件 UPDATE（P2-287）：上面那道预检是锁外读的，这期间别人刚执行完的随访不能被改回去
     if changes and not adjust_followup_record(db, record_id, **changes):
         db.rollback()

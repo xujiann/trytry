@@ -31,7 +31,7 @@ from ...datetypes import OptionalDateStr
 from ...texttypes import NON_BLANK
 from ...deps import get_current_user, paginate, require_date, require_roles, row_dict, keyword_like
 from ..platform import (Organization, Patient, User, assignee_outside_org, id_card_variants, pii_filter,
-                        unusable_user)
+                        role_unfit, unusable_user)
 from ..models import (
     SpdAssessment,
     SpdCandidate,
@@ -846,6 +846,10 @@ def distribute_candidates(
         state = unusable_user(db, body.assigned_user_id)
         if state:
             raise HTTPException(status_code=404, detail=f"指派人{state}")
+        # 角色办不了目标患者的（改成了经办 / 药师）也不收：认领、办理都过 SERVICE_ROLES，分过去他打开 403（第二十二批 X3-1）
+        role = role_unfit(db, body.assigned_user_id, SERVICE_ROLES)
+        if role:
+            raise HTTPException(status_code=422, detail=f"指派人是{role}，分过去办不了这些记录")
         # 指给别家机构的人原先照收（P2-725）：他打开是 403、查「指给我的」看不见，本机构的人认领又 409，这条目标患者
         # 谁都办不了，还从「待分发」里数没了。与任务派人（P1-210）同一判据，按分发之后的机构判；整批拒收，不留半成品
         stuck = sorted(
@@ -1009,6 +1013,11 @@ def _check_enroll_refs(db: Session, values: dict, current: SpdEnrollment | None 
         state = unusable_user(db, value)
         if state:
             raise HTTPException(status_code=404, detail=f"{label}{state}（{field}={value}）")
+        # 主管医生的角色要办得了慢专病服务（第二十二批 X3-1）：新派生的任务、复诊、干预缺省都挂给他，改成了经办 / 药师的人
+        # 挂上去，派给他的活他办理 403、别人接收 409。个案管理师与村医不派活（只进各自的「我的患者」与积分），不查角色
+        role = role_unfit(db, value, SERVICE_ROLES) if field == "doctor_user_id" else ""
+        if role:
+            raise HTTPException(status_code=422, detail=f"{label}是{role}，办不了慢专病服务（{field}={value}）")
     # 村医档案停用了也不收（第十五批 S1-4）：账号还在用、村医档案已停用的人，别处一律当「已回收」——不出绑定码、不进
     # 考核对象、工作台不数；建档照挂、照记签约积分。没有村医档案的账号不强求（存量档案里有），只看有档案且停用的
     vd_user = values.get("village_doctor_id")

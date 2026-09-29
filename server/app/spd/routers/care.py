@@ -29,7 +29,7 @@ from ...deps import (
     row_dict,
     through_day,
 )
-from ..platform import Patient, User, id_card_variants, pii_filter, unusable_user, usable_or_none
+from ..platform import Patient, User, id_card_variants, pii_filter, role_unfit, unusable_user, usable_or_none
 from ..models import (
     SpdAssessment,
     SpdCaseReport,
@@ -762,7 +762,7 @@ def _auto_intervene(db: Session, enrollment: SpdEnrollment, risk_level: str) -> 
                         goal=f"{RISK_LEVEL_NAMES.get(risk_level, risk_level)}自动干预", content=template.content,
                         measures=template.measures, frequency=template.frequency,
                         next_at=(clock.today() + timedelta(days=7)).isoformat(),
-                        owner_id=usable_or_none(db, enrollment.doctor_user_id), status="planned",
+                        owner_id=usable_or_none(db, enrollment.doctor_user_id, roles=SERVICE_ROLES), status="planned",
                     )
                 )
         already = (
@@ -780,7 +780,8 @@ def _auto_intervene(db: Session, enrollment: SpdEnrollment, risk_level: str) -> 
                 SpdRevisit(
                     patient_id=enrollment.patient_id, program_code=enrollment.program_code,
                     plan_date=(clock.today() + timedelta(days=14)).isoformat(),
-                    doctor_user_id=usable_or_none(db, enrollment.doctor_user_id), items="高危复诊评估",
+                    doctor_user_id=usable_or_none(db, enrollment.doctor_user_id, roles=SERVICE_ROLES),
+                    items="高危复诊评估",
                     source="high_risk", status="planned",
                 )
             )
@@ -1331,6 +1332,10 @@ def create_revisit(
         state = unusable_user(db, body.doctor_user_id)
         if state:
             raise HTTPException(status_code=404, detail=f"复诊医生{state}（doctor_user_id={body.doctor_user_id}）")
+        role = role_unfit(db, body.doctor_user_id, SERVICE_ROLES)   # 改成了经办 / 药师的办理复诊 403（第二十二批 X3-1）
+        if role:
+            raise HTTPException(status_code=422,
+                                detail=f"复诊医生是{role}，办不了复诊（doctor_user_id={body.doctor_user_id}）")
     program_problem = unknown_program(db, body.program_code)  # 病种编码先查在不在（P1-120）
     if program_problem:
         raise HTTPException(status_code=404, detail=program_problem)

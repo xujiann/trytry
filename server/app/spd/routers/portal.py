@@ -49,7 +49,7 @@ from ..models import (
     SpdTeam,
 )
 from ..rules import is_suspect_risk, score_scale
-from ..service import (FOLLOWUP_OPEN_STATUSES, MEASUREMENT_SOURCE_NAMES, MEDIA_TYPE_NAMES, PACKAGE_BINDING_STATUS_NAMES,
+from ..service import (CONSULT_ROLES, FOLLOWUP_OPEN_STATUSES, MEASUREMENT_SOURCE_NAMES, MEDIA_TYPE_NAMES, PACKAGE_BINDING_STATUS_NAMES,
                        REFERRAL_STATUS_LABELS, TASK_COMPLETABLE_STATUSES, TASK_OPEN_STATUSES, actively_enrolled, answers_problem, referral_ends,
                        close_followup_record, enrollment_for, judge_measurement, mark_intervention_done,
                        measure_program_for, measure_value_problem, move_task,
@@ -1520,8 +1520,10 @@ def start_consult(
         enrollment = enrollment_for(db, patient.id, body.program_code)[1] if body.program_code else None
         consult = SpdConsult(
             patient_id=patient.id, program_code=body.program_code,
-            # 主管医生已停用的不派给他（第十五批 S1-1）：落成空，本机构医护在会话清单里照样看得见、接得起
-            doctor_id=usable_or_none(db, enrollment.doctor_user_id) if enrollment else None, status="open",
+            # 主管医生已停用的不派给他（第十五批 S1-1）：落成空，本机构医护在会话清单里照样看得见、接得起。角色回复不了咨询
+            # 的同样（第二十二批 X3-1）：改成了经办 / 公卫 / 药师的，派给他回复 403
+            doctor_id=usable_or_none(db, enrollment.doctor_user_id, roles=CONSULT_ROLES) if enrollment else None,
+            status="open",
         )
         if not insert_if_absent(db, consult):
             # 并发抢输：另一路刚建出同病种的开放会话（撞 uq_spd_consult_open_patient_program）。
