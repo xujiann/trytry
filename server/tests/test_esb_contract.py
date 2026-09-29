@@ -291,10 +291,11 @@ def test_消息列表与回执同形_分页头与过滤(client, admin, seed):
     )
     assert resp.headers["X-Total-Count"] == "5"
     rows = resp.json()
-    assert len(rows) == 2 and list(rows[0].keys()) == MESSAGE_KEY_ORDER
+    # 清单行在末尾多一个 retry_flow（P2-820：最近一次按编排执行失败的那条编排，空串是没有）；入队与消费回执不带
+    assert len(rows) == 2 and list(rows[0].keys()) == MESSAGE_KEY_ORDER + ["retry_flow"]
     # id 倒序：msg5 从未被消费，列表行与入队回执逐键相等
-    assert rows[0] == seed["msg5"]
-    # msg4 又经编排失败一次：读列表时以最新状态呈现
+    assert rows[0] == {**seed["msg5"], "retry_flow": ""}
+    # msg4 又经编排失败一次：读列表时以最新状态呈现，只能按那条编排重试
     assert rows[1] == {
         **seed["msg4"],
         "status": "failed",
@@ -303,13 +304,14 @@ def test_消息列表与回执同形_分页头与过滤(client, admin, seed):
         "last_error": "第 1 步（validate）失败：必填字段缺失：must_have",
         "next_retry_at": rows[1]["next_retry_at"],
         "updated_at": rows[1]["updated_at"],
+        "retry_flow": "CT_FLOW_BAD",
     }
     queued = client.get(
         f"/api/esb/messages?endpoint_id={seed['ep1']['id']}&status=queued", headers=admin
     ).json()
-    assert queued == [seed["msg5"]]
+    assert queued == [{**seed["msg5"], "retry_flow": ""}]
     by_type = client.get("/api/esb/messages?msg_type=report", headers=admin).json()
-    assert by_type == [seed["msg6"]]
+    assert by_type == [{**seed["msg6"], "retry_flow": ""}]
 
 
 # ---------------------------------------------------------------- 流程编排

@@ -492,12 +492,19 @@ async function renderEsb() {
     shownMessages = messages;
     // 停用的出站接入方不给「消费/重试」（P2-180：后端 409，消息留在队里，启用后再消费）
     const stoppedOutbound = new Set(endpoints.filter((ep) => ep.direction === "outbound" && !ep.active).map((ep) => ep.code));
+    // 按编排执行失败的消息只能按那条编排重试（P2-820）：默认消费绕过编排，后端 409——原先这里照给「消费/重试」，
+    // 透传消息点了就记成功、编排里后面那步的目标再也收不到。那条编排已停用的，执行也是 409，只标出来
+    const activeFlows = new Set(flows.filter((f) => f.active).map((f) => f.code));
+    const retryOp = (m) => !m.retry_flow ? `<button class="btn secondary" data-esbproc="${m.id}">消费/重试</button>`
+      : activeFlows.has(m.retry_flow)
+        ? `<button class="btn secondary" data-esbrerun="${m.id}" data-flow="${esc(m.retry_flow)}">按编排「${esc(m.retry_flow)}」重试</button>`
+        : `<span class="tag">编排「${esc(m.retry_flow)}」已停用</span>`;
     $("#esb-messages").innerHTML = table(["ID", "接入方", "消息类型", "状态", "重试", "最后错误", "操作"], messages, (m) => {
       const retryable = (m.status === "queued" || m.status === "failed") && !stoppedOutbound.has(m.endpoint_code);
       return `<tr><td>${m.id}</td><td><span class="tag">${esc(m.endpoint_code)}</span></td><td>${esc(m.msg_type)}</td>
         <td>${statusTag(ESB_MSG_STATUS, m.status)}</td><td>${m.retry_count}/${m.max_retries}</td>
         <td style="max-width:280px;font-size:12px;color:#b23c3c">${esc(m.last_error)}</td>
-        <td>${retryable ? `<button class="btn secondary" data-esbproc="${m.id}">消费/重试</button>`
+        <td>${retryable ? retryOp(m)
           : stoppedOutbound.has(m.endpoint_code) && m.status !== "succeeded" && m.status !== "dead"
             ? '<span class="tag">接入方已停用</span>' : "—"}
           <button class="btn secondary" data-esbpayload="${m.id}">查看载荷</button></td></tr>`;
@@ -603,7 +610,7 @@ async function renderEsb() {
   };
   $("#page-body").onclick = async (e) => {
     const { esbproc, esbpayload, esbtoggle, active, esbrotate, esbrun,
-            esbflowedit, esbruns } = e.target.dataset;
+            esbflowedit, esbruns, esbrerun, flow } = e.target.dataset;
     try {
       if (esbruns) return await drawRuns(esbruns);
       if (esbflowedit) {
@@ -628,7 +635,11 @@ async function renderEsb() {
         if (ok) route();
         return;
       }
-      if (esbproc) {
+      if (esbrerun) {
+        const res = await api(`/api/esb/flows/${encodeURIComponent(flow)}/run?message_id=${encodeURIComponent(esbrerun)}`, { method: "POST" });
+        setMsg("#esb-msg", `消息 ${esbrerun} 按编排 ${flow} → ${res.status === "succeeded" ? "全部步骤成功" : `第 ${res.step_results.length} 步失败：${res.error}`}`, res.status === "succeeded");
+        await drawMessages();
+      } else if (esbproc) {
         const res = await api(`/api/esb/messages/${esbproc}/process`, { method: "POST" });
         setMsg("#esb-msg", `消息 ${esbproc} → ${ESB_MSG_STATUS[res.status][0]}：${res.detail || res.last_error}`, res.status === "succeeded");
         await drawMessages();

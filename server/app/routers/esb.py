@@ -27,7 +27,7 @@ import httpx
 from httpx import URL, InvalidURL  # 直接取名：出站用例会把模块里的 httpx 换成假投递，地址校验与异常类得用真的
 from fastapi import APIRouter, Depends, Header, HTTPException, Response
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import ColumnElement, case, func
+from sqlalchemy import ColumnElement, case, exists, func
 from sqlalchemy.orm import Session
 
 from ..concurrency import add_amount, ensure_present, insert_or_conflict, move_row
@@ -318,6 +318,15 @@ class MessageProcessOut(MessageOut):
     detail: str
 
 
+class MessageRowOut(MessageOut):
+    """清单行：尾键 `retry_flow`——这条消息上次按哪条编排执行失败（P2-820），空串是没有。
+
+    只加在清单行上：入队与消费回执一字不动。按编排执行失败的消息只能按那条编排重试（`_failed_flow_code`），页面据此把
+    「消费/重试」换成「按编排重试」。"""
+
+    retry_flow: str
+
+
 @router.post("/messages", response_model=MessageOut, status_code=201)
 def enqueue_message(
     body: MessageIn,
@@ -352,7 +361,7 @@ def enqueue_message(
 # 只给管理员（P0-49）：载荷是接入方投进来的原始报文（HL7 PID 段、FHIR Patient……），证件号、手机号都是明文——原先登录
 # 即可，村医一页 500 条翻得到全县过总线的患者身份信息，而同一个人在 /api/patients 上对非管理员是掩码的（§4 出口脱敏）。
 # 唯一的调用方是只对管理员开放的集成平台页（app.js 的 esb 页 roles: ["admin"]），接口与它同口径
-@router.get("/messages", response_model=list[MessageOut], dependencies=[Depends(require_admin)])
+@router.get("/messages", response_model=list[MessageRowOut], dependencies=[Depends(require_admin)])
 def list_messages(
     response: Response,
     status: str | None = None,
@@ -374,7 +383,38 @@ def list_messages(
         q = q.filter(EsbMessage.msg_type == msg_type)
     rows = paginate(q.order_by(EsbMessage.id.desc()), response, offset, limit)
     codes = row_dict(db.query(EsbEndpoint.id, EsbEndpoint.code).all())
-    return [_message_out(m, codes.get(m.endpoint_id, "")) for m in rows]
+    # 每条消息最近一次编排执行（按编号升序覆盖，留下最后一条）：失败的给出那条编排的编码
+    latest: dict[int, EsbFlowRun] = {}
+    for run in (db.query(EsbFlowRun).filter(EsbFlowRun.message_id.in_([m.id for m in rows] or [0]))
+                .order_by(EsbFlowRun.id)):
+        latest[run.message_id] = run
+    flow_codes = row_dict(db.query(EsbFlow.id, EsbFlow.code).all())
+    return [
+        {**_message_out(m, codes.get(m.endpoint_id, "")),
+         "retry_flow": _flow_code_of(latest.get(m.id), flow_codes)}
+        for m in rows
+    ]
+
+
+def _flow_code_of(run: EsbFlowRun | None, flow_codes: dict) -> str:
+    """最近一次编排执行失败时那条编排的编码，否则空串（清单与 `_failed_flow_code` 同一句）。"""
+    if run is None or run.status != "failed":
+        return ""
+    return flow_codes.get(run.flow_id) or f"#{run.flow_id}"
+
+
+def _failed_flow_code(db: Session, message_id: int) -> str:
+    """这条消息最近一次是按编排执行、并且失败了：返回那条编排的编码，否则空串（P2-820，第二十二批扫描 X1-1）。
+
+    按编排执行失败记的是「第 N 步失败、待重试」，要重做的是那条编排（`run_flow`）；默认消费（`_process_message`）不看
+    编排——入站透传消息不投任何地方就记成功，编排里后面那步路由的目标再也收不到；出站消息把没过编排校验的原始报文
+    投出去，也记成功。所以这类消息不走默认消费：手工「消费/重试」409，定时出站不挑它（`_outbound_due`）。"""
+    run = (db.query(EsbFlowRun).filter(EsbFlowRun.message_id == message_id)
+           .order_by(EsbFlowRun.id.desc()).first())
+    if run is None or run.status != "failed":
+        return ""
+    flow = db.get(EsbFlow, run.flow_id)
+    return flow.code if flow else f"#{run.flow_id}"
 
 
 def _record_success(message: EsbMessage) -> None:
@@ -583,6 +623,15 @@ def _due(now: datetime) -> ColumnElement[bool]:
     return (EsbMessage.status == "queued") | ((EsbMessage.status == "failed") & (EsbMessage.next_retry_at <= now))
 
 
+def _outbound_due(now: datetime) -> ColumnElement[bool]:
+    """定时出站可投的消息：`_due` 之外，最近一次按编排执行失败的不投（P2-820，见 `_failed_flow_code`）。
+
+    按「有过失败的编排执行」判：到期未结束的消息若有过成功的编排执行早已是「成功」（终态），所以对它们「有失败的执行」
+    就是「最近一次执行失败」。选批次与逐条抢占用同一个条件（`_due` 的说明）。"""
+    flow_failed = exists().where(EsbFlowRun.message_id == EsbMessage.id, EsbFlowRun.status == "failed")
+    return _due(now) & ~flow_failed
+
+
 def _claim_lost(db: Session, message: EsbMessage) -> NoReturn:
     """手工一路抢输：回滚、按库里此刻的状态报 409。"""
     db.rollback()
@@ -659,6 +708,11 @@ def process_message(message_id: int, db: Session = Depends(get_db), user: User =
         raise HTTPException(status_code=404, detail="消息不存在")
     if message.status in {"succeeded", "dead"}:
         raise HTTPException(status_code=409, detail=f"消息当前状态 {MSG_STATUS.get(message.status, message.status)} 不可再消费")
+    # 按编排执行失败的只能按那条编排重试（P2-820）：默认消费不看编排，原先透传消息不投就记成功、出站把没过校验的原文投出去
+    failed_flow = _failed_flow_code(db, message.id)
+    if failed_flow:
+        raise HTTPException(status_code=409,
+                            detail=f"这条消息上次按编排「{failed_flow}」执行失败，默认消费会绕过编排——请对它重新执行该编排")
     endpoint = db.get(EsbEndpoint, message.endpoint_id)
     # 停用的出站接入方不手工投递（P2-180）：定时消费只取「出站且启用」的、编排的路由步骤拒停用目标，手工消费原先
     # 什么都不看——省平台维护期间停用了端点，经办逐条点「消费/重试」就逐条真投、失败三次进死信，恢复启用后一条
@@ -701,7 +755,7 @@ def consume_pending_outbound(db: Session, batch_size: int = OUTBOUND_BATCH_SIZE)
     口径：
     - 只挑**出站端点**（direction=outbound 且 active）的消息；
     - queued 立即可投；failed 须到达 next_retry_at（尊重既有指数退避），
-      succeeded/dead/processing 一律不碰；
+      succeeded/dead/processing 一律不碰；最近一次按编排执行失败的不碰（只能按编排重试，P2-820）；
     - 每轮至多 batch_size 条（分批，防单轮长事务），按 id 先进先出；
     - 每条各自 commit：一条投挂不拖累同批其余消息；
     - 成败均落 ExchangeLog（与手工消费同一监控口径）；告警交由日志——
@@ -714,7 +768,7 @@ def consume_pending_outbound(db: Session, batch_size: int = OUTBOUND_BATCH_SIZE)
         .filter(
             EsbEndpoint.direction == "outbound",
             EsbEndpoint.active.is_(True),
-            _due(now),
+            _outbound_due(now),
         )
         .order_by(EsbMessage.id)
         .limit(batch_size)
@@ -728,7 +782,7 @@ def consume_pending_outbound(db: Session, batch_size: int = OUTBOUND_BATCH_SIZE)
         if endpoint is None or not endpoint.active:
             continue
         message_id = message.id
-        if not _claim(db, message, _due(now)):
+        if not _claim(db, message, _outbound_due(now)):
             continue   # 选出之后被别处消费了（手工消费 / 编排执行），这一轮不再投（P2-405）
         try:
             _process_message(db, message, endpoint)
