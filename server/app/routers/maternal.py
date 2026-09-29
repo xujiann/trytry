@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field, FiniteFloat
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 from .. import clock
-from ..datetypes import DateStr, OptionalDateStr
+from ..datetypes import DateStr, OptionalDateStr, legacy_date
 from ..concurrency import append_text, appended_text, insert_if_absent, insert_or_conflict
 from ..numtypes import INT4_MAX
 from ..texttypes import NON_BLANK
@@ -631,10 +631,20 @@ def _screening_out(s: PrenatalScreening) -> dict:
 
 def _pregnancy_ended_on(db: Session, record_id: int) -> tuple[str, str] | None:
     """这一胎结束的日子与依据（P2-233）：登记了分娩的取分娩日期；没登记分娩的（外院分娩、只有产后访视）取最早一次
-    产后访视的日期（没填访视日期的按录入那天）；都没有返回 None——还在孕期，或结束的日子无从知道。"""
-    delivered = db.query(DeliveryRecord.delivery_date).filter(DeliveryRecord.record_id == record_id).scalar()
+    产后访视的日期（没填访视日期的按录入那天）；都没有返回 None——还在孕期，或结束的日子无从知道。
+
+    三种存量行按「日子未知」处理、不拦（P2-895）：
+    - 一档两条分娩：唯一索引 `uq_delivery_record` 遇存量重复不建（迁移 b9c8d7e6f5a4），原先 `.scalar()` 直接 500，
+      补录孕期筛查录不进；取最早的一条（同文件兄弟路径、`billing.py` 同样不信唯一性）；
+    - 没填访视日期、录入时刻是补列时回填的 1970 哨兵（迁移 d9f0a1b2c3e4）：录入那天不可考，不参与推算——原先按
+      1970-01-01 算，这一胎任何筛查都 409「晚于这一胎的产后访视日期 1970-01-01」；
+    - 日期是 P1-61 之前的非规范写法（「2026/03/10」）：按字符串比，同一年里比任何规范日期都「晚」，9 月新一胎的高风险
+      唐筛照样录进旧档案、把旧档案标成高危（P2-211 要防的正是这个）。按日历读（`legacy_date`），读不成的不参与。
+    """
+    deliveries = db.query(DeliveryRecord.delivery_date).filter(DeliveryRecord.record_id == record_id).all()
+    delivered = [day for day in (legacy_date(raw) for (raw,) in deliveries) if day]
     if delivered:
-        return delivered, "分娩日期"
+        return min(delivered), "分娩日期"
     visits = (
         db.query(MaternalVisit.visit_date, MaternalVisit.created_at)
         .filter(MaternalVisit.record_id == record_id, MaternalVisit.visit_type == "postpartum")
@@ -642,7 +652,12 @@ def _pregnancy_ended_on(db: Session, record_id: int) -> tuple[str, str] | None:
     )
     # 录入那天取本地日期（第十五批 S2-6）：落库时刻是 naive UTC，原先直接 `.date()`，东八区 0–8 点录的产后访视算成前一天，
     # 产后访视当天的筛查被当成「晚于这一胎结束」409
-    dates = [v.visit_date or clock.to_local(v.created_at).date().isoformat() for v in visits]
+    dates = [day for day in (
+        legacy_date(v.visit_date) if v.visit_date
+        else None if v.created_at is None or v.created_at.year <= 1970
+        else clock.to_local(v.created_at).date().isoformat()
+        for v in visits
+    ) if day]
     return (min(dates), "产后访视日期") if dates else None
 
 
