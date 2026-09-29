@@ -2065,13 +2065,16 @@ def list_usages(binding_id: int, response: Response, offset: int = 0, limit: int
 @router.get("/service-applies", response_model=list[ServiceApplyOut],
             response_model_exclude_unset=True)
 def list_service_applies(
-    response: Response, status: str | None = "pending", offset: int = 0, limit: int = 100,
+    response: Response, status: str | None = "pending", oldest_first: bool = False, offset: int = 0, limit: int = 100,
     db: Session = Depends(get_db),
 ):
+    """居民服务申请清单，缺省按提交先后倒序。`oldest_first=true` 先到的排前（P2-827）：中心端「待受理」照先到先办的次序
+    取，原先取最新 30 条，待受理的一多，等得最久的那几条被截掉、页面也不说截断了。"""
     query = db.query(SpdServiceApply)
     if status:
         query = query.filter(SpdServiceApply.status == status)
-    rows = paginate(query.order_by(SpdServiceApply.id.desc()), response, offset, limit)
+    order = SpdServiceApply.id.asc() if oldest_first else SpdServiceApply.id.desc()
+    rows = paginate(query.order_by(order), response, offset, limit)
     briefs = _patient_brief(db, [r.patient_id for r in rows])
     # 受理按钮按 `acceptable` 摆（P2-796）：病种停用后页面原先照给「受理」，点了 409「……只能驳回」
     problems = {code: unknown_program(db, code, active_only=True) for code in {r.program_code for r in rows}}

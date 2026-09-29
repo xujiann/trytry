@@ -1042,7 +1042,8 @@ async function renderSpdCenter() {
     api("/api/spd/candidates?status=target&unassigned=true&limit=200"),
     spdCatalog(),
     api("/api/spd/case-report-tasks"),
-    api("/api/spd/service-applies?status=pending&limit=30"),
+    // 待受理的先到先办、上限 200（P2-827）：原先取最新 30 条，待受理的一多，等得最久的那几条被截掉
+    api("/api/spd/service-applies?status=pending&oldest_first=true&limit=200"),
     // 还在跟进的召回（待联系 / 已联系）单独取一遍、排在最前（P2-782）：原先只取最新 30 条，已召回 / 召回失败的一多，
     // 还要「登记进度」的那几条就被挤出窗口
     api("/api/spd/recalls?limit=30"),
@@ -2143,7 +2144,10 @@ async function renderSpdPath() {
   const drawTasks = async (query) => {
     lastTaskQuery = query || {};
     const qs = new URLSearchParams({ limit: "30", ...lastTaskQuery }).toString();
-    const rows = await api(`/api/spd/tasks?${qs}`);
+    // 没筛选时，未结束的单独取一遍、排在最前（P2-827，与 P2-783 同一做法）：清单按优先级、截止日排、不分状态——办结、
+    // 取消的截止日早，攒过 30 条之后首屏一条要办的都没有，中心工作台却报「全部待办 N」。筛了的照筛的来
+    const rows = Object.keys(lastTaskQuery).length ? await api(`/api/spd/tasks?${qs}`)
+      : actionableFirst(...await Promise.all([api(`/api/spd/tasks?${qs}`), api("/api/spd/tasks?open_only=true&limit=200")]));
     // 责任人列（P2-825）：工作台报「无人认领 N」，表上原先看不出哪几条没人接
     $("#spd-task-list").innerHTML = table(
       ["选", "ID", "患者", "任务", "类型", "状态", "责任人", "优先级", "截止", "催办", "操作"], rows, (t) =>
