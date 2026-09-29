@@ -1480,6 +1480,9 @@ async function renderSpdPatients() {
         <select name="risk_level"><option value="">全部风险</option>
           <option value="low">低危</option><option value="mid">中危</option>
           <option value="high">高危</option><option value="very_high">极高危</option></select>
+        <select name="status"><option value="active">在管</option><option value="all">全部状态</option>
+          ${Object.entries(SPD_ENROLL_STATUS).filter(([v]) => v !== "active")
+            .map(([v, t]) => `<option value="${esc(v)}">${esc(t)}</option>`).join("")}</select>
         <input name="keyword" placeholder="姓名/证件号">
         <button class="secondary">查询</button>
       </form>
@@ -1548,8 +1551,15 @@ async function renderSpdPatients() {
            <button class="btn secondary" data-review="${s.id}" data-r="excluded">排除</button>`}</td></tr>`);
   };
   const drawEnrollments = async (query) => {
-    const qs = new URLSearchParams({ limit: "30", ...(query || {}) }).toString();
-    const rows = await api(`/api/spd/enrollments?${qs}`);
+    // 状态筛选（P2-823）：接口缺省只列在管的，页面原先从不带 status——已死亡、召回中的按姓名查回来是空表，看起来就是
+    // 「此人没建过档」，再签一次后端照收。「全部状态」送 status=（空串即不筛；formJson 会丢空值，故用 all 转一道）
+    const q = { limit: "30", ...(query || {}) };
+    if (q.status === "all") q.status = "";
+    const rows = await api(`/api/spd/enrollments?${new URLSearchParams(q).toString()}`);
+    if (query) {   // 从筛选栏查的：按姓名在「在管」里查空了，说一句去哪儿找；再查时刷新掉上一次的提示
+      setMsg("#spd-enroll-msg", !rows.length && q.keyword && (q.status || "active") === "active"
+        ? "在管档案里没有匹配的；已死亡、召回中、已迁出、已排除的请在状态里选「全部状态」再查" : "", false);
+    }
     $("#spd-enroll-list").innerHTML = table(
       ["ID", "患者", "病种", "阶段", "风险", "机构", "团队", "建档", "下次随访", "状态", "操作"],
       rows, (e) =>
