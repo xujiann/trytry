@@ -26,6 +26,7 @@ from ..deps import (
 from ..models import (
     Appointment,
     AppointmentSlot,
+    Department,
     Employee,
     Organization,
     Patient,
@@ -64,6 +65,8 @@ class DoctorCandidateOut(BaseModel):
     available_slots: int
     next_slots: list[DoctorNextSlotOut]
     bookable: bool
+    # 所在科室（P2-821）：职工挂的科室（`Employee.dept_id`，浙#9 科室信息库），没挂是空串。加在末尾，前面的键一字不动
+    dept_name: str
 
 
 @router.get("/doctors", response_model=list[DoctorCandidateOut])
@@ -86,13 +89,15 @@ def find_doctors(
     都会漏，而漏掉的表现是"这位医师查不到号"，几乎无法自查。
     """
     today = resolve_business_date(from_date, field="from_date").isoformat()
-    query = db.query(Employee)
+    query = db.query(Employee).outerjoin(Department, Department.id == Employee.dept_id)
     if org_id is not None:
         query = query.filter(Employee.org_id == org_id)
     if keyword:
+        # 科室也比（P2-821）：说明与页面占位都写「按姓名 / 科室 / 职称」，原先只比姓名、职称、岗位——搜「心内科」空表，
+        # 挂在心内科的医师查不到。科室按职工挂的科室（dept_id）的名称比；没挂科室的照旧只按另外三项
         query = query.filter(
             keyword_like(Employee.name, keyword) | keyword_like(Employee.title, keyword)
-            | keyword_like(Employee.position, keyword)
+            | keyword_like(Employee.position, keyword) | keyword_like(Department.name, keyword)
         )
     # 有余号的先排、再取前 200 位（P2-178）：原先按编号取前 200 位、再在这 200 位里把有号的排前——全县职工过 200 位
     # （不带关键字、不限机构时必然），编号靠后的医师有号也不在清单里，编号靠前、没号的倒占着位置。
@@ -131,6 +136,10 @@ def find_doctors(
         .filter(Organization.id.in_({e.org_id for e in employees}))
         .all()
     }
+    dept_names = {
+        d.id: d.name
+        for d in db.query(Department).filter(Department.id.in_({e.dept_id for e in employees if e.dept_id} or {0}))
+    }
     rows = []
     for e in employees:
         mine = by_employee.get(e.id, [])
@@ -151,6 +160,7 @@ def find_doctors(
             ],
             # 没号的也返回并标注，见 docstring
             "bookable": bool(available),
+            "dept_name": dept_names.get(e.dept_id, "") if e.dept_id else "",
         })
     return sorted(rows, key=lambda r: (-r["available_slots"], r["employee_id"]))
 

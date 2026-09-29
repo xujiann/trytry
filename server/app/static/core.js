@@ -770,8 +770,8 @@ async function renderAppointments() {
     try {
       const rows = await api(`/api/appointments/doctors?${q.toString()}`);
       $("#doctor-result").innerHTML = table(
-        ["医师", "职称", "岗位", "机构", "可约号源", "近期号源"], rows, (d) =>
-        `<tr><td>${esc(d.name)}</td><td>${esc(d.title) || "—"}</td><td>${esc(d.position) || "—"}</td>
+        ["医师", "科室", "职称", "岗位", "机构", "可约号源", "近期号源"], rows, (d) =>
+        `<tr><td>${esc(d.name)}</td><td>${esc(d.dept_name) || "—"}</td><td>${esc(d.title) || "—"}</td><td>${esc(d.position) || "—"}</td>
          <td>${esc(d.org_name) || d.org_id}</td>
          <td>${d.bookable ? `<span class="tag green">${d.available_slots}</span>` : '<span class="tag">暂无号</span>'}</td>
          <td>${(d.next_slots || []).map((s) =>

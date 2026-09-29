@@ -26,6 +26,7 @@ from app.main import app
 DOCTOR_ROW_KEYS = [
     "employee_id", "name", "title", "title_level", "position", "org_id", "org_name",
     "available_slots", "next_slots", "bookable",
+    "dept_name",   # P2-821：所在科室，加在末尾
 ]
 NEXT_SLOT_KEYS = ["slot_id", "slot_date", "slot_time", "remaining", "resource_name"]
 
@@ -115,6 +116,7 @@ def test_寻医精确_排序与号源嵌套(client, admin, seeded):
                  "remaining": 3, "resource_name": "呼吸科门诊"},
             ],
             "bookable": True,
+            "dept_name": "",   # 没挂科室
         },
         {
             # 没号的也返回并标注——只给有号的，居民会以为这位医师不存在
@@ -128,6 +130,7 @@ def test_寻医精确_排序与号源嵌套(client, admin, seeded):
             "available_slots": 0,
             "next_slots": [],
             "bookable": False,
+            "dept_name": "",
         },
     ]  # 排序 (-available_slots, employee_id)：有号的王主任在前
     assert type(rows[0]["next_slots"][0]["remaining"]) is int
