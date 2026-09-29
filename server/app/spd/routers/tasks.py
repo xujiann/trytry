@@ -55,7 +55,7 @@ from ..service import (
     sweep_overdue_on_read,
     unknown_program,
 )
-from ...visibility import assert_org_writable, assert_patient_visible, can_write_org, visible_org_ids
+from ...visibility import assert_org_visible, assert_org_writable, assert_patient_visible, can_write_org, visible_org_ids
 
 router = APIRouter(
     prefix="/api/spd",
@@ -777,6 +777,10 @@ def list_tasks(
         orgs = visible_org_ids(db, user)
         if orgs is not None:
             query = query.filter(SpdTask.org_id.in_(orgs))
+        # 点名看不见的机构 403（P2-831，与平台 `visibility.scope_org_list` 同一句）：原先先按可见范围过滤、再按 org_id 等值，
+        # 看不见的机构悄悄回空表——看的人以为那家机构没有数据
+        if org_id is not None:
+            assert_org_visible(db, user, org_id)
     if mine:
         query = query.filter(SpdTask.assignee_id == user.id)
     if unassigned:
@@ -834,6 +838,10 @@ def task_summary(
     orgs = visible_org_ids(db, user)
     if orgs is not None:
         query = query.filter(SpdTask.org_id.in_(orgs))
+    # 点名看不见的机构 403（P2-831，与平台 `visibility.scope_org_list` 同一句）：原先先按可见范围过滤、再按 org_id 等值，
+    # 看不见的机构悄悄回空表——看的人以为那家机构没有数据
+    if org_id is not None:
+        assert_org_visible(db, user, org_id)
     if org_id is not None:
         query = query.filter(SpdTask.org_id == org_id)
     if program_code:
@@ -1389,6 +1397,10 @@ def export_tasks(
     orgs = visible_org_ids(db, user)
     if orgs is not None:
         query = query.filter(SpdTask.org_id.in_(orgs))
+    # 点名看不见的机构 403（P2-831，与平台 `visibility.scope_org_list` 同一句）：原先先按可见范围过滤、再按 org_id 等值，
+    # 看不见的机构悄悄回空表——看的人以为那家机构没有数据
+    if org_id is not None:
+        assert_org_visible(db, user, org_id)
     if mine:
         query = query.filter(SpdTask.assignee_id == user.id)
     if unassigned:   # 「只看无人认领」与清单同一句（P2-825）：导出跟着表格走，别勾着它导出全部

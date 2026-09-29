@@ -63,7 +63,7 @@ from ..service import (MEASUREMENT_SOURCE_NAMES, TASK_OPEN_STATUSES, actively_en
 SCREENING_SOURCE_NAMES = {"opportunistic": "机会性", "active": "主动筛查", "self": "居民自查", "import": "数据比对"}
 GROUP_SCOPE_NAMES = {"personal": "本人分组", "dept": "科室分组", "team": "团队分组"}
 #: 迁入确认时原档案处于这些状态，这次迁出即不再生效（P2-527；死亡另有一句 P1-111 的文案）
-from ...visibility import assert_org_writable, assert_patient_visible, can_write_org, visible_org_ids
+from ...visibility import assert_org_visible, assert_org_writable, assert_patient_visible, can_write_org, visible_org_ids
 
 router = APIRouter(
     prefix="/api/spd",
@@ -799,6 +799,11 @@ def list_candidates(
     orgs = visible_org_ids(db, user)
     if orgs is not None:
         query = query.filter(SpdCandidate.org_id.in_(orgs))
+    # 点名看不见的机构 403（P2-831，与平台 `visibility.scope_org_list` 同一句）：原先先按可见范围过滤、再按 org_id 等值，
+    # 看不见的机构悄悄回空表——看的人以为那家机构没有数据
+    if org_id is not None:
+        assert_org_visible(db, user, org_id)
+
     for column, value in (
         (SpdCandidate.program_code, program_code), (SpdCandidate.status, status),
         (SpdCandidate.org_id, org_id), (SpdCandidate.team_id, team_id),
@@ -1168,6 +1173,10 @@ def list_enrollments(
     orgs = visible_org_ids(db, user)
     if orgs is not None:
         query = query.filter(SpdEnrollment.org_id.in_(orgs))
+    # 点名看不见的机构 403（P2-831，与平台 `visibility.scope_org_list` 同一句）：原先先按可见范围过滤、再按 org_id 等值，
+    # 看不见的机构悄悄回空表——看的人以为那家机构没有数据
+    if org_id is not None:
+        assert_org_visible(db, user, org_id)
     for column, value in (
         (SpdEnrollment.program_code, program_code), (SpdEnrollment.status, status),
         (SpdEnrollment.org_id, org_id), (SpdEnrollment.team_id, team_id),

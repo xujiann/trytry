@@ -63,7 +63,7 @@ from ..models import (
     SpdTeam,
     SpdVillageDoctor,
 )
-from ...visibility import visible_org_ids
+from ...visibility import assert_org_visible, visible_org_ids
 
 router = APIRouter(
     prefix="/api/spd",
@@ -1335,6 +1335,10 @@ def workload(
     orgs = visible_org_ids(db, user)
     if orgs is not None:
         task_query = task_query.filter(SpdTask.org_id.in_(orgs))
+    # 点名看不见的机构 403（P2-831，与平台 `visibility.scope_org_list` 同一句）：原先先按可见范围过滤、再按 org_id 等值，
+    # 看不见的机构悄悄回空表——看的人以为那家机构没有数据
+    if org_id is not None:
+        assert_org_visible(db, user, org_id)
     if org_id is not None:
         task_query = task_query.filter(SpdTask.org_id == org_id)
     if program_code:
