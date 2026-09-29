@@ -184,7 +184,7 @@ def test_同档案八路并发高危评估_自动干预与高危复诊各恰一�
 
     autos, revisits = _auto_rows(client, admin, world, patient_id)
     assert len(autos) == 1, f"同一档案同一模板的在途自动干预只该一条，实际 {len(autos)}"
-    assert autos[0]["goal"] == "very_high风险自动干预", autos[0]["goal"]
+    assert autos[0]["goal"] == "极高危自动干预", autos[0]["goal"]   # 目标写中文分层（P2-767）
     assert len(revisits) == 1, f"高危自动复诊只该一条，实际 {len(revisits)}"
 
 

@@ -1301,8 +1301,8 @@ def migration_void_reason(enrollment_status: str) -> str:
 PACKAGE_BINDING_STATUS_NAMES = {"bound": "绑定中", "unbound": "已解绑"}
 
 #: `risk_level` → 中文（成员端四级危险分层）。**不与平台的 1/2/3 互相映射**：
-#: 那是控制情况、这是并发症风险，两把尺子量的不是同一件事。
-_RISK_LABELS = {"low": "低危", "mid": "中危", "high": "高危", "very_high": "极高危"}
+#: 那是控制情况、这是并发症风险，两把尺子量的不是同一件事。写进给人看的文字（自动干预的目标）也用它（P2-767）
+RISK_LEVEL_NAMES = {"low": "低危", "mid": "中危", "high": "高危", "very_high": "极高危"}
 
 
 def enrollment_feed(db: Session, patient_id: int) -> list[dict]:
@@ -1331,7 +1331,7 @@ def enrollment_feed(db: Session, patient_id: int) -> list[dict]:
             status=r.status,
             status_label=ENROLL_STATUS_LABELS.get(r.status, r.status),
             level_code=r.risk_level,
-            level_label=_RISK_LABELS.get(r.risk_level, r.risk_level),
+            level_label=RISK_LEVEL_NAMES.get(r.risk_level, r.risk_level),
             stage=r.stage,
             org=orgs.get(r.org_id, ""),
             created_at=r.created_at.isoformat(),

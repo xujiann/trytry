@@ -143,7 +143,7 @@ def test_高危自动干预临界区_八路并发恰一条干预一条复诊(pg_
     """`care._auto_intervene` 的 PG 直测：同一档案八路并发极高危，恰一条自动干预 + 一条高危复诊。
 
     修之前：Barrier 让八路的存在性 SELECT 全部跑在任何一路提交之前，八路都判"没有"、
-    八路都插——档案上挂八条一模一样的"very_high风险自动干预"和八条高危复诊。
+    八路都插——档案上挂八条一模一样的"极高危自动干预"和八条高危复诊。
     修之后：档案行的 FOR UPDATE 把八路排成队，第二位起重查时快照里已有赢家的行。
 
     断言里没有 409：这条路径幂等不互斥，八路都该正常返回。
@@ -222,7 +222,7 @@ def test_高危自动干预临界区_八路并发恰一条干预一条复诊(pg_
             f"同一档案同一模板的在途自动干预只该一条，实际 {len(interventions)} 条"
             "——临界区没圈住，两路都读到空快照就都插了"
         )
-        assert interventions[0].goal == "very_high风险自动干预", interventions[0].goal
+        assert interventions[0].goal == "极高危自动干预", interventions[0].goal   # 目标写中文分层（P2-767）
         assert len(revisits) == 1, f"高危自动复诊只该一条，实际 {len(revisits)} 条"
     finally:
         # 共享库：只删自己造的行（都带 tag / 自建主键），失败也不影响别人。

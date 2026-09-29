@@ -1264,6 +1264,8 @@ class LifecycleIn(BaseModel):
 _EVENT_STATUS = {
     "exclude": "excluded", "migrate": "migrated", "death": "dead", "recall": "recalled",
 }
+#: 事件的中文名，与管理端生命周期清单同一套字（写进收尾理由这类给人看的文字，P2-767）
+LIFECYCLE_EVENT_NAMES = {"exclude": "排除", "migrate": "迁出", "death": "死亡", "recall": "召回", "resume": "恢复"}
 
 
 def _active_elsewhere_detail(db: Session, enrollment: SpdEnrollment) -> str:
@@ -1369,7 +1371,10 @@ def lifecycle_event(
             db.rollback()
             raise HTTPException(status_code=409, detail="已登记死亡的档案不可再登记生命周期事件")
         db.refresh(enrollment)
-        closed = close_open_work(db, enrollment, f"{body.event}:{body.reason}"[:250])
+        # 收尾理由写事件中文名（P2-767）：原先拼成「death:心源性猝死」，落进被取消任务的审核意见、复诊日志与外呼撤回原因，
+        # 居民端健康任务与管理端任务详情照印
+        label = LIFECYCLE_EVENT_NAMES[body.event]
+        closed = close_open_work(db, enrollment, (f"{label}：{body.reason}" if body.reason else label)[:250])
         if body.event == "death":
             # 召回随死亡收尾（P2-260）：原先结案收尾不管召回记录——死者名下的召回照旧「待联系」，还能登记「已重新纳管」
             ended = _end_open_recalls(db, enrollment.id, "患者已登记死亡，召回终止")

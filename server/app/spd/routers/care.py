@@ -49,7 +49,7 @@ from ..models import (
 )
 from ..rules import score_scale
 from ..service import (ENROLL_STATUS_LABELS, ENROLLMENT_ENDED_STATUSES, MEASUREMENT_SOURCE_NAMES, REVISIT_OPEN_STATUSES,
-                       award_points, enrollment_for, judge_measurement, measure_program_for,
+                       RISK_LEVEL_NAMES, award_points, enrollment_for, judge_measurement, measure_program_for,
                        measure_value_problem, scale_program_mismatch, scale_unusable, spawn_task,
                        unknown_program, withdraw_calls)
 from ...visibility import assert_org_writable, assert_patient_visible, scope_patient_list, visible_org_ids
@@ -748,7 +748,8 @@ def _auto_intervene(db: Session, enrollment: SpdEnrollment, risk_level: str) -> 
                     SpdIntervention(
                         patient_id=enrollment.patient_id, enrollment_id=enrollment.id,
                         program_code=enrollment.program_code, template_id=template.id,
-                        goal=f"{risk_level}风险自动干预", content=template.content,
+                        # 目标写中文分层（P2-767）：原先把编码拼进去，居民端「干预目标」与管理端干预表都印着「high风险自动干预」
+                        goal=f"{RISK_LEVEL_NAMES.get(risk_level, risk_level)}自动干预", content=template.content,
                         measures=template.measures, frequency=template.frequency,
                         next_at=(clock.today() + timedelta(days=7)).isoformat(),
                         owner_id=usable_or_none(db, enrollment.doctor_user_id), status="planned",

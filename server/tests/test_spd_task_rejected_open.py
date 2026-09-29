@@ -158,7 +158,7 @@ def test_患者死亡结案_退回的任务一并取消(client, admin, world):
     assert resp.status_code == 200 and resp.json()["closed"]["tasks"] == 1, resp.text   # 修前 0
     detail = client.get(f"{B}/tasks/{task}", headers=admin).json()
     # 修前仍是 rejected：死者名下挂着一条还能办结、还能给村医计分的任务
-    assert (detail["status"], detail["review_note"]) == ("cancelled", "death:病故"), detail
+    assert (detail["status"], detail["review_note"]) == ("cancelled", "死亡：病故"), detail   # 事件写中文名（P2-767）
 
 
 def test_路径取消_退回的任务一并取消(client, admin, world):
