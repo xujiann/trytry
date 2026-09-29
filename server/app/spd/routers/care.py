@@ -51,7 +51,7 @@ from ..rules import score_scale
 from ..service import (ENROLL_STATUS_LABELS, ENROLLMENT_ENDED_STATUSES, MEASUREMENT_SOURCE_NAMES, REVISIT_OPEN_STATUSES,
                        award_points, enrollment_for, judge_measurement, measure_program_for,
                        measure_value_problem, scale_program_mismatch, scale_unusable, spawn_task,
-                       unknown_program)
+                       unknown_program, withdraw_calls)
 from ...visibility import assert_org_writable, assert_patient_visible, scope_patient_list, visible_org_ids
 
 router = APIRouter(
@@ -1436,6 +1436,10 @@ def update_revisit(
             "at": clock.today().isoformat(),
             "note": note or f"状态变更为{record.status}",
         }]
+        # 复诊做完或移除，从它转出的待呼叫撤出队列（P2-735，与随访的 P2-498 同一个帮手）
+        if data.get("status") in ("done", "removed"):
+            withdraw_calls(db, "revisit", [record.id],
+                           "复诊已完成，撤出待呼叫" if record.status == "done" else "复诊已移除，撤出待呼叫")
         db.commit()
     return _revisit_out(record)
 

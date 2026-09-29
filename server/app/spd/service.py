@@ -584,26 +584,33 @@ def close_followup_record(
 CALL_SETTLEABLE_STATUSES = ("pending", "withdrawn")
 
 
-def withdraw_followup_calls(db: Session, record_ids: list[int], note: str) -> int:
-    """随访记录结束（办结 / 移除 / 档案结束一并移除）后，挂在它上面的待呼叫撤出队列（`withdrawn`），返回撤了几条（P2-498）。
+def withdraw_calls(db: Session, ref_type: str, ref_ids: list[int], note: str) -> int:
+    """随访 / 复诊结束（办结 / 移除 / 档案结束一并移除）后，挂在它上面的待呼叫撤出队列（`withdrawn`），返回撤了几条
+    （P2-498 随访；P2-735 复诊）。
 
     原先不动：随访在门诊当面做完、被手工移除、患者死亡结案一并收走之后，外呼队列里挂着它的呼叫任务照旧「待呼叫」——
     坐席照单打过去，打给的是已经随访过的人，甚至是死者家属。只翻待呼叫的：已接通 / 未接通 / 已取消的是通话留痕，不动。
+    呼叫任务按 `ref_type` + `ref_id` 引用来源（转呼叫接口写明随访 / 复诊 / 宣教 / 异常处置都可以转），撤回按同一对键。
 
     撤回不是取消：这一刻坐席可能正在通话，接了呼叫中心网关的也撤不回已派发的呼叫（网关没有撤销接口）——真实打出去的
     电话照旧能回写一次结果（`settle_call_task` 从待呼叫或已撤回翻）。原先置成「已取消」，这一路回写就 409、通话记录与
-    录音地址丢掉（随访并发真 PG 档实测）。移除后又恢复的随访不连带恢复外呼（要打再发起）。**不 commit**。
+    录音地址丢掉（随访并发真 PG 档实测）。移除后又恢复的不连带恢复外呼（要打再发起）。**不 commit**。
     """
-    if not record_ids:
+    if not ref_ids:
         return 0
     withdrawn = db.execute(
         update(SpdCallTask)
-        .where(SpdCallTask.ref_type == "followup", SpdCallTask.ref_id.in_(record_ids),
+        .where(SpdCallTask.ref_type == ref_type, SpdCallTask.ref_id.in_(ref_ids),
                SpdCallTask.status == "pending")
         .values(status="withdrawn", result=note)
         .execution_options(synchronize_session=False)
     )
     return cast(CursorResult, withdrawn).rowcount
+
+
+def withdraw_followup_calls(db: Session, record_ids: list[int], note: str) -> int:
+    """挂在这些随访记录上的待呼叫撤出队列（P2-498），见 `withdraw_calls`。**不 commit**。"""
+    return withdraw_calls(db, "followup", record_ids, note)
 
 
 def settle_call_task(db: Session, task_id: int, **values: Any) -> bool:
@@ -1036,6 +1043,7 @@ def close_open_work(db: Session, enrollment: SpdEnrollment, reason: str) -> dict
         .order_by(SpdRevisit.id)
         .all()
     )
+    removed_revisits: list[int] = []
     for revisit in revisits:
         # 日志是 JSON 列整体覆写（P2-708，与 `update_revisit` 同一处理）：锁住这一行、重读、再追加——原先拼的是整批载入时
         # 读到的旧日志，这期间护士刚记下的「已联系」那条被盖掉
@@ -1044,6 +1052,9 @@ def close_open_work(db: Session, enrollment: SpdEnrollment, reason: str) -> dict
             if _move_row(db, SpdRevisit, revisit.id, REVISIT_OPEN_STATUSES, status="removed",
                          log=(revisit.log or []) + [{"at": clock.today().isoformat(), "note": reason}]):
                 stats["revisits"] += 1
+                removed_revisits.append(revisit.id)
+    # 从复诊转出的待呼叫同样撤出队列（P2-735）：原先只撤随访的，死者名下「复诊」一类的外呼照旧排在坐席队列里
+    withdraw_calls(db, "revisit", removed_revisits, f"复诊随档案结束移除（{reason}），撤出待呼叫"[:512])
 
     followups = (
         db.query(SpdFollowupRecord)
