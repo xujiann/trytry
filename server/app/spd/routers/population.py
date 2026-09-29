@@ -56,7 +56,7 @@ from ..models import (
 from ..rules import RuleError, as_validated, evaluate, is_suspect_risk, score_scale
 from ..service import (MEASUREMENT_SOURCE_NAMES, TASK_OPEN_STATUSES, actively_enrolled, award_points, build_facts,
                        close_open_work, match_program, migration_void_reason, package_items_ok,
-                       scale_program_mismatch, scale_unusable)
+                       scale_program_mismatch, scale_unusable, unknown_program)
 
 # 筛查来源、分组范围文案（措辞照抄 SpdScreening.source / SpdGroup.scope 列注释——P2-74）
 SCREENING_SOURCE_NAMES = {"opportunistic": "机会性", "active": "主动筛查", "self": "居民自查", "import": "数据比对"}
@@ -2053,6 +2053,12 @@ def handle_service_apply(
         raise HTTPException(status_code=404, detail="服务申请不存在")
     if apply.status != "pending":
         raise HTTPException(status_code=409, detail="该申请已处理")
+    # 受理即新纳入，停用的病种不收（P2-762，与居民递交、建档、筛查同一口径，P1-89）：原先停用前递交的申请照样受理，
+    # 人进了目标池、居民端显示「已受理」，签约建档却 404——目标池里多一个永远建不了档的人。驳回照收
+    if body.status == "accepted":
+        problem = unknown_program(db, apply.program_code, active_only=True)
+        if problem:
+            raise HTTPException(status_code=409, detail=f"{problem}，只能驳回")
     apply.status = body.status
     apply.handle_note = body.handle_note
     apply.handled_by = user.id
