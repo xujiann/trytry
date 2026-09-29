@@ -44,6 +44,19 @@ def _find_by_id_card(db: Session, id_card: str) -> Patient | None:
     return db.query(Patient).filter(id_card_match(id_card)).order_by(Patient.id).first()
 
 
+def find_by_ehc_no(db: Session, ehc_no: str) -> Patient | None:
+    """按健康卡号取患者（手输的查询入口用）：原样命中的照旧；取不到再按去首尾空白、大写找一次（P2-791）。
+
+    卡号由系统生成（`EHC` + 大写十六进制），手输常见小写、带空格：原先按原样等值比，`ehc1a2b…` 查档案 404、360 视图 404，
+    关键字检索却搜得到同一个人。只在对不上时多认一种写法，存量怎么存的不动。对接方按引用取档（FHIR）不走这里。
+    """
+    patient = db.query(Patient).filter(Patient.ehc_no == ehc_no).first()
+    key = ehc_no.strip().upper()
+    if patient is None and key != ehc_no:
+        patient = db.query(Patient).filter(Patient.ehc_no == key).first()
+    return patient
+
+
 def create_patient_idempotent(db: Session, data: dict) -> tuple[Patient, bool]:
     """EMPI 幂等建档：同身份证号返回既有档案；并发建档以唯一约束兜底（M6）。
 
@@ -129,7 +142,7 @@ def search_patients(
 
 @router.get("/{ehc_no}", response_model=PatientOut)
 def get_patient(ehc_no: str, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    patient = db.query(Patient).filter(Patient.ehc_no == ehc_no).first()
+    patient = find_by_ehc_no(db, ehc_no)
     if patient is None:
         raise HTTPException(status_code=404, detail="患者不存在")
     return desensitize(patient, user)

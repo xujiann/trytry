@@ -19,6 +19,7 @@ from ..models import (
     User,
 )
 from ..visibility import assert_org_writable, assert_patient_visible, visible_org_ids
+from .patients import find_by_ehc_no
 from ..schemas import EncounterCreate, EncounterOut
 
 #: `encounters.encounter_type` → 中文（§13「状态文案取自后端」）：驾驶舱下钻明细原先把 outpatient 原样印出来（P2-646）
@@ -191,7 +192,7 @@ def patient_360_view(
     检查、慢病、处方。**它此前对任何登录账号开放**，实测乙镇卫生院的医生
     凭 ehc_no 就能看甲县医院患者的全部诊疗信息。现在须有业务关系并留痕。
     """
-    patient = db.query(Patient).filter(Patient.ehc_no == ehc_no).first()
+    patient = find_by_ehc_no(db, ehc_no)   # 手输卡号的小写、首尾空白也认（P2-791）
     if patient is None:
         raise HTTPException(status_code=404, detail="患者不存在")
     assert_patient_visible(db, user, patient.id, resource="archive_360")
