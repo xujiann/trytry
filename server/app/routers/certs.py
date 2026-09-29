@@ -82,15 +82,20 @@ def issue_cert(
     # 证明编号：类型前缀 + 年份 + 6位顺序号
     # 与医废追溯码同型：编号是服务端 COUNT+1 算出来的，并发下会算出同一个。
     # 重试取号是服务端的事，不该让签发证明的人重来一遍。
+    # 顺序号按「前缀＋年份」各自数（P2-897）：原先是该类型全部证明数 + 1，跨年不从 1 起——12-30、12-31 签的是
+    # B2026000001、B2026000002，元旦那张成了 B2027000003。取同年已用的最大号加一（与医废追溯码按前缀各自计数同型），
+    # 也避开了同年里已经存在的号；存量编号不动（续在同年最大号之后）
+    prefix = f"{_PREFIX[body.cert_type]}{clock.today().year}"
+
     def _build() -> MedicalCert:
-        seq = (
-            db.query(func.count(MedicalCert.id))
-            .filter(MedicalCert.cert_type == body.cert_type)
+        last = (
+            db.query(func.max(MedicalCert.cert_no))
+            .filter(MedicalCert.cert_type == body.cert_type, MedicalCert.cert_no.like(f"{prefix}%"))
             .scalar()
-            or 0
-        ) + 1
-        cert_no = f"{_PREFIX[body.cert_type]}{clock.today().year}{seq:06d}"
-        return MedicalCert(cert_no=cert_no, created_by=user.id, **body.model_dump())
+        )
+        tail = (last or "")[len(prefix):]
+        seq = int(tail) + 1 if tail.isdigit() else 1
+        return MedicalCert(cert_no=f"{prefix}{seq:06d}", created_by=user.id, **body.model_dump())
 
     cert = insert_with_retry(db, _build)
     return {
