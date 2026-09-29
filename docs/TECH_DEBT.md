@@ -1179,6 +1179,7 @@ AST 闸门判据只覆盖 19.9% 的写入点（本轮 4 个新 check-then-act �
 | P2-862 | ✅ **慢病随访录入（管理端和医生移动端）都没有「本次指导」：随访记录的「指导」列恒为空**（2026-09-29 第二十三批「页面表单提交的字段与取值 vs 后端请求模型」扫描 Y1-11 实测；用例实测修前代码）。`FollowUpCreate.guidance` 早就收，随访史也有「指导」一列（P2-478 只补了「看得见」）。修前实测：界面录的随访 `guidance=''`。修后两处录入表单都补「本次指导（可空）」。回归：`tests/test_chronic_followup_guidance_form.py` | `app/static/core.js::renderChronic`（随访录入）；`app/static/m/doctor.html` / `doctor.js` |
 | P2-863 | ✅ **住院护理记录没有「关联医嘱」入口：医嘱执行视图的「关联护理记录 N 条」按界面用法恒为 0**（2026-09-29 第二十三批「页面表单提交的字段与取值 vs 后端请求模型」扫描 Y1-12 实测；用例实测修前代码）。`NursingIn.inpatient_order_id` 早就收（P1-24a：执行某条医嘱产生的护理记录传该医嘱 id，同一次住院才收），执行视图据它数「关联护理记录」、执行弹窗的说明也这么写；护理记录表单没有这一项。修前实测：执行视图 `nursing_record_count = 0`。修后表单列本次住院在用的医嘱供选（可空），按数送。回归：`tests/test_nursing_record_order_link_form.py` | `app/static/pages-mgmt.js::renderClinicalDocs`（护理记录） |
 | P2-864 | ✅ **慢专病生命周期表单没有「发生日期」：补登的死亡 / 迁出一律记成登记当天**（2026-09-29 第二十三批「页面表单提交的字段与取值 vs 后端请求模型」扫描 Y1-13 实测；用例实测修前代码）。`LifecycleIn.occurred_at` 早就收（缺省今天）。修前实测：原因写「9 月 20 日在家中去世」，事件日期记成今天。修后表单加「发生日期」（留空照旧按今天）。回归：`tests/test_spd_lifecycle_occurred_date_form.py` | `app/static/pages-spd.js::renderSpdPatients`（生命周期处置） |
+| P2-865 | ✅ **消毒供应申领的数量框清空后送 0：报英文 422**（2026-09-29 第二十三批「页面表单提交的字段与取值 vs 后端请求模型」扫描 Y1-14 实测；用例实测修前代码）。`CssdReqCreate.quantity` 缺省 1、`ge=1`；页面按 `Number(f.get("quantity"))` 送，清空时 `Number("")` 是 0，回英文 422（`Input should be greater than or equal to 1`）。同文件号源的 capacity 早按「空就不送」修过。修后数量清空不送、取缺省 1。回归：`tests/test_cssd_request_quantity_blank.py` | `app/static/core.js::renderCssd`（申领） |
 
 ## P2 — 一致性与可维护性
 

@@ -978,9 +978,10 @@ async function renderCssd() {
     e.preventDefault();
     const f = new FormData(e.target);
     try {
+      // 数量清空不送（P2-865，与号源 capacity 同一写法）：`Number("")` 是 0，后端 `ge=1` 回一句英文 422；不送取缺省 1
       await api("/api/cssd/requests", { method: "POST", body: JSON.stringify({
         org_id: Number(f.get("org_id")), item_name: f.get("item_name"),
-        quantity: Number(f.get("quantity")) }) });
+        ...(f.get("quantity") ? { quantity: Number(f.get("quantity")) } : {}) }) });
       route();
     } catch (err) { setMsg("#creq-msg", err.message, false); }
   };
