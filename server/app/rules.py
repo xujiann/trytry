@@ -78,6 +78,25 @@ def _eval_operand(node: ast.AST, variables: dict):
     return _eval_node(node, variables)
 
 
+#: 比较前数值取整到的小数位：与公式求值器 `formula.evaluate` 的结果同一精度（P2-892）
+_COMPARE_DIGITS = 4
+
+
+def _comparable(value):
+    """数值（含 `in` 右侧元组里的数）按公式求值器同一精度取整再比（P2-892）。
+
+    原先拿原始浮点直接比：29/100×100 = 28.999999999999996，条件 `referrals_up / encounters * 100 >= 29` 在恰好 29%
+    时判不中，57、58 同样不中，7、14 却中——恰好等于门槛的机构命中与否取决于具体数字；公式求值器算同一个式子得 29.0
+    （先取 4 位小数），慢专病考核就是拿它和目标比。与 Westgard 的 z 恰为 2.0（P2-156）同一类毛病。小于万分之一的门槛
+    在这个精度下分不出来，与公式同一个口径。文本与布尔原样。
+    """
+    if isinstance(value, float):
+        return round(value, _COMPARE_DIGITS)
+    if isinstance(value, tuple):
+        return tuple(_comparable(item) for item in value)
+    return value
+
+
 def _eval_condition(node: ast.AST, variables: dict) -> bool:
     if isinstance(node, ast.BoolOp):
         values = [_eval_condition(v, variables) for v in node.values]
@@ -87,12 +106,12 @@ def _eval_condition(node: ast.AST, variables: dict) -> bool:
         return not _eval_condition(node.operand, variables)
 
     if isinstance(node, ast.Compare):
-        left = _eval_operand(node.left, variables)
+        left = _comparable(_eval_operand(node.left, variables))
         for op, comparator in zip(node.ops, node.comparators):
             op_type = type(op)
             if op_type not in _COMPARE_OPS:
                 raise RuleError("不支持的比较运算符")
-            right = _eval_operand(comparator, variables)
+            right = _comparable(_eval_operand(comparator, variables))
             try:
                 if not _COMPARE_OPS[op_type](left, right):
                     return False
