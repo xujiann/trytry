@@ -54,7 +54,8 @@ def _loose_period_compared_as_string() -> list[str]:
             guards = {n.func.id for n in ast.walk(fn)
                       if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
                       and any(isinstance(a, ast.Name) and a.id == "period" for a in n.args)}
-            if "month_bounds" not in guards or guards & STRICT:
+            # month_bounds_elapsed 就是 month_bounds 截到今天（P2-729），同样宽松
+            if not guards & {"month_bounds", "month_bounds_elapsed"} or guards & STRICT:
                 continue
             compared = any(
                 isinstance(n, ast.Compare) and any(isinstance(op, ast.Eq) for op in n.ops)

@@ -383,6 +383,16 @@ def month_bounds(period: str) -> tuple[date, date]:
     return start, end
 
 
+def month_bounds_elapsed(period: str) -> tuple[date, date]:
+    """`month_bounds` 截到今天（含）为止：`[首日, min(次月首日, 明天))`；还没开始的月份是空区间 `[首日, 首日)`（P2-729）。
+
+    「已经发生了多少」的量用它——占用床日、按期间天数摊的日均数。在院患者的出院日视同期末，期末若取次月首日，没过完的
+    月份就把还没到的日子也记进占用床日（床日成本被摊低），还没开始的月份也有床日和使用率；日均担负除以整月天数，月中查看
+    只有真实值的「已过天数 / 整月天数」。整月已过的月份与 `month_bounds` 完全相同。"""
+    start, end = month_bounds(period)
+    return start, min(end, max(start, clock.today() + timedelta(days=1)))
+
+
 #: 业务日期（`?today=` 与起止日期类查询参数）的取值范围（P2-410）：预警 / 到期类接口拿它加减天数（`days` 上限
 #: 3650，P1-96），贴着公元 1 年、9999 年的日期一加减就越出 `date` 的表示范围，整个请求 500。平台上没有早于 1900 年、
 #: 晚于 2999 年的业务日期

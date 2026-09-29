@@ -225,7 +225,8 @@ def test_月度正则不得在别处重写():
 # `period` 交给 `build_variable_index`，后者再交给 `month_bounds`；只看函数体会把它误报。
 
 MONTH_GUARDS = frozenset(
-    {"require_month", "month_bounds", "period_bounds", "check_assess_period", "_period_range"}
+    # month_bounds_elapsed = month_bounds 截到今天（P2-729），校验就是 month_bounds 那一句
+    {"require_month", "month_bounds", "month_bounds_elapsed", "period_bounds", "check_assess_period", "_period_range"}
 )
 
 #: 名字像期间、按设计却不是 `YYYY-MM` 的查询参数。**只许变少**，每条写理由。

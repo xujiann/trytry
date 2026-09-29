@@ -23,7 +23,7 @@ from ..numtypes import MONEY_MAX, MoneyFloat, split_fen
 from ..visibility import assert_org_visible, scope_org_list, scope_stats_orgs
 from ..database import get_db
 from ..datetypes import PeriodStr
-from ..deps import get_current_user, month_bounds, require_month, require_roles
+from ..deps import get_current_user, month_bounds_elapsed, require_month, require_roles
 from ..models import (
     Admission,
     CostAllocationRule,
@@ -409,7 +409,8 @@ def unit_cost(
     # 诊次成本、床日成本都是 0.00
     period = require_month(period)
     assert_org_visible(db, user, org_id)
-    start, end = month_bounds(period)
+    # 床日截到今天（P2-729）：在院者按期末计，期末取次月首日时没过完的月份把还没到的日子也记成占用床日，床日成本被摊低
+    start, end = month_bounds_elapsed(period)
     if db.get(Organization, org_id) is None:
         raise HTTPException(status_code=404, detail="机构不存在")
 

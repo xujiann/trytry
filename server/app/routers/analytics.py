@@ -23,6 +23,7 @@ from ..datetypes import DateStr
 from ..deps import (
     get_current_user,
     month_bounds,
+    month_bounds_elapsed,
     paginate,
     row_dict,
     require_admin,
@@ -431,7 +432,8 @@ def _efficiency_rows(db: Session, period: str, scope: list[int] | None) -> list[
     （绩效公式变量）要的是全部机构——它原先直接调端点函数，端点加了 `user` 参数后
     拿到的是 `Depends` 占位对象。收口留在端点，这里只管算。
     """
-    start, end = month_bounds(period)
+    # 截到今天（P2-729）：在院者出院日视同期末、期间天数作日均的分母，期末取次月首日就把没到的日子也算进去了
+    start, end = month_bounds_elapsed(period)
     days = (end - start).days
     start_dt = datetime.combine(start, datetime.min.time())
     end_dt = datetime.combine(end, datetime.min.time())
