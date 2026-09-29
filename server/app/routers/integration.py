@@ -59,7 +59,7 @@ from ..schemas import EncounterCreate, ExamReportCreate, FollowUpCreate, Patient
 from ..texttypes import NON_BLANK
 from .chronic import _evaluate_level
 from .encounters import create_encounter
-from .exams import submit_report
+from .exams import EXAM_REQUEST_STATUS_NAMES, submit_report
 from .inpatient import (AdmissionCreate, _mark_discharged, _release_bed, create_admission,
                         spawn_discharge_followup)
 from .patients import create_patient_idempotent, id_card_match
@@ -865,6 +865,14 @@ def _parse_dg1(message: str) -> tuple[str, str]:
     return code[:64], (name or _hl7_field(dg1, 4).strip() or code)[:256]
 
 
+class OruReportOut(BaseModel):
+    request_id: int
+    report_id: int
+    obx_count: int
+    abnormal_count: int
+    critical: bool
+
+
 class OruInboundOut(BaseModel):
     event: str
     ack: str
@@ -873,6 +881,8 @@ class OruInboundOut(BaseModel):
     obx_count: int
     abnormal_count: int
     critical: bool
+    # 一条消息带几张申请的结果时逐组列出（P2-722，只加尾键）；顶层是第一组的单号与各组合计
+    reports: list[OruReportOut]
 
 
 @router.post("/hl7v2/oru", status_code=201, response_model=OruInboundOut)
@@ -906,18 +916,25 @@ def hl7v2_oru(
     )
 
 
-def _do_hl7v2_oru(body: Hl7Message, db: Session, event: str, source_system: str):
-    if event != "ORU^R01":
-        raise HTTPException(
-            status_code=422,
-            detail=f"不支持的消息类型 {event or '(缺失)'}：本接口仅受理 ORU^R01",
-        )
-    segments = _hl7_segments(body.message)
-    ack = _build_ack(_hl7_control_id(body.message))
+def _oru_groups(segments: list[str]) -> list[tuple[str, list[str]]]:
+    """ORU^R01 按申请分组：每个 OBR 连同其后、下一个 OBR 之前的 OBX 是一组（HL7 的 ORDER_OBSERVATION 组，P2-722）。
 
-    obr = next((s for s in segments if s.startswith("OBR|")), None)
-    if obr is None:
-        raise HTTPException(status_code=422, detail="缺少 OBR 申请信息段")
+    一条消息可以带几张申请的结果（LIS 常把同一次采血的血常规、电解质放在一起发）。原先只认第一个 OBR、却把全文
+    的 OBX 都算进去：电解质的血钾危急值写进了血常规的报告，电解质那张申请永远「待出报告」，ACK 照回 AA、LIS 不重发。
+    """
+    groups: list[tuple[str, list[str]]] = []
+    for seg in segments:
+        if seg.startswith("OBR|"):
+            groups.append((seg, []))
+        elif seg.startswith("OBX|"):
+            if not groups:
+                raise HTTPException(status_code=422, detail="OBX 结果段出现在 OBR 申请信息段之前，无法判断属于哪张申请")
+            groups[-1][1].append(seg)
+    return groups
+
+
+def _oru_request(db: Session, obr: str, pid: str | None) -> ExamRequest:
+    """按 OBR 定位申请单并核对 PID（每一组各自核，防串单）。"""
     order_no = (_hl7_field(obr, 2) or _hl7_field(obr, 3)).split("^")[0].strip()
     # 只认 ASCII（P1-97）：`isdigit()` 放行上标「²」、圈码「①」，下一行 int() 抛异常，被入站兜底成笼统的
     # 「消息解析失败」——对方系统看不出是单号不对
@@ -929,9 +946,7 @@ def _do_hl7v2_oru(body: Hl7Message, db: Session, event: str, source_system: str)
             status_code=404,
             detail=f"申请单 {order_no} 不存在，结果拒收（对接规范§四：请先创建检查申请）",
         )
-
     # PID 一致性核验（可选段）：报文声明的患者与申请单不一致时拒收，防串单
-    pid = next((s for s in segments if s.startswith("PID|")), None)
     if pid is not None:
         id_card = _hl7_field(pid, 3).split("^")[0].strip()
         if id_card:
@@ -945,12 +960,17 @@ def _do_hl7v2_oru(body: Hl7Message, db: Session, event: str, source_system: str)
             )
             if owns is None:
                 raise HTTPException(status_code=422, detail="PID 患者与申请单患者不一致，结果拒收")
+    return request
 
+
+def _oru_report(obr: str, obx_segments: list[str], request: ExamRequest,
+                reported_by: str) -> tuple[ExamReportCreate, int, int]:
+    """一组 OBX 拼成一份报告，返回 (报告, 结果项数, 异常项数)。"""
     lines: list[str] = []
     abnormal = 0
     critical = False
     unrecognized: list[str] = []   # 没有一个认得的标志、又带着认不得的标志的结果项——判不了，不当正常
-    for seg in (s for s in segments if s.startswith("OBX|")):
+    for seg in obx_segments:
         code_parts = _hl7_field(seg, 3).split("^")
         label = (code_parts[1].strip() if len(code_parts) > 1 else "") or code_parts[0].strip()
         value = _hl7_field(seg, 5).strip()
@@ -972,9 +992,6 @@ def _do_hl7v2_oru(body: Hl7Message, db: Session, event: str, source_system: str)
         if flag:
             line += f" [{flag}]"
         lines.append(line)
-    if not lines:
-        raise HTTPException(status_code=422, detail="缺少 OBX 结果段")
-
     item_parts = _hl7_field(obr, 4).split("^")
     item_name = (item_parts[1].strip() if len(item_parts) > 1 else "") or request.item_name
     conclusion = f"{item_name}：共 {len(lines)} 项，异常 {abnormal} 项"
@@ -982,24 +999,61 @@ def _do_hl7v2_oru(body: Hl7Message, db: Session, event: str, source_system: str)
         conclusion += "，含危急值"
     if unrecognized:
         conclusion += f"，另 {len(unrecognized)} 项的异常标志平台不认得（{'、'.join(dict.fromkeys(unrecognized))}），以原文为准"
-    report = submit_report(
-        request.id,
-        ExamReportCreate(
-            finding="\n".join(lines)[:2048],
-            conclusion=conclusion[:1024],
-            critical=critical,
-            reported_by=(source_system or "HL7-ORU")[:64],
-        ),
-        db,
+    report = ExamReportCreate(
+        finding="\n".join(lines)[:2048],
+        conclusion=conclusion[:1024],
+        critical=critical,
+        reported_by=reported_by,
     )
+    return report, len(lines), abnormal
+
+
+def _do_hl7v2_oru(body: Hl7Message, db: Session, event: str, source_system: str):
+    if event != "ORU^R01":
+        raise HTTPException(
+            status_code=422,
+            detail=f"不支持的消息类型 {event or '(缺失)'}：本接口仅受理 ORU^R01",
+        )
+    segments = _hl7_segments(body.message)
+    ack = _build_ack(_hl7_control_id(body.message))
+
+    if not any(s.startswith("OBR|") for s in segments):
+        raise HTTPException(status_code=422, detail="缺少 OBR 申请信息段")
+    groups = _oru_groups(segments)
+    pid = next((s for s in segments if s.startswith("PID|")), None)
+    # 每组先全部定位、核对完再出报告（P2-722）：出报告是逐张提交的，第二组的申请单不存在 / 已出过报告，
+    # 第一组已经出具、危急值已经通知，整条消息却回 AE、LIS 再发一遍就撞「已出具」
+    planned: list[tuple[ExamRequest, ExamReportCreate, int, int]] = []
+    for index, (obr, obx_segments) in enumerate(groups, start=1):
+        request = _oru_request(db, obr, pid)
+        if not obx_segments:
+            raise HTTPException(status_code=422, detail="缺少 OBX 结果段" if len(groups) == 1
+                                else f"第 {index} 个 OBR（申请单 {request.id}）下没有 OBX 结果段")
+        if any(request.id == seen.id for seen, *_ in planned):
+            raise HTTPException(status_code=422, detail=f"申请单 {request.id} 在同一条消息里出现两次")
+        if request.status not in ("pending", "diagnosing"):   # 与出报告同一条件，提前判
+            raise HTTPException(
+                status_code=409,
+                detail=f"当前状态 {EXAM_REQUEST_STATUS_NAMES.get(request.status, request.status)} 不可出报告"
+                       + ("" if len(groups) == 1 else f"（申请单 {request.id}）"))
+        report, obx_count, abnormal = _oru_report(obr, obx_segments, request, (source_system or "HL7-ORU")[:64])
+        planned.append((request, report, obx_count, abnormal))
+    results = []
+    for request, report_in, obx_count, abnormal in planned:
+        report = submit_report(request.id, report_in, db)
+        results.append({"request_id": request.id, "report_id": report.id, "obx_count": obx_count,
+                        "abnormal_count": abnormal, "critical": report.critical})
+    first = results[0]
     return {
         "event": event,
         "ack": ack,
-        "request_id": request.id,
-        "report_id": report.id,
-        "obx_count": len(lines),
-        "abnormal_count": abnormal,
-        "critical": report.critical,
+        "request_id": first["request_id"],
+        "report_id": first["report_id"],
+        # 一条消息几组时，顶层的数取合计、危急值任一组有即有；逐组明细在 reports 里
+        "obx_count": sum(r["obx_count"] for r in results),
+        "abnormal_count": sum(r["abnormal_count"] for r in results),
+        "critical": any(r["critical"] for r in results),
+        "reports": results,
     }
 
 
