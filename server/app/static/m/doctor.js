@@ -940,6 +940,7 @@ $("#tab-surgery").addEventListener("click", (e) => {
     ev.preventDefault();
     const f = form.elements;
     const blood = f.blood_loss_ml.value.trim();
+    const died = f.outcome.value === "死亡";
     try {
       await api(`/api/surgery/requests/${id}/record`, {
         method: "POST",
@@ -958,7 +959,9 @@ $("#tab-surgery").addEventListener("click", (e) => {
           postop_diagnosis: f.postop_diagnosis.value.trim(),
         }),
       });
-      setMsg("#surgery-msg", "术中记录已提交，术后随访任务已自动派生", true);
+      // 转归「死亡」后端不派术后随访（P2-499）：回执原先一律写「已自动派生」（P2-779）
+      setMsg("#surgery-msg", died ? "术中记录已提交（转归死亡，不派生术后随访）"
+        : "术中记录已提交，术后随访任务已自动派生", true);
       await loadSurgery();
     } catch (err) { setMsg("#surgery-msg", err.message, false); }
   };
