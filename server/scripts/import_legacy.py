@@ -13,7 +13,7 @@
         next_due(可空 YYYY-MM-DD；留空按病种随访周期建议首次随访，与平台建档同口径)
 - employees：员工（机构名 + 姓名 幂等）
     列：org_name, name, title(可空), position(可空)
-- encounters：就诊记录（患者+机构+就诊日期+诊断编码 幂等）
+- encounters：就诊记录（患者+机构+就诊日期+就诊类型+诊断编码 幂等）
     列：id_card 或 ehc_no（二选一，患者外键解析）, org_name,
         visit_date(YYYY-MM-DD), encounter_type(可空 outpatient|inpatient 默认门诊),
         doctor_name(可空), diagnosis_code(可空), diagnosis_name(可空), summary(可空)
@@ -50,6 +50,10 @@
 
 性能：CSV 流式逐行读取（不整文件入内存）；外键与幂等键在导入前**一次查询
 集合预载**（机构名/患者证件号→id、已存在业务键→集合），行内零 SELECT。
+
+幂等只认**库里已有的**：同一个文件里幂等键相同的后一行记错误行、点名与第几行相同，不计「幂等跳过(已存在)」
+（P2-732，与患者导入「同批内重复单独报错」同一口径）——同日两笔同额挂号、同机构两位同名员工，后一条库里原本没有，
+原先被当成已存在悄悄丢掉。
 
 退出码：0=全部行成功（含幂等跳过）；1=存在错误行；2=参数/文件错误。
 数据库连接沿用 MEDPLAT_DATABASE_URL（与应用一致）。
@@ -186,6 +190,19 @@ def _require(row: dict, line_no: int, report: ImportReport, *cols: str) -> bool:
     return True
 
 
+def _dup_in_batch(seen: dict, key, line_no: int, report: ImportReport, row: dict, what: str) -> bool:
+    """同一个文件里键相同的后一行记错误行（P2-732），与患者导入「同批内重复单独报错」同一口径。
+
+    原先各实体把本批刚导的键也塞进「库内已存在」那个集合：同日门诊与住院、同日两笔 12 元挂号、同机构两位王芳，后一条
+    库里原本没有，却被计成「幂等跳过(已存在)」悄悄丢掉。库里真有的照旧幂等跳过；同一文件里撞键的点名是哪一行，清洗
+    源文件时核对——确属两条不同记录的，要等原系统流水号作幂等键（待定）才导得进。"""
+    first = seen.get(key)
+    if first is None:
+        return False
+    report.error(line_no, f"同批内重复：{what}与第 {first} 行相同（库里原本没有，不计「已存在」；请核对源文件）", row)
+    return True
+
+
 def _valid_date(value: str) -> bool:
     """`YYYY-MM-DD` 且日历上存在——与平台请求体走同一个真源 `datetypes.check_date`。
 
@@ -284,6 +301,7 @@ def _date_key(value) -> str:
 
 def import_organizations(db, rows, report: ImportReport, ctx: ImportContext) -> None:
     orgs = _orgs_by_name(db)
+    seen_batch: dict[str, int] = {}
     for line_no, row in rows:
         if not _require(row, line_no, report, "name", "org_type", "level"):
             continue
@@ -299,6 +317,8 @@ def import_organizations(db, rows, report: ImportReport, ctx: ImportContext) -> 
             continue
         if level not in ORG_LEVELS:
             report.error(line_no, f"level 非法: {level}（须为 {'/'.join(sorted(ORG_LEVELS))}）", row)
+            continue
+        if _dup_in_batch(seen_batch, name, line_no, report, row, "机构名称"):
             continue
         if name in orgs:
             report.skipped += 1
@@ -320,6 +340,7 @@ def import_organizations(db, rows, report: ImportReport, ctx: ImportContext) -> 
         db.add(org)
         db.flush()  # 取 id，供同批后续行解析上级（flush 非查询，不破坏"行内零 SELECT"）
         orgs[name] = org.id
+        seen_batch[name] = line_no
         report.imported += 1
         ctx.checkpoint()
 
@@ -385,6 +406,7 @@ def import_chronic(db, rows, report: ImportReport, ctx: ImportContext) -> None:
         (pid, disease)
         for pid, disease in db.query(ChronicPatient.patient_id, ChronicPatient.disease).all()
     }
+    seen_batch: dict[tuple, int] = {}
     for line_no, row in rows:
         if not _require(row, line_no, report, "id_card", "disease", "managed_by_org"):
             continue
@@ -408,6 +430,8 @@ def import_chronic(db, rows, report: ImportReport, ctx: ImportContext) -> None:
         if next_due and not _valid_date(next_due):
             report.error(line_no, f"next_due 格式非法: {next_due}（须 YYYY-MM-DD）", row)
             continue
+        if _dup_in_batch(seen_batch, (patient_id, disease), line_no, report, row, "患者 + 病种"):
+            continue
         if (patient_id, disease) in existing:
             report.skipped += 1
             continue
@@ -424,7 +448,7 @@ def import_chronic(db, rows, report: ImportReport, ctx: ImportContext) -> None:
                 next_due=next_due,
             )
         )
-        existing.add((patient_id, disease))
+        seen_batch[(patient_id, disease)] = line_no
         report.imported += 1
         ctx.checkpoint()
 
@@ -432,12 +456,15 @@ def import_chronic(db, rows, report: ImportReport, ctx: ImportContext) -> None:
 def import_employees(db, rows, report: ImportReport, ctx: ImportContext) -> None:
     orgs = _orgs_by_name(db)
     existing = {(oid, name) for oid, name in db.query(Employee.org_id, Employee.name).all()}
+    seen_batch: dict[tuple, int] = {}
     for line_no, row in rows:
         if not _require(row, line_no, report, "org_name", "name"):
             continue
         name = row["name"].strip()
         org_id = _resolve_org(row, line_no, report, orgs)
         if org_id is None:
+            continue
+        if _dup_in_batch(seen_batch, (org_id, name), line_no, report, row, "机构 + 姓名"):
             continue
         if (org_id, name) in existing:
             report.skipped += 1
@@ -450,22 +477,26 @@ def import_employees(db, rows, report: ImportReport, ctx: ImportContext) -> None
                 position=(row.get("position") or "").strip(),
             )
         )
-        existing.add((org_id, name))
+        seen_batch[(org_id, name)] = line_no
         report.imported += 1
         ctx.checkpoint()
 
 
 def import_encounters(db, rows, report: ImportReport, ctx: ImportContext) -> None:
-    """就诊记录：created_at 取就诊日期；幂等键 患者+机构+就诊日期+诊断编码。"""
+    """就诊记录：created_at 取就诊日期；幂等键 患者+机构+就诊日期+就诊类型+诊断编码。
+
+    就诊类型原先不在键里（P2-732）：同日上午门诊 I10、当天收住院 I10，住院那条被当成「已存在」跳过。"""
     by_id_card = _patients_by_id_card(db)
     by_ehc = _patients_by_ehc(db)
     orgs = _orgs_by_name(db)
     existing = {
-        (pid, oid, _date_key(created), code)
-        for pid, oid, created, code in db.query(
-            Encounter.patient_id, Encounter.org_id, Encounter.created_at, Encounter.diagnosis_code
+        (pid, oid, _date_key(created), etype, code)
+        for pid, oid, created, etype, code in db.query(
+            Encounter.patient_id, Encounter.org_id, Encounter.created_at, Encounter.encounter_type,
+            Encounter.diagnosis_code,
         ).all()
     }
+    seen_batch: dict[tuple, int] = {}
     for line_no, row in rows:
         if not _require(row, line_no, report, "org_name", "visit_date"):
             continue
@@ -486,7 +517,9 @@ def import_encounters(db, rows, report: ImportReport, ctx: ImportContext) -> Non
         if org_id is None:
             continue
         diagnosis_code = (row.get("diagnosis_code") or "").strip()
-        key = (patient_id, org_id, visit_date, diagnosis_code)
+        key = (patient_id, org_id, visit_date, encounter_type, diagnosis_code)
+        if _dup_in_batch(seen_batch, key, line_no, report, row, "患者 + 机构 + 就诊日期 + 就诊类型 + 诊断编码"):
+            continue
         if key in existing:
             report.skipped += 1
             continue
@@ -502,7 +535,7 @@ def import_encounters(db, rows, report: ImportReport, ctx: ImportContext) -> Non
                 created_at=datetime.fromisoformat(visit_date),
             )
         )
-        existing.add(key)
+        seen_batch[key] = line_no
         report.imported += 1
         ctx.checkpoint()
 
@@ -537,6 +570,7 @@ def import_prescriptions(db, rows, report: ImportReport, ctx: ImportContext) -> 
     }
 
     group: dict | None = None  # 当前处方组：header + items + tainted
+    seen_batch: dict[tuple, int] = {}
 
     def flush_group() -> None:
         nonlocal group
@@ -549,6 +583,9 @@ def import_prescriptions(db, rows, report: ImportReport, ctx: ImportContext) -> 
                 group["patient_id"], group["org_id"], group["rx_date"],
                 frozenset(i["drug_code"] for i in group["items"]),
             )
+            if _dup_in_batch(seen_batch, key, group["line_no"], report, group["row"],
+                             "患者 + 机构 + 处方日期 + 药品编码集合"):
+                return
             if key in existing:
                 report.skipped += 1
                 return
@@ -564,7 +601,7 @@ def import_prescriptions(db, rows, report: ImportReport, ctx: ImportContext) -> 
             db.flush()  # 取处方 id 挂明细
             for item in group["items"]:
                 db.add(PrescriptionItem(prescription_id=rx.id, **item))
-            existing.add(key)
+            seen_batch[key] = group["line_no"]
             report.imported += 1
             ctx.checkpoint()
         finally:
@@ -598,6 +635,8 @@ def import_prescriptions(db, rows, report: ImportReport, ctx: ImportContext) -> 
                 org_id = _resolve_org(row, line_no, report, orgs)
                 tainted = patient_id is None or org_id is None
             group = {
+                "line_no": line_no,
+                "row": row,
                 "rx_no": rx_no,
                 "patient_id": patient_id,
                 "org_id": org_id,
@@ -649,6 +688,7 @@ def import_settlements(db, rows, report: ImportReport, ctx: ImportContext) -> No
             Settlement.created_at, Settlement.total_amount,
         ).all()
     }
+    seen_batch: dict[tuple, int] = {}
     for line_no, row in rows:
         if not _require(row, line_no, report, "org_name", "bill_type", "settle_date", "total_amount"):
             continue
@@ -692,6 +732,8 @@ def import_settlements(db, rows, report: ImportReport, ctx: ImportContext) -> No
         if org_id is None:
             continue
         key = (patient_id, org_id, bill_type, settle_date, round(total, 2))
+        if _dup_in_batch(seen_batch, key, line_no, report, row, "患者 + 机构 + 类型 + 结算日期 + 总额"):
+            continue
         if key in existing:
             report.skipped += 1
             continue
@@ -707,7 +749,7 @@ def import_settlements(db, rows, report: ImportReport, ctx: ImportContext) -> No
                 created_at=datetime.fromisoformat(settle_date),
             )
         )
-        existing.add(key)
+        seen_batch[key] = line_no
         report.imported += 1
         ctx.checkpoint()
 
@@ -734,6 +776,7 @@ def import_admissions(db, rows, report: ImportReport, ctx: ImportContext) -> Non
             Admission.patient_id, Admission.org_id, Admission.admitted_at
         ).all()
     }
+    seen_batch: dict[tuple, int] = {}
     in_hospital_patients = {pid for (pid,) in db.query(Admission.patient_id).filter(Admission.status == "admitted")}
     for line_no, row in rows:
         if not _require(row, line_no, report, "org_name", "ward_name", "bed_no", "admitted_at"):
@@ -755,6 +798,8 @@ def import_admissions(db, rows, report: ImportReport, ctx: ImportContext) -> Non
         if org_id is None:
             continue
         key = (patient_id, org_id, admitted_at)
+        if _dup_in_batch(seen_batch, key, line_no, report, row, "患者 + 机构 + 入院日期"):
+            continue
         if key in existing:
             report.skipped += 1
             continue
@@ -799,7 +844,7 @@ def import_admissions(db, rows, report: ImportReport, ctx: ImportContext) -> Non
                 created_by=operator_id,
             )
         )
-        existing.add(key)
+        seen_batch[key] = line_no
         if in_hospital:
             in_hospital_patients.add(patient_id)
         report.imported += 1
