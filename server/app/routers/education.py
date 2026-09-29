@@ -880,6 +880,10 @@ class HealthArticleOut(BaseModel):
 # ---- ⑨⑩ 健康宣教 ----
 
 
+#: 健康宣教文章分类的中文名，与管理端建稿的下拉同一套字；居民端按它显示（P2-781：原先原样印 general / chronic）
+ARTICLE_CATEGORY_NAMES = {"general": "综合", "chronic": "慢病", "maternal": "妇幼", "infectious": "传染病"}
+
+
 class ArticleCreate(BaseModel):
     title: str = Field(min_length=1, max_length=256, pattern=NON_BLANK)
     category: str = Field(default="general", max_length=32)

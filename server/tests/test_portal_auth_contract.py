@@ -171,7 +171,7 @@ def test_健康宣教只出已发布且键集合固定(client, seeded):
     rows = client.get("/api/portal/health-articles").json()
     assert rows, "seeded 发布了一篇"
     for row in rows:
-        assert set(row) == {"id", "title", "category", "content"}
+        assert set(row) == {"id", "title", "category", "category_name", "content"}   # 分类中文名（P2-781）
         assert isinstance(row["id"], int)
     assert all(r["title"] != "未发布稿" for r in rows), "草稿被公示出去了"
 

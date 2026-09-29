@@ -115,7 +115,7 @@ async function loadArticles() {
     box.innerHTML = items.map((a) => `
       <div class="article">
         <h3>${esc(a.title)}</h3>
-        <span class="cat">${esc(a.category || "健康科普")}</span>
+        <span class="cat">${esc(a.category_name || "健康科普")}</span>
         <p class="clamp">${esc(a.content)}</p>
         <a class="more">展开全文</a>
       </div>`).join("");

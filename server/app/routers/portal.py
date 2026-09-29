@@ -118,6 +118,7 @@ from .consents import (
 )
 from .notifications import NotificationOut, UnreadCountOut, notification_out
 from .chronic import guidance_for
+from .education import ARTICLE_CATEGORY_NAMES
 
 router = APIRouter(prefix="/api/portal", tags=["居民端"])
 
@@ -235,6 +236,7 @@ class HealthArticleOut(BaseModel):
     id: int
     title: str
     category: str
+    category_name: str
     content: str
 
 
@@ -2428,7 +2430,8 @@ def published_articles(
     if category:
         q = q.filter(HealthArticle.category == category)
     return [
-        {"id": a.id, "title": a.title, "category": a.category, "content": a.content}
+        {"id": a.id, "title": a.title, "category": a.category,
+         "category_name": ARTICLE_CATEGORY_NAMES.get(a.category, a.category), "content": a.content}
         for a in paginate(q.order_by(HealthArticle.id.desc()), response, offset, limit, 50)
     ]
 
