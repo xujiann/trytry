@@ -587,20 +587,24 @@ def discharge_admission(admission_id: int, db: Session = Depends(get_db), user: 
         synchronize_session=False,
     )
     _release_bed(db, admission.bed_id)
-    spawn_discharge_followup(db, admission)
-    from ..notify import notify_patient
-    from .followups import DISCHARGE_FOLLOWUP_DAYS
+    # 转归「死亡」不派出院随访、不发「出院随访安排」（P2-878，与术中记录的 P2-499 同一句）：平台办理出院必须先有病案首页
+    # （上面没有就 409），转归此时已知——原先照派照发，代管的家属在居民端收到「我们将在 7 天内电话随访」，统一随访中心多
+    # 一条出院随访。出院事件照发（载荷带不带转归、订阅方怎么处理，与 HL7 A03 那一路出院时可能还没有首页，随 P2-385 待裁定）
+    if summary.outcome != "死亡":
+        spawn_discharge_followup(db, admission)
+        from ..notify import notify_patient
+        from .followups import DISCHARGE_FOLLOWUP_DAYS
 
-    notify_patient(
-        db,
-        admission.patient_id,
-        category="followup",
-        title="出院随访安排",
-        body=f"您已办理出院，我们将在 {DISCHARGE_FOLLOWUP_DAYS} 天内电话随访。"
-             "费用清单可在「在线服务-住院」查看。",
-        link_type="admission",
-        link_id=admission.id,
-    )
+        notify_patient(
+            db,
+            admission.patient_id,
+            category="followup",
+            title="出院随访安排",
+            body=f"您已办理出院，我们将在 {DISCHARGE_FOLLOWUP_DAYS} 天内电话随访。"
+                 "费用清单可在「在线服务-住院」查看。",
+            link_type="admission",
+            link_id=admission.id,
+        )
     # 领域事件：订阅方（如慢专病子系统）据此派生自己的随访计划。
     # 同事务、只 add 不 commit，订阅者异常由总线兜住，不影响出院办理本身。
     events.publish(db, events.ADMISSION_DISCHARGED, {
