@@ -17,7 +17,8 @@ def world(client, admin):
     org = client.post("/api/organizations", headers=admin, json={
         "name": "P2761 卫生院", "org_type": "township", "level": "township"}).json()["id"]
     patients = [client.post("/api/patients", headers=admin, json={
-        "name": f"P2761 患者{n}", "id_card": f"33010219500101{2760 + n:04d}"}).json()["id"] for n in (1, 2)]
+        "name": f"P2761 患者{n}", "id_card": f"33010219500101{2760 + n:04d}",
+        "phone": f"13800{2760 + n:06d}"}).json()["id"] for n in (1, 2)]   # 转呼叫要有电话（P2-881）
     return {"org": org, "patient": patients[0], "other": patients[1]}
 
 

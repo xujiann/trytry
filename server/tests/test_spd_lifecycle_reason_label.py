@@ -31,7 +31,8 @@ def _enrolled_with_work(client, admin, world):
     """一份在管档案，名下一条待办任务、一条待复诊、一条从复诊转出的待呼叫。"""
     world["n"] += 1
     patient = client.post("/api/patients", headers=admin, json={
-        "name": f"P2767 患者{world['n']}", "id_card": f"33010219500101{2766 + world['n']:04d}"}).json()["id"]
+        "name": f"P2767 患者{world['n']}", "id_card": f"33010219500101{2766 + world['n']:04d}",
+        "phone": f"13800{2766 + world['n']:06d}"}).json()["id"]   # 转呼叫要有电话（P2-881）
     doctor = world["doctor"]
     client.post("/api/encounters", headers=doctor, json={"patient_id": patient, "org_id": world["org"],
                                                          "diagnosis_name": "高血压"})

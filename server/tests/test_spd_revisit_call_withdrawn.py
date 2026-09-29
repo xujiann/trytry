@@ -30,7 +30,8 @@ def world(client, admin):
 def _patient_with_revisit_call(client, admin, world):
     world["n"] += 1
     patient = client.post("/api/patients", headers=admin, json={
-        "name": f"P2735 患者{world['n']}", "id_card": f"33010219500101{2735 + world['n']:04d}"}).json()["id"]
+        "name": f"P2735 患者{world['n']}", "id_card": f"33010219500101{2735 + world['n']:04d}",
+        "phone": f"13800{2735 + world['n']:06d}"}).json()["id"]   # 转呼叫要有电话（P2-881）
     doctor = world["doctor"]
     client.post("/api/encounters", headers=doctor, json={"patient_id": patient, "org_id": world["org"],
                                                          "diagnosis_name": "高血压"})
