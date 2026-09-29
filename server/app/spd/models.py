@@ -1143,7 +1143,9 @@ class SpdIndicator(Base):
     data_source: Mapped[str] = mapped_column(String(32), default="task")
     scope_expr: Mapped[str] = mapped_column(String(256), default="")
     formula: Mapped[str] = mapped_column(String(256), default="")
-    # {"type":"ratio","full":100,"target":0.9} 或 {"type":"step","steps":[...]}
+    # {"type":"ratio","full":100,"target":90} 或 {"type":"step","steps":[...]}。目标与公式结果**同一量纲**：公式
+    # `done / total * 100` 算出的是百分数，目标就写 90（种子都这么写）；原先这里写 0.9，照着建的指标完成率 5% 也满分
+    # （5.0 ≥ 0.9，P2-737）
     score_rule: Mapped[dict] = mapped_column(JSON, default=dict)
     weight: Mapped[float] = mapped_column(Float, default=1.0)
     target_value: Mapped[float | None] = mapped_column(Float, nullable=True)

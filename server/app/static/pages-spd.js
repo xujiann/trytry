@@ -2692,7 +2692,8 @@ async function renderSpdAssess() {
         <input name="formula" placeholder="公式，如 done / total * 100" required style="min-width:220px"
           title="留空的公式按 total 取值，而纳管 / 评估 / 建档 / 上报几个口径没有 total，计分恒为 0——所以这里必填">
         <input name="weight" type="number" step="any" min="0" placeholder="权重" style="width:80px">
-        <input name="target_value" type="number" step="any" placeholder="目标值" style="width:90px">
+        <input name="target_value" type="number" step="any" placeholder="目标值（如 90）" style="width:110px"
+               title="与公式结果同一量纲：公式 ×100 算百分数的，目标写 90，不写 0.9">
         <select name="score_type"><option value="ratio">按比例：达到目标值得满分，未达按比例</option>
           <option value="">不配置：按指标值计分（截到 0~100）</option></select>
         <button>新建指标</button>
@@ -2866,7 +2867,8 @@ async function renderSpdAssess() {
       const form = await spdModal("编辑考核指标（公式留空不改）", [
         { name: "name", label: "名称", value: indEdit.dataset.name, required: true },
         { name: "weight", label: "权重", type: "number", value: indEdit.dataset.weight },
-        { name: "target_value", label: "目标值（留空 = 不设目标）", value: indEdit.dataset.target },
+        { name: "target_value", label: "目标值（与公式结果同一量纲：×100 的写 90，不写 0.9；留空 = 不设目标）",
+          value: indEdit.dataset.target },
         { name: "formula", label: `公式（${metricHint(indEdit.dataset.source) || "只能引用该取数口径的变量"}）`,
           value: indEdit.dataset.formula },
         { name: "active", label: "状态", type: "select", value: indEdit.dataset.active,
