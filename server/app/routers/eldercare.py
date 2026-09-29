@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from .. import clock
 from ..visibility import scope_patient_list
 from ..database import get_db
-from ..datetypes import OptionalDateStr
+from ..datetypes import OptionalDateStr, legacy_date
 from ..deps import get_current_user, paginate, require_roles
 from ..models import ElderlyAssessment, Patient, User
 
@@ -40,8 +40,13 @@ def _latest_by_patient(rows: list[ElderlyAssessment]) -> dict[int, ElderlyAssess
 
 def _assessed_on(row: ElderlyAssessment) -> str:
     """评估日期；没填的按录入那天——录入时刻换成本地日期再取（第十五批 S2-6）：落库是 naive UTC，原先直接 `.date()`，
-    东八区 0–8 点录的算成前一天，年度复评提醒提前一天报「已超一年」。"""
-    return row.assessed_date or clock.to_local(row.created_at).date().isoformat()
+    东八区 0–8 点录的算成前一天，年度复评提醒提前一天报「已超一年」。
+
+    按日历读（P2-890）：P1-61 之前页面是自由文本框，存量里的「2026/01/15」「20260301」按字符串比，同一年里比任何规范
+    日期都「晚」——1 月的「重度失能」旧表压住 9 月复评的「能力完好」，人还在失能清单、还报专案；反过来 9 月复评出的重度
+    失能被 3 月的旧表压住、漏报。认得出的写法照读，读不成的与没填同一个兜底（录入那天）。
+    """
+    return legacy_date(row.assessed_date) or clock.to_local(row.created_at).date().isoformat()
 
 
 class AssessmentCreate(BaseModel):

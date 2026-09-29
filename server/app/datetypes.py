@@ -50,6 +50,26 @@ def check_date(value: str) -> str:
     return value
 
 
+# 存量读法（P2-890）：P1-61（2026-09-24 起日期入参一律 `DateStr`）之前各处日期是自由文本框，库里存下了 `2026/01/15`、
+# `2026.1.15`、`2026-1-15`、`20260115`、全角「２０２６-０１-１５」这类写法。按字符串比，它们在同一年里比任何规范日期都
+# 「晚」（'/'、'0' 都大于 '-'）——「每人最近一次」「今天及以后」、先后校验都会判反。**只给读存量用**：写入口一律 `DateStr`
+# 422，别拿它放宽入参。故意用 `\d`：存量里的全角数字也要读（与上面入参闸门特意用 `[0-9]` 相反）。
+_LEGACY_DATE = re.compile(r"(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})|(\d{4})(\d{2})(\d{2})")
+
+
+def legacy_date(value: str | None) -> str | None:
+    """库里存着的日期读成 `YYYY-MM-DD`：规范写法原样，P1-61 之前手填的斜杠、点号、不补零、八位数字、全角写法照读；
+    读不成（空、文字、日历上不存在的日子）返回 None，由各处按「日子未知」兜底。"""
+    matched = _LEGACY_DATE.fullmatch((value or "").strip())
+    if matched is None:
+        return None
+    year, month, day = (int(part) for part in matched.groups() if part is not None)
+    try:
+        return date(year, month, day).isoformat()
+    except ValueError:
+        return None
+
+
 def _check(value: object, *, allow_blank: bool) -> object:
     if isinstance(value, date):
         return value.isoformat()
