@@ -2692,6 +2692,7 @@ async function renderSpdAssess() {
     api("/api/spd/point-rules"), api("/api/spd/redeems?limit=50"), api("/api/spd/workload"), spdMeta(),
   ]);
   const objectNames = SPD_ASSESS_OBJECTS;
+  const planNames = Object.fromEntries(plans.map((p) => [p.id, p.name]));   // 考核结果按方案标出来（P2-784）
   // 取数口径与各口径的变量取自 /api/spd/meta（后端 service.INDICATOR_SOURCES 一份），前端不另抄口径表
   const sources = meta.indicator_sources || [];
   const sourceNames = Object.fromEntries(sources.map((x) => [x.key, x.name]));
@@ -2765,8 +2766,10 @@ async function renderSpdAssess() {
               data-items="${esc(spdPlanItemsText(p.items))}"
               data-active="${p.active === false ? 0 : 1}">编辑</button></td></tr>`)}`)}
     ${panel("考核结果", `
-      ${table(["排名", "对象", "周期", "综合得分", "操作"], scores, (s) =>
-        `<tr><td>${s.rank}</td><td>${esc(s.object_name)}</td><td>${esc(s.period)}</td>
+      <p class="desc">名次是各方案、各周期内部排的，同一张表里会有几个「第 1 名」——按方案与周期对着看</p>
+      ${table(["方案", "周期", "排名", "对象", "综合得分", "操作"], scores, (s) =>
+        `<tr><td>${esc(planNames[s.plan_id] || `方案 #${s.plan_id}`)}</td><td>${esc(s.period)}</td>
+         <td>${s.rank}</td><td>${esc(s.object_name)}</td>
          <td>${s.total_score}</td>
          <td><button class="btn secondary" data-score="${s.id}">下钻明细</button></td></tr>`)}
       <div id="spd-score-detail"></div>`)}
