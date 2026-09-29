@@ -70,6 +70,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from app import clock  # noqa: E402
 from app.database import Base, SessionLocal, engine  # noqa: E402
 from app.datetypes import check_date  # noqa: E402
 from app.numtypes import INT4_MAX  # noqa: E402
@@ -368,6 +369,11 @@ def import_patients(db, rows, report: ImportReport, ctx: ImportContext) -> None:
         birth_date = (row.get("birth_date") or "").strip()
         if birth_date and not _valid_date(birth_date):
             report.error(line_no, f"birth_date 格式非法: {birth_date}（须 YYYY-MM-DD）", row)
+            continue
+        # 与界面建档同一句（P2-713 / P2-739）：原先只查格式，2070-01-01 照导，年龄算成负数——慢专病「未满 18 岁不纳入」把
+        # 成年人排除、知情同意代录要求监护人
+        if birth_date and birth_date > clock.today_str():
+            report.error(line_no, f"出生日期（{birth_date}）不得晚于今天", row)
             continue
         # 同批内重复单独报错（与库内已存在的"幂等跳过"语义区分，便于清洗源文件）；
         # 末位 x / X 两种写法是同一个人（P1-197：原先按原样比对，同一人导成两本档案）
