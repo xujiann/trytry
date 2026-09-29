@@ -491,6 +491,11 @@ def adjust_path_instance(
         if role:
             raise HTTPException(status_code=422,
                                 detail=f"路径负责人是{role}，办不了路径（owner_user_id={data['owner_user_id']}）")
+        # 别家机构的人不收（P2-879，与任务责任人 P1-210 同一句）：原先照收，路径暂停时「专病路径已暂停」发进别家机构，
+        # 他打开实例 403、暂停清单里查不到、推进也 403——这条路径就没人管了。全域角色照常放行
+        if assignee_outside_org(db, data["owner_user_id"], enrollment.org_id if enrollment else None):
+            raise HTTPException(status_code=422,
+                                detail=f"路径负责人不在该档案所属机构，派过去打不开这条路径（owner_user_id={data['owner_user_id']}）")
     if data.get("status") == "running" and instance.status == "paused":
         # 恢复与推进接口同一套（P1-131）：原先这里只把状态改回去，因条件暂停的路径不判条件、不派任务
         with serialized_on(db, SpdPathInstance, instance.id):
