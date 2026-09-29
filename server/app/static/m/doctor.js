@@ -778,7 +778,8 @@ $("#fu-form").addEventListener("submit", async (e) => {
   const chronicId = $("#fu-chronic").value;
   if (!chronicId) return setMsg("#fu-msg", "暂无可随访的在管档案", false);
   // 血压血糖走专用列，其余指标进通用 metrics JSON
-  const body = { metrics: {}, next_due: $("#fu-next").value.trim() };
+  // 本次指导原先录不了（P2-862）：随访记录的「指导」列恒为空
+  const body = { metrics: {}, next_due: $("#fu-next").value.trim(), guidance: $("#fu-guidance").value.trim() };
   $("#fu-metrics").querySelectorAll("input[data-key]").forEach((input) => {
     if (input.value === "") return;
     const key = input.dataset.key;
@@ -792,6 +793,7 @@ $("#fu-form").addEventListener("submit", async (e) => {
       !result.refer_up_suggested);
     $("#fu-metrics").querySelectorAll("input").forEach((i) => { i.value = ""; });
     $("#fu-next").value = "";
+    $("#fu-guidance").value = "";
     loadChronic();
   } catch (err) {
     setMsg("#fu-msg", err.message, false);

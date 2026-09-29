@@ -2120,6 +2120,7 @@ async function renderChronic() {
         <input name="glucose" type="number" step="any" placeholder="空腹血糖">
         <input name="metrics" placeholder="其他指标 如 cat_score=22">
         <input name="next_due" type="date" title="下次随访（留空按病种周期自动建议）">
+        <input name="guidance" placeholder="本次指导（可空）" style="min-width:200px">
         <button>提交随访</button>
       </form><p class="msg" id="chronic-msg"></p>
       <h3 style="margin-top:14px">病种目录（分级规则与随访周期的唯一数据源）</h3>
@@ -2178,7 +2179,9 @@ async function renderChronic() {
     });
     try {
       const result = await api(`/api/chronic/${f.get("chronic_id")}/followups`, { method: "POST",
-        body: JSON.stringify({ sbp: num("sbp"), dbp: num("dbp"), glucose: num("glucose"), metrics, next_due: f.get("next_due") }) });
+        // 本次指导原先录不了（P2-862）：随访记录的「指导」列恒为空
+        body: JSON.stringify({ sbp: num("sbp"), dbp: num("dbp"), glucose: num("glucose"), metrics, next_due: f.get("next_due"),
+                               guidance: String(f.get("guidance") || "").trim() }) });
       alert(`分级：${result.level} 级${result.refer_up_suggested ? "（建议上转！）" : ""}\n下次随访：${result.next_due}${result.next_due_suggested ? "（按病种周期自动建议）" : ""}\n指导要点：${result.guidance_points}`);
       route();
     } catch (err) { setMsg("#chronic-msg", err.message, false); }
