@@ -10,7 +10,7 @@ from ..clock import now_naive
 from ..concurrency import claim_quota
 from ..datetypes import OptionalDateStr
 from ..numtypes import INT4_MAX
-from ..texttypes import NON_BLANK
+from ..texttypes import NON_BLANK, code_key
 from ..visibility import assert_org_writable, assert_patient_visible
 from ..database import get_db
 from ..deps import get_current_user, require_roles, resolve_business_date
@@ -35,13 +35,16 @@ def _effective_contraindications(
     任务跑没跑，而这条判定直接决定能不能给人打针，不能依赖调度。
     诊间提醒（`publichealth.clinic_reminders`）也按这一条判，别另写一份（P2-132）。
     """
-    query = db.query(VaccineContraindication).filter(
+    rows = db.query(VaccineContraindication).filter(
         VaccineContraindication.patient_id == patient_id,
         VaccineContraindication.status == "active",
-    )
+    ).order_by(VaccineContraindication.id).all()
+    # 疫苗编码按比对键认（P1-219，与审方 P1-218 同一个 `code_key`）：禁忌登记是手输框，接种选批次自动带出批次上的编码，
+    # 原先登记成 `hepb` / `HepB `、批次是 `HepB` 的，这条禁忌拦不住——接种 201。一位受种者的禁忌就几条，取出来在这里比；
+    # 落库的编码不动（规范写法另行登记）。
     if vaccine_code is not None:
-        query = query.filter(VaccineContraindication.vaccine_code == vaccine_code)
-    rows = query.order_by(VaccineContraindication.id).all()
+        key = code_key(vaccine_code)
+        rows = [c for c in rows if code_key(c.vaccine_code) == key]
     return [c for c in rows if not _contra_expired(c, today)]
 
 
@@ -322,19 +325,18 @@ def pre_vaccination_check(
         raise HTTPException(status_code=404, detail="受种者不存在")
     today_str = resolve_business_date(today).isoformat()
     blocking = _effective_contraindications(db, patient_id, vaccine_code, today_str)
-    history = (
-        db.query(VaccineContraindication)
-        .filter(
-            VaccineContraindication.patient_id == patient_id,
-            VaccineContraindication.vaccine_code == vaccine_code,
-        )
+    # 禁忌史与既往剂次同样按比对键认（P1-219）：原先按 `hepb` 查报既往 0 剂、下一剂是第 1 剂，实际已按 `HepB` 打过 1 剂
+    key = code_key(vaccine_code)
+    history = [
+        c for c in db.query(VaccineContraindication)
+        .filter(VaccineContraindication.patient_id == patient_id)
         .order_by(VaccineContraindication.id.desc())
         .all()
-    )
-    doses = (
-        db.query(VaccinationRecord)
-        .filter(VaccinationRecord.patient_id == patient_id, VaccinationRecord.vaccine_code == vaccine_code)
-        .count()
+        if code_key(c.vaccine_code) == key
+    ]
+    doses = sum(
+        1 for (code,) in db.query(VaccinationRecord.vaccine_code).filter(VaccinationRecord.patient_id == patient_id)
+        if code_key(code) == key
     )
     return {
         "allowed": not blocking,
