@@ -108,7 +108,9 @@ def _age_of(birth_date: str) -> int | None:
     except (ValueError, TypeError):
         return None
     today = clock.today()
-    return today.year - born.year - ((today.month, today.day) < (born.month, born.day))
+    age = today.year - born.year - ((today.month, today.day) < (born.month, born.day))
+    # 出生日期在将来（P2-713 之前建档 / 更正存下的）算出负数：当「不知道」，不拿它去比「未满 18 岁」
+    return age if age >= 0 else None
 
 
 def build_facts(db: Session, patient_id: int, extra: dict | None = None, *, answers: dict | None = None) -> dict:

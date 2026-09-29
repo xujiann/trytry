@@ -56,7 +56,9 @@ def _age_of(birth_date: str, today: date | None = None) -> int | None:
     except (TypeError, ValueError):
         return None
     ref = today or clock.today()
-    return ref.year - born.year - ((ref.month, ref.day) < (born.month, born.day))
+    age = ref.year - born.year - ((ref.month, ref.day) < (born.month, born.day))
+    # 出生日期在将来（P2-713 之前建档 / 更正存下的）算出负数：当「不知道」，与写坏的日期同一个口径
+    return age if age >= 0 else None
 
 
 def _patient_groups(db: Session, patient: Patient) -> set[str]:

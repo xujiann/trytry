@@ -84,6 +84,10 @@ def _generate_ehc_no(db: Session) -> str:
 def register_patient(
     body: PatientCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
+    # 出生日期不得晚于今天（P2-713，与传染病发病日期 P2-454 同一句）：年龄全靠它现算，把 1970 敲成 2070 建档，年龄算成
+    # 负数——慢专病「未满 18 岁不纳入」把成年人排除，知情同意代录要求监护人
+    if body.birth_date and body.birth_date > resolve_business_date(None).isoformat():
+        raise HTTPException(status_code=422, detail=f"出生日期（{body.birth_date}）不得晚于今天")
     # 主索引幂等：同一身份证号返回既有档案，不重复建档（并发竞态由唯一约束+重查兜底）
     patient, _created = create_patient_idempotent(db, body.model_dump())
     # 出口脱敏（H1）：幂等命中时返回的是**别人录入的**那份档案——电话不是本次请求方

@@ -29,6 +29,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from .. import clock
 from ..database import get_db
 from ..datetypes import check_date
 from ..texttypes import NON_BLANK
@@ -381,6 +382,8 @@ def _check_correction_value(field: str, value: str) -> None:
     """
     if field == "birth_date":
         check_date(value)
+        if value > clock.today().isoformat():   # 与建档同一句（P2-713）：将来的出生日期算出负年龄
+            raise ValueError(f"出生日期（{value}）不得晚于今天")
 
 
 def validate_correction_changes(request_type: str, changes: dict[str, str]) -> str:
