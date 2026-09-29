@@ -1021,6 +1021,7 @@ $("#tab-surgery").addEventListener("click", (e) => {
     <select name="incision_level">${["I", "II", "III", "IV"].map((x) =>
       `<option value="${x}"${x === e.target.dataset.incision ? " selected" : ""}>${x} 类切口</option>`).join("")}</select>
     <textarea name="findings" rows="2" placeholder="术中所见"></textarea>
+    <input name="complications" placeholder="并发症（无则留空）">
     <input name="blood_loss_ml" inputmode="numeric" placeholder="出血量 ml（可空）">
     <select name="outcome">${["治愈", "好转", "未愈", "死亡"].map((x) =>
       `<option${x === "好转" ? " selected" : ""}>${x}</option>`).join("")}</select>
@@ -1044,6 +1045,8 @@ $("#tab-surgery").addEventListener("click", (e) => {
           anesthesia_type: f.anesthesia_type.value,
           incision_level: f.incision_level.value,
           findings: f.findings.value.trim(),
+          // 并发症原先不录（P2-861）：手机上记的每一台都进「手术并发症发生率」的分母、进不了分子——管理端表单早有这一项
+          complications: f.complications.value.trim(),
           // 留空记 0；写错的原样交给后端报人话，别让 Number() 把它悄悄变成 NaN → null
           blood_loss_ml: blood === "" ? 0 : (Number.isNaN(Number(blood)) ? blood : Number(blood)),
           outcome: f.outcome.value,
