@@ -7,6 +7,8 @@
 """
 import pytest
 
+from conftest import login
+
 UNSPECIFIED = "未标批号"
 CODE = "C09AA01"
 
@@ -20,6 +22,16 @@ def org(client, admin):
 @pytest.fixture(scope="module")
 def supplier(client, admin):
     return client.post("/api/pharmacy/suppliers", headers=admin, json={"name": "P1147 药业"}).json()["id"]
+
+
+@pytest.fixture(scope="module")
+def approver(client, admin, org):
+    """采购单的审批人：申请人不得自批（P2-759），采购单由 admin 提出，审批另开一位本机构的管理层账号。"""
+    resp = client.post("/api/users", headers=admin, json={
+        "username": "p1147_director", "password": "passw0rd1", "full_name": "P1147 审批人", "role": "director",
+        "org_id": org})
+    assert resp.status_code in (200, 201), resp.text
+    return login(client, "p1147_director", "passw0rd1")
 
 
 def _fallback(client, admin, org):
@@ -55,11 +67,11 @@ def test_直接入库_409_汇总与批次都不动(client, admin, org, recalled)
     assert _fallback(client, admin, org)["quantity"] == 30
 
 
-def test_采购验收_409_采购单仍待验收(client, admin, org, supplier, recalled):
+def test_采购验收_409_采购单仍待验收(client, admin, approver, org, supplier, recalled):
     order = client.post("/api/pharmacy/purchase-orders", headers=admin, json={
         "org_id": org, "supplier_id": supplier, "item_type": "drug",
         "item_code": CODE, "item_name": "卡托普利片", "quantity": 200}).json()
-    assert client.post(f"/api/pharmacy/purchase-orders/{order['id']}/approve", headers=admin).status_code == 200
+    assert client.post(f"/api/pharmacy/purchase-orders/{order['id']}/approve", headers=approver).status_code == 200
     resp = client.post(f"/api/pharmacy/purchase-orders/{order['id']}/receive", headers=admin)
     assert resp.status_code == 409, resp.text      # 修前 200
     assert _summary(client, admin, org) == 0

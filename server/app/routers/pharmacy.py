@@ -922,15 +922,24 @@ def approve_purchase(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """审批 / 驳回（限管理层）。申请人不得自批（P2-759）——与物资采购、手术审批、双通道申报同一口径：原先只判待审批，
+    管理员（或同时授了申请与审批两类权限点的自定义角色）建一张药品采购单、自己批、自己验收，库存照加。
+    审批与「还待审批」压进同一条 UPDATE（与物资采购 P2-403 同一个写法）：一个批准、一个驳回同时到，后提交的不再改掉
+    先提交的结论。"""
     order = db.get(PurchaseOrder, order_id)
     if order is None:
         raise HTTPException(status_code=404, detail="采购单不存在")
     assert_obj_org_writable(db, user, order)
     if order.status != "pending":
         raise HTTPException(status_code=409, detail="仅待审批采购单可审批")
-    order.status = "rejected" if reject else "approved"
-    order.approved_by = user.id
+    if order.requested_by == user.id:
+        raise HTTPException(status_code=403, detail="不得审批本人提出的采购单")
+    if not move_row(db, PurchaseOrder, order.id, PurchaseOrder.status == "pending",
+                    status="rejected" if reject else "approved", approved_by=user.id):
+        db.rollback()
+        raise HTTPException(status_code=409, detail="仅待审批采购单可审批")
     db.commit()
+    db.refresh(order)
     return {"id": order.id, "status": order.status}
 
 

@@ -19,7 +19,7 @@ import threading
 import pytest
 from fastapi.testclient import TestClient
 
-from conftest import reset_database
+from conftest import login, reset_database
 
 from app.database import SessionLocal
 from app.main import app
@@ -68,6 +68,16 @@ def supplier(client, admin):
     return client.post(
         "/api/pharmacy/suppliers", json={"name": "对账药业"}, headers=admin
     ).json()
+
+
+@pytest.fixture(scope="module")
+def approver(client, admin, org):
+    """采购单的审批人：申请人不得自批（P2-759），采购单都由 admin 提出，审批另开一位本机构的管理层账号。"""
+    resp = client.post("/api/users", headers=admin, json={
+        "username": "psi_director", "password": "passw0rd1", "full_name": "对账审批人", "role": "director",
+        "org_id": org["id"]})
+    assert resp.status_code in (200, 201), resp.text
+    return login(client, "psi_director", "passw0rd1")
 
 
 # ------------------------------------------------------------------ 小工具
@@ -157,7 +167,7 @@ def test_再次直接入库累加到同一个兜底批次(client, admin, org):
     assert _assert_invariant(client, admin, org["id"], "DIRECT2") == 50
 
 
-def test_采购验收同事务落批次(client, admin, org, supplier, patient):
+def test_采购验收同事务落批次(client, admin, approver, org, supplier, patient):
     order = client.post(
         "/api/pharmacy/purchase-orders",
         json={"org_id": org["id"], "supplier_id": supplier["id"], "item_type": "drug",
@@ -165,7 +175,7 @@ def test_采购验收同事务落批次(client, admin, org, supplier, patient):
         headers=admin,
     ).json()
     assert client.post(
-        f"/api/pharmacy/purchase-orders/{order['id']}/approve", headers=admin
+        f"/api/pharmacy/purchase-orders/{order['id']}/approve", headers=approver
     ).status_code == 200
     received = client.post(
         f"/api/pharmacy/purchase-orders/{order['id']}/receive", headers=admin
@@ -178,7 +188,7 @@ def test_采购验收同事务落批次(client, admin, org, supplier, patient):
     assert _assert_invariant(client, admin, org["id"], "PURCH") == 0
 
 
-def test_采购单只能验收一次_并发闸门原子(client, admin, org, supplier):
+def test_采购单只能验收一次_并发闸门原子(client, admin, approver, org, supplier):
     """验收是往库存里加数的路径：闸门先判后改，两笔并发就按同一张单加两次。"""
     order = client.post(
         "/api/pharmacy/purchase-orders",
@@ -186,7 +196,7 @@ def test_采购单只能验收一次_并发闸门原子(client, admin, org, supp
               "item_code": "PONCE", "item_name": "验收一次药", "quantity": 100},
         headers=admin,
     ).json()
-    client.post(f"/api/pharmacy/purchase-orders/{order['id']}/approve", headers=admin)
+    assert client.post(f"/api/pharmacy/purchase-orders/{order['id']}/approve", headers=approver).status_code == 200
 
     codes: list[int] = []
     lock = threading.Lock()
