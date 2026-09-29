@@ -52,8 +52,8 @@ from .routers.medwaste import overdue_condition as medwaste_overdue_condition
 # 与合同到期提醒接口同源的口径（P2-207：已续签、离职的不算）
 from .routers.admin_mgmt import contract_expiring_condition
 
-# 合同/制剂的提前提醒窗口：与各自页面上的预警同一个窗口（人事页「60 天内到期合同」、中药制剂页「60 天内到期 /
-# 已过期」）。制剂原先是 30——页面列着 45 天后到期的批次，每日扫描与告警却不算它（P2-694）
+# 合同/制剂的提前提醒窗口：与各自页面上的预警同一个窗口（人事页「60 天内到期 / 已到期未续签合同」、中药制剂页
+# 「60 天内到期 / 已过期」）。制剂原先是 30——页面列着 45 天后到期的批次，每日扫描与告警却不算它（P2-694）
 CONTRACT_NOTICE_DAYS = 60
 PREPARATION_NOTICE_DAYS = 60
 
@@ -222,7 +222,8 @@ def contract_expiry_scan(db: Session) -> tuple[int, str]:
     deadline = (clock.today() + timedelta(days=CONTRACT_NOTICE_DAYS)).isoformat()
     count = db.query(StaffContract).filter(contract_expiring_condition(deadline)).count()
     _alert("contract_expiring", "聘用合同临期", count)
-    return count, f"{CONTRACT_NOTICE_DAYS} 天内到期合同 {count} 份"
+    # 已到期还没续签的也在数里（P2-207 特意留着——那正是要人去办的），摘要照实说（P2-716，与制剂 P2-694 同一句式）
+    return count, f"{CONTRACT_NOTICE_DAYS} 天内到期或已到期未续签合同 {count} 份"
 
 
 @register("preparation_expiry_scan", "中药制剂效期提醒", 86400)

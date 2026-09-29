@@ -2493,7 +2493,7 @@ async function renderHrFinance() {
       <div class="card"><div class="label">在派人数</div><div class="value">${secStats.active_secondments}</div></div>
       <div class="card"><div class="label">医共体收入合计</div><div class="value">${finance.consolidated.income}</div></div>
       <div class="card"><div class="label">医共体结余</div><div class="value">${finance.consolidated.balance}</div></div>
-      ${expiringContracts.length ? `<div class="card"><div class="label">60天内到期合同</div><div class="value warn">${expiringContracts.length}</div></div>` : ""}</div>
+      ${expiringContracts.length ? `<div class="card"><div class="label">60天内到期/已到期未续签合同</div><div class="value warn">${expiringContracts.length}</div></div>` : ""}</div>
     ${panel("员工 / 派驻 / 财务 / 物资录入", `
       <form class="inline" id="emp-form"><input name="org_id" type="number" placeholder="机构ID" required><input name="name" placeholder="姓名" required>
         <input name="title" placeholder="职称"><input name="position" placeholder="岗位"><button>登记员工</button></form>
@@ -2524,7 +2524,7 @@ async function renderHrFinance() {
             <button class="btn secondary" data-empct="${em.id}">签合同</button></td></tr>`;
     }))}
     <div class="panel hidden" id="empchg-panel"><h3>人员变动记录</h3><div id="empchg-list"></div></div>
-    ${expiringContracts.length ? panel(`⚠ 合同到期提醒（60天内 ${expiringContracts.length} 份，续签管理）`,
+    ${expiringContracts.length ? panel(`⚠ 合同到期提醒（60天内到期或已到期未续签 ${expiringContracts.length} 份，续签管理）`,
       table(["合同号", "员工", "止期"], expiringContracts, (c) =>
         `<tr><td><span class="tag">${esc(c.contract_no)}</span></td><td>${c.employee_id}</td><td><span class="tag orange">${esc(c.end_date)}</span></td></tr>`), { accent: "#b26a00" }) : ""}
     ${isDirector ? `${panel("月度薪酬（管理层：基础 + 绩效×系数）", `

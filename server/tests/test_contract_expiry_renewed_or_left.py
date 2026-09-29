@@ -46,3 +46,20 @@ def test_每日扫描与接口同一个数(client, world, monkeypatch):
     with SessionLocal() as db:
         count, _ = contract_expiry_scan(db)
     assert count == 2                                                         # 修前 4
+
+
+def test_摘要与人事页照实写含已到期未续签(client, world, monkeypatch):
+    """提醒里特意留着已到期还没续签的（上面的 P2207-LATE），摘要、卡片、面板却都写「60 天内到期」（P2-716，与制剂
+    P2-694 同一句式）：人事看着「60 天内到期 2 份」去翻 60 天内的，已经断签四个月的那份被当成数错了。"""
+    import pathlib
+
+    from app import clock
+    from app.jobs import contract_expiry_scan
+
+    monkeypatch.setattr(clock, "today", lambda: date.fromisoformat(TODAY))
+    with SessionLocal() as db:
+        count, summary = contract_expiry_scan(db)
+    assert summary == f"60 天内到期或已到期未续签合同 {count} 份"   # 修前「60 天内到期合同 2 份」
+    page = (pathlib.Path(__file__).resolve().parents[1] / "app/static/pages-clinical.js").read_text(encoding="utf-8")
+    assert "60天内到期/已到期未续签合同</div>" in page and "60天内到期合同" not in page
+    assert "合同到期提醒（60天内到期或已到期未续签 ${expiringContracts.length} 份" in page
