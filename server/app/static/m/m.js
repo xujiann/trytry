@@ -1298,13 +1298,13 @@ async function renderSpdMeasure(box) {
     || '<p class="empty">还没有记录，先添加一条吧</p>';
   box.innerHTML = `
     <form id="spd-measure-form" class="m-card">
-      <p class="hint">记录血压、血糖、体重等居家监测数据，系统会按管理目标判定是否达标</p>
+      <p class="hint">记录血压、血糖、体质指数、血氧等居家监测数据，系统会按管理目标判定是否达标</p>
       <select id="spd-metric">
-        <option value="bp_sys">收缩压(mmHg)</option>
-        <option value="bp_dia">舒张压(mmHg)</option>
-        <option value="glucose_fasting">空腹血糖(mmol/L)</option>
-        <option value="bmi">体质指数</option>
-        <option value="spo2">血氧饱和度(%)</option>
+        <option value="bp_sys" data-unit="mmHg">收缩压(mmHg)</option>
+        <option value="bp_dia" data-unit="mmHg">舒张压(mmHg)</option>
+        <option value="glucose_fasting" data-unit="mmol/L">空腹血糖(mmol/L)</option>
+        <option value="bmi" data-unit="kg/m²">体质指数(kg/m²，不是体重)</option>
+        <option value="spo2" data-unit="%">血氧饱和度(%)</option>
       </select>
       <input id="spd-value" type="number" step="any" placeholder="数值" required>
       <input id="spd-program" placeholder="病种编码（可留空：按您在管的病种判断）">
@@ -1315,8 +1315,10 @@ async function renderSpdMeasure(box) {
   $("#spd-measure-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     try {
+      // 单位随选项一起送（P2-738）：原先从不送，居民端录的每一条单位都是空串，医护端清单与趋势图的单位也空着
       const body = {
         metric: $("#spd-metric").value, value: Number($("#spd-value").value),
+        unit: $("#spd-metric").selectedOptions[0].dataset.unit || "",
         program_code: $("#spd-program").value || "",
       };
       if (viewingPatientId !== null) body.patient_id = viewingPatientId;
