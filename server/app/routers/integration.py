@@ -18,7 +18,9 @@ M11 交换监控（#26）：
 - GET /api/integration/exchange-logs 提供日志查询与失败率统计。
 """
 import base64
+import contextlib
 import json
+import logging
 import re
 from pathlib import Path
 from typing import Any, cast
@@ -107,6 +109,8 @@ class _InboundRoute(APIRoute):
         return logged
 
 
+logger = logging.getLogger("medplat.integration")
+
 router = APIRouter(
     prefix="/api/integration",
     tags=["对接适配层"],
@@ -147,7 +151,13 @@ class Hl7Message(BaseModel):
 def _log_exchange(
     message_type: str, success: bool, error_detail: str = "", source_system: str = ""
 ) -> None:
-    """交换日志落库：独立会话写入并提交，与业务事务解耦（失败也留痕）。"""
+    """交换日志落库：独立会话写入并提交，与业务事务解耦（失败也留痕）。
+
+    写不进去（库抖动、连接池一时取不到连接、锁超时）时回滚、记错误日志后吞掉，不拖垮业务响应（P2-819）：「成功」那一笔
+    落在业务已经提交之后，原先照抛——已落库的业务回成 500，对接方按规范重推，FHIR Observation 落两条随访，ORU 重推回 409
+    「已报告」、LIS 那头两次都记失败；「失败」那一笔照抛则把原来的 4xx 换成 500。取舍与审计落库（`main._write_audit`）、
+    调阅留痕同一句：丢的这条留痕记进错误日志，由日志告警兜底。
+    """
     db = SessionLocal()
     try:
         db.add(
@@ -160,8 +170,14 @@ def _log_exchange(
             )
         )
         db.commit()
+    except Exception:  # noqa: BLE001 - 见 docstring：旁路留痕失败不拖垮业务响应
+        with contextlib.suppress(Exception):
+            db.rollback()
+        logger.error("交换日志写入失败（业务响应不受影响，本条留痕丢失）：%s success=%s", message_type, success,
+                     exc_info=True)
     finally:
-        db.close()
+        with contextlib.suppress(Exception):
+            db.close()
 
 
 def _run_inbound(message_type: str, source_system: str, fn):
