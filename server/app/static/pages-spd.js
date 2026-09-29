@@ -3145,7 +3145,11 @@ async function renderSpdFollowup() {
   // 随访都成了已超期——原先只对待随访的给，最需要补做的那些在页面上再也执行不了（接口本就收已超期的）
   const drawRecords = async (query) => {
     const qs = new URLSearchParams({ limit: "30", ...(query || {}) }).toString();
-    const rows = await api(`/api/spd/followup-records?${qs}`);
+    // 没筛选时，已超期 / 待随访的单独取一遍、排在最前（P2-783）：清单按计划日升序，攒过 30 条之后首屏全是早已做完的，
+    // 今天到期的看不到，团队端却报「到期随访 N」。筛了状态 / 场景 / 只看超期的照筛的来
+    const rows = query && Object.keys(query).length ? await api(`/api/spd/followup-records?${qs}`)
+      : actionableFirst(...await Promise.all([api(`/api/spd/followup-records?${qs}`),
+        api("/api/spd/followup-records?status=overdue&limit=200"), api("/api/spd/followup-records?status=planned&limit=200")]));
     $("#spd-fu-list").innerHTML = table(
       ["ID", "患者", "场景", "计划日期", "执行日期", "渠道", "异常", "状态", "操作"],
       rows, (r) =>
@@ -3881,12 +3885,16 @@ const SPD_REVISIT_SOURCE = { path: "路径生成", discharge: "出院计划", hi
 async function renderSpdManager() {
   $("#page-desc").textContent =
     "专属服务衔接：应答居民在线咨询并可转随访、复诊计划看板与邀约留痕、健康处方";
+  // 复诊看板没筛选时，逾期 / 待复诊的单独取一遍、排在最前（P2-783）：清单按计划日升序，攒过 50 条之后首屏全是早已复诊的，
+  // 今天那条不在，团队端却报「到期复诊 N」。筛了状态 / 只看逾期的照筛的来
+  const openFirstRevisits = async () => actionableFirst(...await Promise.all([api("/api/spd/revisits?limit=50"),
+    api("/api/spd/revisits?status=overdue&limit=200"), api("/api/spd/revisits?status=planned&limit=200")]));
   const [catalog, recentConsults, openConsults, revisits] = await Promise.all([
     spdCatalog(),
     // 还开着的咨询单独取一遍、排在最前（P2-782）：原先只取最新 50 条，已关闭的一多，还等应答的就被挤出窗口
     api("/api/spd/consults?limit=50"),
     api("/api/spd/consults?status=open&limit=200"),
-    api("/api/spd/revisits?limit=50"),
+    openFirstRevisits(),
   ]);
   const consults = actionableFirst(recentConsults, openConsults);
   const programOptions = spdProgramOptions(catalog, true);
@@ -3949,7 +3957,8 @@ async function renderSpdManager() {
     if (e.target.overdue.checked) params.set("overdue", "true");
     // 查询失败要说出来（P2-378）：原先 api() 抛错没人接，列表还是上一次的结果
     try {
-      $("#spd-revisit-list").innerHTML = spdRevisitTable(await api(`/api/spd/revisits?${params}`));
+      $("#spd-revisit-list").innerHTML = spdRevisitTable(status || e.target.overdue.checked
+        ? await api(`/api/spd/revisits?${params}`) : await openFirstRevisits());
     } catch (err) { $("#spd-revisit-list").innerHTML = `<p class="msg err">${esc(err.message)}</p>`; }
   };
   $("#spd-rx-form").onsubmit = (e) => {
