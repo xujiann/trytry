@@ -1526,6 +1526,7 @@ async function renderSpdPatients() {
         </select>
         <input name="target_org_id" type="number" placeholder="迁入机构ID(跨机构迁出)">
         <input name="reason" placeholder="原因">
+        <label style="font-size:13px">发生日期 <input name="occurred_at" type="date" title="留空按今天"></label>
         <button>提交</button>
       </form><p class="msg" id="spd-life-msg"></p>
       <div id="spd-life-list"></div>`)}
