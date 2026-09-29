@@ -50,7 +50,7 @@ from ..models import (
 )
 from ..rules import is_suspect_risk, score_scale
 from ..service import (FOLLOWUP_OPEN_STATUSES, MEASUREMENT_SOURCE_NAMES, MEDIA_TYPE_NAMES, PACKAGE_BINDING_STATUS_NAMES,
-                       REFERRAL_STATUS_LABELS, TASK_OPEN_STATUSES, actively_enrolled, answers_problem, referral_ends,
+                       REFERRAL_STATUS_LABELS, TASK_COMPLETABLE_STATUSES, TASK_OPEN_STATUSES, actively_enrolled, answers_problem, referral_ends,
                        close_followup_record, enrollment_for, judge_measurement, mark_intervention_done,
                        measure_program_for, measure_value_problem, move_task,
                        scale_program_mismatch, scale_unusable, spawn_followup_abnormal_task, unknown_program)
@@ -907,6 +907,10 @@ def submit_task(
         raise HTTPException(status_code=404, detail="任务不存在")
     if task.status in ("done", "cancelled"):
         raise HTTPException(status_code=409, detail="该任务已结束")
+    # 已提交、待审核的不再收（P2-789，医护端同一条是 P2-758）：原先照收——另一台设备、代管家属的手机或没刷新的页面再提交一次，
+    # 结果整段换掉、状态仍是待审核，审核人通过的是后写的那份
+    if task.status == "submitted":
+        raise HTTPException(status_code=409, detail=RESIDENT_AWAITING_REVIEW)
     if body.evidence:
         problems = valid_task_evidence(db, task.id, body.evidence)
         if problems:
@@ -915,12 +919,19 @@ def submit_task(
     if task.require_evidence and not (task.evidence or []):
         raise HTTPException(status_code=422, detail="该任务需要上传照片或报告等凭证")
     task.result = body.result
-    # 条件翻转（P2-114）：锁外读到「未结束」之后医护刚办结的，别改回「待审核」——复活的任务再审一次，随访计分再记一笔
-    if not move_task(db, task.id, "submitted"):
+    # 条件翻转（P2-114）：锁外读到「未结束」之后医护刚办结的，别改回「待审核」——复活的任务再审一次，随访计分再记一笔；
+    # 只从能直接办结的状态翻（P2-789）：锁外读到办理中、这时另一台设备刚提交的，同样 409、不覆盖
+    if not move_task(db, task.id, "submitted", expect=TASK_COMPLETABLE_STATUSES):
         db.rollback()
-        raise HTTPException(status_code=409, detail="该任务已结束")
+        current = db.get(SpdTask, task.id)
+        raise HTTPException(status_code=409, detail=RESIDENT_AWAITING_REVIEW if current is not None
+                            and current.status == "submitted" else "该任务已结束")
     db.commit()
     return {"id": task.id, "status": task.status}
+
+
+#: 居民对待审核的任务再提交 / 再传凭证的回话（P2-789）
+RESIDENT_AWAITING_REVIEW = "该任务已提交、正在等医护审核，审核前不能再改；审核退回后可重新提交"
 
 
 # ============================================================ 随访 / 干预 / 宣教 / 复诊
@@ -954,10 +965,18 @@ async def upload_task_evidence(
         raise HTTPException(status_code=404, detail="任务不存在")
     if task.status in ("done", "cancelled"):
         raise HTTPException(status_code=409, detail="该任务已结束")
+    if task.status == "submitted":   # 待审核的不再收凭证：审核人看的佐证清单会被悄悄换掉（P2-789）
+        raise HTTPException(status_code=409, detail=RESIDENT_AWAITING_REVIEW)
     data = await file.read(10 * 1024 * 1024 + 1)
     # 佐证清单是 JSON 列表、只能「读旧值 + 本次 → 整体写回」：手机上一次选两张照片，两路上传同时到，后写的把先写的编号
     # 盖掉，那张照片存着、却不在清单里（P2-303）。锁住任务这一行、重读、再追加；先进临界区再写库（取锁顺序同 P2-291）
     with serialized_on(db, SpdTask, task.id):
+        # 锁内重读再判一次（P2-789）：锁外读到办理中、这时另一台设备刚提交审核的，不再往它的佐证清单里追加
+        db.refresh(task)
+        if task.status not in TASK_COMPLETABLE_STATUSES:
+            db.rollback()
+            raise HTTPException(status_code=409, detail=RESIDENT_AWAITING_REVIEW if task.status == "submitted"
+                                else "该任务已结束")
         attachment = store_attachment(
             db, data=data, filename=file.filename or "unnamed",
             content_type=file.content_type or "", owner_type="spd_task",
