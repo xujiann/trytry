@@ -93,9 +93,11 @@ def spd_report_push(db: Session) -> tuple[int, str]:
         period_label = default_period_label(template.period)
         # 每个绑定机构一份；没绑机构就出一份全域的。存量里悬空的机构与订阅人跳过（P1-124）：实例的机构、站内消息的
         # 收件人都是外键，写进去就撞约束、整轮回滚，所有任务的报告都不出。全悬空的一份也不出——不退回全域
+        org_names: dict[int, str] = {}
         if task.org_ids:
-            live_orgs = {i for (i,) in db.query(Organization.id).filter(Organization.id.in_(task.org_ids))}
-            org_ids: list[int | None] = [o for o in task.org_ids if o in live_orgs]
+            org_names = {i: name for i, name in db.query(Organization.id, Organization.name).filter(
+                Organization.id.in_(task.org_ids))}
+            org_ids: list[int | None] = [o for o in task.org_ids if o in org_names]
         else:
             org_ids = [None]
         # 订阅人去重、只发在用的账号（第十六批 T2-6，与 `notify_staff` 的 P2-349 同一口径）：原先 [甲, 甲, 甲] 甲收三条
@@ -129,9 +131,12 @@ def spd_report_push(db: Session) -> tuple[int, str]:
                     for section in template.sections or []
                 ],
             }
+            # 标题带机构名（P2-891）：绑了几家机构就出几份、订阅人收几条「报告已生成」，原先标题都是「慢病管理月报（2026年
+            # 09月）」、正文也一样，看不出是哪家的，报告清单上几行标题相同。判重用的期间标签照旧（带「·机构N」），不动
+            scope = period_label if org_id is None else f"{period_label}·{org_names[org_id]}"
             instance = SpdReportInstance(
                 task_id=task.id, template_code=template.code,
-                title=f"{template.name}（{period_label}）", period_label=label,
+                title=f"{template.name}（{scope}）", period_label=label,
                 scope_level=template.scope_level, org_id=org_id, content=content,
                 subscriber_ids=task.subscriber_ids or [],
             )
