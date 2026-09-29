@@ -802,6 +802,13 @@ def health_commission_workbench(
     enroll = _enroll_stats(db, orgs, program_code)
     tasks = _task_stats(db, orgs, program_code=program_code, today=business_day)
 
+    def of_program(column) -> list:
+        """带了病种的，其余计数同一句筛（P2-847，P2-648 那句「中心端其余计数同一句筛」的卫健端）：原先只有纳管、任务、
+        随访、转诊、路径四组筛了，「自我管理」、筛查、目标池、服务人数 / 人次与三级能力表的在管数仍是全病种——
+        按高血压看，自我管理 3 人比在管 1 人还多。建档居民不筛（患者主索引没有病种），团队不筛（一个团队服务几个病种）。
+        放进 `.filter(...)` 的条件里、不包在 `_apply_scope` 外面：机构范围闸门按 `_apply_scope(db.query(...))` 认收口"""
+        return [column == program_code] if program_code else []
+
     org_rows = db.query(Organization).all()
     # 层级取平台机构层级文案（P2-603）：原先手抄县 / 乡 / 村三级，市级协作医院的机构、在管患者、团队哪一行都不进
     level_names = ORG_LEVEL_NAMES
@@ -817,7 +824,7 @@ def health_commission_workbench(
             by_level[org.level]["orgs"] += 1
     for org_key, count in (
         _apply_scope(db.query(SpdEnrollment), SpdEnrollment.org_id, orgs)
-        .filter(SpdEnrollment.status == "active")
+        .filter(SpdEnrollment.status == "active", *of_program(SpdEnrollment.program_code))
         .with_entities(SpdEnrollment.org_id, func.count(SpdEnrollment.id))
         .group_by(SpdEnrollment.org_id)
         .order_by(SpdEnrollment.org_id).all()
@@ -833,7 +840,8 @@ def health_commission_workbench(
         if level in by_level:
             by_level[level]["teams"] += count
 
-    screening_query = _apply_scope(db.query(SpdScreening), SpdScreening.org_id, orgs)
+    screening_query = _apply_scope(db.query(SpdScreening), SpdScreening.org_id, orgs).filter(
+        *of_program(SpdScreening.program_code))
     screened = screening_query.count()
     suspect = screening_query.filter(SpdScreening.result == "suspect").count()
     centers = db.query(SpdCenter).order_by(SpdCenter.id).all()   # 同下面专家工作台：按编号排，不随堆序挪位
@@ -845,20 +853,21 @@ def health_commission_workbench(
             "suspect": suspect,
             "candidates": _apply_scope(
                 db.query(SpdCandidate), SpdCandidate.org_id, orgs
-            ).filter(SpdCandidate.status == "target").count(),
+            ).filter(SpdCandidate.status == "target", *of_program(SpdCandidate.program_code)).count(),
             "enrolled": enroll["enrolled"],
             "self_managed": _apply_scope(
                 db.query(SpdEnrollment), SpdEnrollment.org_id, orgs
             ).filter(
-                SpdEnrollment.status == "active", SpdEnrollment.risk_level == "low"
+                SpdEnrollment.status == "active", SpdEnrollment.risk_level == "low",
+                *of_program(SpdEnrollment.program_code),
             ).count(),
             # 服务人数 / 人次按同一个机构范围收口（P2-61）；建档居民不收：患者主索引没有机构列，全县一份。
             "service_persons": _apply_scope(
                 db.query(SpdTask.patient_id), SpdTask.org_id, orgs
-            ).filter(SpdTask.status == "done").distinct().count(),
+            ).filter(SpdTask.status == "done", *of_program(SpdTask.program_code)).distinct().count(),
             "service_times": _apply_scope(
                 db.query(SpdTask), SpdTask.org_id, orgs
-            ).filter(SpdTask.status == "done").count(),
+            ).filter(SpdTask.status == "done", *of_program(SpdTask.program_code)).count(),
             "screening_conversion_rate": round(suspect / screened * 100, 1) if screened else 0.0,
             "updated_at": now_naive().isoformat(),
         },
