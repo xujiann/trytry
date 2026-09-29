@@ -117,6 +117,8 @@ class ScreeningOut(BaseModel):
     advice: str
     reviewed: bool
     review_result: str
+    #: 复核结论的中文（P2-797）：未复核的是空串
+    review_result_name: str
     review_note: str
     answers: dict[str, Any]
     created_at: str
@@ -444,6 +446,10 @@ class ScreeningIn(BaseModel):
     answers: dict = Field(default_factory=dict)
 
 
+#: 复核结论 → 中文（§13「状态文案取自后端」，P2-797）：筛查清单的复核列原先原样印 confirmed / excluded / pending
+SCREENING_REVIEW_NAMES = {"confirmed": "确认", "excluded": "排除", "pending": "待定"}
+
+
 def _screening_out(s: SpdScreening, brief: dict | None = None) -> dict:
     out = {
         "id": s.id, "patient_id": s.patient_id, "program_code": s.program_code,
@@ -451,6 +457,7 @@ def _screening_out(s: SpdScreening, brief: dict | None = None) -> dict:
         "org_id": s.org_id, "scale_code": s.scale_code,
         "score": s.score, "risk_level": s.risk_level, "result": s.result,
         "advice": s.advice, "reviewed": s.reviewed, "review_result": s.review_result,
+        "review_result_name": SCREENING_REVIEW_NAMES.get(s.review_result, s.review_result),
         "review_note": s.review_note, "answers": s.answers or {},
         "created_at": s.created_at.isoformat(),
     }

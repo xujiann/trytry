@@ -66,7 +66,7 @@ def _age_of(birth_date: str) -> int:
 
 SCREENING_KEYS = ["id", "patient_id", "program_code", "source", "source_name", "org_id", "scale_code",
                   "score", "risk_level", "result", "advice", "reviewed", "review_result",
-                  "review_note", "answers", "created_at"]
+                  "review_result_name", "review_note", "answers", "created_at"]
 CANDIDATE_KEYS = ["id", "patient_id", "program_code", "status", "source", "org_id",
                   "team_id", "assigned_user_id", "risk_level", "reason", "matched_rules",
                   "claimed_at", "created_at"]
@@ -177,7 +177,7 @@ def test_筛查登记复核与列表(client, h, base):
         "id": body["id"], "patient_id": pid, "program_code": "ctp_dm",
         "source": "active", "source_name": "主动筛查", "org_id": org_id, "scale_code": "ctp_scale", "score": 3.0,
         "risk_level": "high", "result": "suspect", "advice": "尽快复核建档",
-        "reviewed": False, "review_result": "", "review_note": "",
+        "reviewed": False, "review_result": "", "review_result_name": "", "review_note": "",
         "answers": {"q1": "是", "q2": "是"}, "created_at": _iso(body["created_at"]),
     }
     # Float 列：3 分读回来是 3.0（写成 int 契约就把字节改了）
@@ -195,7 +195,7 @@ def test_筛查登记复核与列表(client, h, base):
     )
     assert reviewed.status_code == 200
     assert reviewed.json() == {**body, "reviewed": True, "review_result": "confirmed",
-                               "review_note": "复核确认"}
+                               "review_result_name": "确认", "review_note": "复核确认"}
 
     cands = client.get(f"{B}/candidates",
                        params={"program_code": "ctp_dm", "status": "target"},
