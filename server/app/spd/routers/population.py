@@ -640,10 +640,20 @@ def review_screening(
     assert_org_writable(db, user, screening.org_id)
     if screening.result != "suspect":
         raise HTTPException(status_code=409, detail="只有结论为「疑似」的筛查需要复核")
-    screening.reviewed = True
-    screening.review_result = body.review_result
-    screening.review_note = body.review_note
-    screening.reviewer_id = user.id
+    # 已复核的不能再复核（P2-736）：判定与写同一条 UPDATE。原先直接覆写——A 确认并认领之后，B 在没刷新的页面上点「排除」
+    # 照 200，目标池翻成 excluded（认领人仍是 A）、复核人改成 B；再送「待定」，池停在 excluded，两边对不上。同类的服务申请
+    # 「该申请已处理」、同意书「不能重复审核」都挡着。「待定」不是定论，还能再复核
+    won = cast(CursorResult, db.execute(
+        update(SpdScreening)
+        .where(SpdScreening.id == screening_id,
+               or_(SpdScreening.reviewed.is_(False), SpdScreening.review_result == "pending"))
+        .values(reviewed=True, review_result=body.review_result, review_note=body.review_note, reviewer_id=user.id)
+        .execution_options(synchronize_session=False)
+    )).rowcount
+    if not won:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="该筛查已复核，不能重复复核")
+    db.refresh(screening)
     candidate = (
         db.query(SpdCandidate)
         .filter(
