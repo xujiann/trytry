@@ -1271,8 +1271,10 @@ def batch_tasks(
             )).rowcount
             if not won:
                 db.refresh(task)
+                # 待审核的与单条接收同一句（P2-733）：原先先看责任人，别人提交在等审核的任务被说成「已被他人接收」
                 skipped.append({"id": task.id, "reason": "任务已结束" if task.status not in OPEN_STATUSES
-                                else "已被他人接收" if task.assignee_id not in (None, user.id)
+                                else "已被他人接收" if task.status != "submitted"
+                                and task.assignee_id not in (None, user.id)
                                 else "不处于可接收状态"})
                 continue
         elif body.action == "urge":
@@ -1303,6 +1305,10 @@ def batch_tasks(
                 skipped.append({"id": task.id, "reason": "任务已结束"})
                 continue
         done += 1
+    # 不存在的编号也列进回执（P2-733）：原先既不处理也不提，批量取消 [真, 99991, 99992] 回「处理 1、跳过 0」
+    found = {task.id for task in tasks}
+    skipped.extend({"id": task_id, "reason": "任务不存在"}
+                   for task_id in dict.fromkeys(body.task_ids) if task_id not in found)
     db.commit()
     return {"processed": done, "skipped": skipped}
 

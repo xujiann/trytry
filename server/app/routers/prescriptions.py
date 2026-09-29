@@ -153,7 +153,19 @@ class RuleActiveOut(BaseModel):
 
 @router.post("/rules/import", response_model=RuleImportOut, dependencies=[Depends(require_admin)])
 def import_rules(body: list[DrugRuleCreate], db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    """审方规则批量导入：drug_code 已存在则整条更新，不存在则新建。每条新建与覆盖都记改动前后（P2-578）。"""
+    """审方规则批量导入：drug_code 已存在则整条更新，不存在则新建。每条新建与覆盖都记改动前后（P2-578）。
+
+    同一批里同一药品编码出现两次整批 422 点名（P2-733）：原先逐条覆盖，后一行悄悄顶掉前一行——文件里多一行日剂量上限
+    1000 的，现行规则就从 10 放宽到 1000，回执只写「新建 1、更新 1」。不学字典导入的「先到为准」：审方上限直接卡处方，
+    替人挑哪一行作数，挑错就是放宽上百倍。
+    """
+    counts: dict[str, int] = {}
+    for entry in body:
+        counts[entry.drug_code] = counts.get(entry.drug_code, 0) + 1
+    duplicated = [code for code, n in counts.items() if n > 1]
+    if duplicated:
+        raise HTTPException(status_code=422, detail=f"同一批里药品编码重复：{'、'.join(duplicated[:20])}"
+                                                    "（每个编码只能有一行，核对哪一行作数后再导）")
     imported, updated = 0, 0
     for entry in body:
         rule = db.query(DrugRule).filter(DrugRule.drug_code == entry.drug_code).first()

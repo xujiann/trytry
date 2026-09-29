@@ -857,7 +857,8 @@ def distribute_candidates(
         else:
             claimed.append(candidate.id)
     db.commit()
-    out: dict[str, Any] = {"distributed": distributed, "not_found": len(body.candidate_ids) - len(rows)}
+    # 按去重后的编号数（P2-733）：原先同一条传 3 次回「分发 1、2 个编号不存在」
+    out: dict[str, Any] = {"distributed": distributed, "not_found": len(set(body.candidate_ids)) - len(rows)}
     if claimed:
         out["skipped_claimed"] = claimed
     return out
