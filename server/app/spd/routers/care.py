@@ -459,6 +459,16 @@ def create_measurement(
     return _measure_out(record)
 
 
+def _require_patients(db: Session, patient_ids: list[int], detail_suffix: str = "") -> None:
+    """批量写入口的患者号先全部查存在（P2-726 / P2-731）：全域角色过可见性守卫不查存在（P2-52），错号原先到写库那一条才
+    撞外键 500。排在可见性判定之前——不给不存在的号写调阅留痕（写不进去，只落一条「留痕丢失」的错误日志）。404 点名。"""
+    known = {pid for (pid,) in db.query(Patient.id).filter(Patient.id.in_(patient_ids))}
+    missing = [pid for pid in patient_ids if pid not in known]
+    if missing:
+        raise HTTPException(status_code=404,
+                            detail=f"患者不存在（patient_id={'、'.join(str(pid) for pid in missing[:20])}）{detail_suffix}")
+
+
 def _device_reading_key(item: MeasurementIn) -> tuple[int, str, str, datetime] | None:
     """设备读数的天然键：同一患者、同一指标、同一台设备、同一测定时刻只有一条读数（P2-728）。
 
@@ -491,10 +501,15 @@ def batch_measurements(
         program_problem = unknown_program(db, code)
         if program_problem:
             raise HTTPException(status_code=404, detail=f"{program_problem}：{code}")
+    # 先全部判完（并留痕）再写（P2-731）：原先边判边写——第一条落库后请求事务持着写锁，后面每位患者的调阅留痕在独立会话里
+    # 等锁（SQLite 5 秒）后写失败、被吞掉：4 位患者的一批要 15 秒、留痕只剩 1 条。宣教推送（P0-34）、加分组（P0-50）早就这么写
+    patient_ids = list(dict.fromkeys(item.patient_id for item in body.items))
+    _require_patients(db, patient_ids)
+    for patient_id in patient_ids:
+        assert_patient_visible(db, user, patient_id, resource="spd_measurement")
     created, abnormal, skipped = 0, 0, 0
     seen: set[tuple[int, str, str, datetime]] = set()
     for item in body.items:
-        assert_patient_visible(db, user, item.patient_id, resource="spd_measurement")
         key = _device_reading_key(item)
         if key is not None and (key in seen or db.query(SpdMeasurement.id).filter(
                 SpdMeasurement.patient_id == key[0], SpdMeasurement.metric == key[1],
@@ -954,9 +969,14 @@ def create_interventions(
     # 没写病种的先随模板（与 P2-100 上报随上报任务同一口径）；再没有的，患者只在管一个病种的挂这份档案（P1-139）——
     # 原先表单的病种默认留空，干预与它派的执行任务一律不挂档案、按档案看不到
     base_program = body.program_code or (template.program_code if template else "")
-    created = []
-    for patient_id in dict.fromkeys(body.patient_ids):
+    # 先全部判完（并留痕）再写（P2-731）：原先边判边写，第一位落库后后面每位的调阅留痕等锁 5 秒（SQLite）后丢失——4 人的
+    # 批量干预 15 秒、留痕 1 条，500 人约 41 分钟、丢 499 条。不存在的号先查（同 P2-726），原先撞外键 500
+    patient_ids = list(dict.fromkeys(body.patient_ids))
+    _require_patients(db, patient_ids)
+    for patient_id in patient_ids:
         assert_patient_visible(db, user, patient_id, resource="spd_intervention")
+    created = []
+    for patient_id in patient_ids:
         program_code, enrollment = enrollment_for(db, patient_id, base_program)
         if enrollment is not None and enrollment.status != "active":
             enrollment = None   # 已结案的历史档案不挂（P2-226，与 `_managed_enrollment_of` 同一句）
@@ -1100,11 +1120,7 @@ def push_education(
     # 不存在的患者号先全部查完（P2-726）：全域角色过守卫不查存在（P2-52），混进一个错号，立即推送发到它那一条才撞外键
     # 500——前面几位的短信已经发出、已经逐条提交（P2-641），回执却没有，经办以为没发出去再点一次，前面的人收两遍。
     # 与同子系统批量加分组（P0-50）同一顺序：先查存在再判可见性，不给不存在的号写调阅留痕（写不进去、只落一条错误日志）
-    known = {pid for (pid,) in db.query(Patient.id).filter(Patient.id.in_(patient_ids))}
-    missing = [pid for pid in patient_ids if pid not in known]
-    if missing:
-        raise HTTPException(status_code=404,
-                            detail=f"患者不存在（patient_id={'、'.join(str(pid) for pid in missing[:20])}），一条都没有发")
+    _require_patients(db, patient_ids, "，一条都没有发")
     for patient_id in patient_ids:
         assert_patient_visible(db, user, patient_id, resource="spd_edu")
     created, sent, failed = 0, 0, 0
