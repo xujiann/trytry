@@ -314,6 +314,10 @@ def list_slots(
         # 等值匹配：`2026-9-1` 会让"这天没有号源"，不报错（P1-58）
         slot_date = require_date(slot_date, field="slot_date")
         query = query.filter(AppointmentSlot.slot_date == slot_date)
+    else:
+        # 不带日期只列今天及以后（P2-882，与资源目录 P2-164、居民端 P2-64、寻医同一句）：原先没有日期下界、按日期正序取
+        # 最早的 500 个——开诊一两个月后管理端「号源」面板全是过去的号，今天以后的一个都不列，照表抄号源 ID 去约只得 409
+        query = query.filter(AppointmentSlot.slot_date >= clock.today().isoformat())
     # 补 id 尾键：`(slot_date, slot_time)` 不是全序——号源表的唯一索引是
     # (org_id, employee_id, resource_type, resource_name, slot_date, slot_time)，
     # 同一个「日期+时段」上按设计并排着各机构各资源的号源。居民端同一张表的

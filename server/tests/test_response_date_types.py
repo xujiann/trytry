@@ -143,7 +143,7 @@ def legacy(client, admin):
         "case": InfectiousCase(org_id=org["id"], disease_code="P163", disease_name="回归病种",
                                onset_date="2026-13-01"),
         "slot": AppointmentSlot(org_id=org["id"], resource_type="outpatient",
-                                resource_name="出参回归诊室", slot_date="2026-02-29"),
+                                resource_name="出参回归诊室", slot_date="2099-02-29"),   # 不带日期只列今天及以后（P2-882）
     }
     with SessionLocal() as db:
         db.add_all(rows.values())
@@ -159,7 +159,7 @@ LIST_CASES = [
     ("/api/maternal/children", {}, "birth_date", "20260924"),
     ("/api/vaccination/records", {"patient_id": "patient_id"}, "vaccinated_date", "2026-02-30"),
     ("/api/infectious/cases", {"disease_code": "P163"}, "onset_date", "2026-13-01"),
-    ("/api/appointments/slots", {"org_id": "org_id"}, "slot_date", "2026-02-29"),
+    ("/api/appointments/slots", {"org_id": "org_id"}, "slot_date", "2099-02-29"),
 ]
 
 

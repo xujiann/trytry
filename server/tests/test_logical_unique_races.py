@@ -136,7 +136,7 @@ def test_同时段号源重复创建409(client, admin, ward):
     # 单一复合唯一索引对这类号源等于不设防，故拆了两条部分索引。
     listed = client.get(
         "/api/appointments/slots",
-        params={"org_id": ward["org"]["id"], "date_from": "2026-09-10", "date_to": "2026-09-10"},
+        params={"org_id": ward["org"]["id"], "slot_date": "2026-09-10"},   # 清单只认 slot_date（P2-882 起不带日期只列今天及以后）
         headers=admin,
     ).json()
     assert len([s for s in listed if s["resource_name"] == "CT 室"]) == 1
