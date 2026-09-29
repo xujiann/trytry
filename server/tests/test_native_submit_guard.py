@@ -128,7 +128,8 @@ ROOT_FIXED_RENDERERS = [
     ("pages-clinical.js", "renderConsents",
      ['$("#ct-search").onsubmit', '$("#tx-filter").onsubmit',
       '$("#ct-table").onclick', '$("#cr-table").onclick'],
-     'await drawConsents(); await drawCorrections(); await drawTexts("", false);'),
+     # P2-826：版本库「场景」下拉的选项在取文本之前取（fillTextScenes），仍在全部监听挂好之后
+     'await drawConsents(); await drawCorrections(); await fillTextScenes(); await drawTexts("", false);'),
     ("pages-spd.js", "renderSpdPatients",
      ['$("#spd-screen-form").onsubmit', '$("#spd-autoscreen-form").onsubmit',
       '$("#spd-enroll-form").onsubmit', '$("#spd-enroll-filter").onsubmit',

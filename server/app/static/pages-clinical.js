@@ -401,6 +401,14 @@ async function renderConsents() {
        <td>${statusTag(TEXT_STATUS, t.active ? "on" : "off")}</td>
        <td style="white-space:pre-wrap">${esc(t.content) || "—"}</td></tr>`);
   };
+  // 场景下拉（P2-826）：接口按场景编码等值比，表格显示的是中文名——原先是自由文本框，照表格填「建档」「随访」查回空表，
+  // 只有填 archive 这种编码才查得到，看着像这个场景还没有文本。选项取自版本库里有的场景（含已停用的版本），编码作值、
+  // 中文名（后端给的 scene_name）作显示；没有文本的场景选了也是空表，不列
+  const fillTextScenes = async () => {
+    const scenes = new Map((await api("/api/consents/texts?active_only=false")).map((t) => [t.scene, t.scene_name]));
+    $('#tx-filter select[name="scene"]').innerHTML = '<option value="">全部场景</option>'
+      + [...scenes].map(([code, name]) => `<option value="${esc(code)}">${esc(name)}</option>`).join("");
+  };
   let correctionRows = {};
   const drawCorrections = async () => {
     if (!canReview) {
@@ -425,7 +433,7 @@ async function renderConsents() {
       <div id="cr-table"></div><p id="cr-msg"></p>`)}
     ${panel("同意文本版本库（窗口/居民端展示的告知文本）", `
       <form class="inline" id="tx-filter">
-        <input name="scene" placeholder="场景（留空列全部）">
+        <select name="scene"><option value="">全部场景</option></select>
         <label style="font-size:13px"><input type="checkbox" name="inactive" value="1"> 含已停用版本</label>
         <button>查询</button>
       </form>
@@ -482,7 +490,7 @@ async function renderConsents() {
     catch (err) { setMsg("#cr-msg", err.message, false); }
   };
   // 取数放最后：监听已与 innerHTML 同一同步块挂好，窗口为零（P2-31 根修，样板见 pages-spd.js renderSpdPath）
-  await drawConsents(); await drawCorrections(); await drawTexts("", false);
+  await drawConsents(); await drawCorrections(); await fillTextScenes(); await drawTexts("", false);
 }
 
 /* ---------- 通用小工具：表单序列化 + 动作分派 ---------- */
