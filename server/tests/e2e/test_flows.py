@@ -5373,13 +5373,49 @@ def test_体检只按分项标了异常_清单上列出异常分项而不是空�
     expect(row.locator(".tag.red")).to_have_text("E2E血红蛋白")   # 修前是空的红标签
 
 
+@pytest.fixture(scope="session")
+def consent_page_seed(seed, admin_call):
+    """知情同意页的前置：经办、管理层各一个账号；种子患者名下两条窗口代录的有效同意（经办撤一条，管理层看另一条）。"""
+    for username, role in (("e2e_p2786_op", "operator"), ("e2e_p2786_dir", "director")):
+        _p2429_user(admin_call, seed, username, role)
+    return [admin_call("POST", "/api/consents", {"patient_id": seed["patient"]["id"], "scene": "family_delegate",
+                                                 "evidence": f"E2E签字影像P2786-{i}"}) for i in range(2)]
+
+
+def test_知情同意页经办打得开_查台账能撤回(page, base_url, seed, admin_call, consent_page_seed):
+    """P2-786：更正 / 注销申请的待审清单只给管理层，原先渲染末尾不分角色地取——经办一进页整页只剩「需要以下角色之一：
+    管理层」，台账查询、撤回一样也用不了。修后待审清单处说明由管理层审核，台账照常查，「撤回」照常给经办。"""
+    target = consent_page_seed[0]["id"]
+    _login(page, base_url, "e2e_p2786_op", "passw0rd1")
+    _open_page(page, "consents", "知情同意与行权")
+    expect(page.locator("#cr-table")).to_contain_text("由管理层审核")   # 修前整页只剩一句 403
+    page.fill('#ct-search [name="patient_id"]', str(seed["patient"]["id"]))
+    page.click("#ct-search button")
+    with _answers(page, [""]):
+        page.click(f'button[data-revoke-consent="{target}"]')
+        expect(page.locator("#cr-msg")).to_contain_text("已撤回")
+    rows = admin_call("GET", f"/api/consents?patient_id={seed['patient']['id']}")
+    assert [r["revoked_at"] is not None for r in rows if r["id"] == target] == [True]
+
+
+def test_知情同意页管理层不摆撤回(page, base_url, seed, consent_page_seed):
+    """P2-786：「撤回」只收经办 / 医师 / 公卫，管理层点了必 403，原先照样摆着；待审清单照旧给管理层。"""
+    keep = consent_page_seed[1]["id"]
+    _login(page, base_url, "e2e_p2786_dir", "passw0rd1")
+    _open_page(page, "consents", "知情同意与行权")
+    page.fill('#ct-search [name="patient_id"]', str(seed["patient"]["id"]))
+    page.click("#ct-search button")
+    expect(page.locator(f'button[data-print-consent="{keep}"]')).to_be_visible()
+    expect(page.locator("button[data-revoke-consent]")).to_have_count(0)   # 修前每条有效同意都摆着
+    expect(page.locator("#cr-table")).not_to_contain_text("由管理层审核")
+
+
 #: 管理端的内置角色（admin 什么页都看得见、什么接口都调得动，不在此列）。
 ROLE_SWEEP = ("director", "doctor", "pharmacist", "public_health", "operator")
 
 #: 已登记、还没修的「导航给了、一进页整页报错」：页面 id → 报错的角色。只减不增——修好一页就划掉一页，不划掉也红。
 KNOWN_BROKEN_PAGES = {
     "spdexpert": {"pharmacist", "public_health", "operator"},   # 第二十一批扫描 N4-9：渲染只取医师 / 管理层的专家工作台
-    "consents": {"operator"},   # N4-2：渲染末尾连带取只给管理层的更正 / 注销申请清单
 }
 
 

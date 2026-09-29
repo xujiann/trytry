@@ -371,6 +371,12 @@ const TEXT_STATUS = { on: ["生效", "green"], off: ["已停用", "red"] };
 async function renderConsents() {
   // 个保法落地（阶段十四 E2）：知情同意台账 + 更正/注销申请审核。
   $("#page-desc").textContent = "知情同意登记与查询；居民更正/注销申请的受理与审核（审核限管理层）";
+  // 按接口的角色守卫给（P2-786，P1-175 / P1-220 同形）：待审核的更正 / 注销申请只给管理层（后端 require_roles("director")），
+  // 原先渲染末尾不分角色地取——经办一进页整页只剩「需要以下角色之一：管理层」，台账查询、撤回、文本版本库一样也用不了；
+  // 「撤回」只收经办 / 医师 / 公卫（管理员全给），管理层点了必 403，原先照样摆着
+  const role = currentRole();
+  const canReview = role === "admin" || role === "director";
+  const canRevoke = role === "admin" || ["operator", "doctor", "public_health"].includes(role);
   const drawConsents = async (patientId) => {
     if (!patientId) { $("#ct-table").innerHTML = '<p class="desc">输入患者ID查询其同意记录（查询会落调阅留痕）。</p>'; return; }
     const rows = await api(`/api/consents?patient_id=${encodeURIComponent(patientId)}`);
@@ -384,7 +390,7 @@ async function renderConsents() {
              esc(r.revoked_at.replace("T", " ").slice(0, 19))}</span>`
          : '<span class="tag ok">有效</span>'}</td>
        <td><button class="btn secondary" data-print-consent="${r.id}">打印</button>
-           ${r.revoked_at ? "" : `<button class="btn danger" data-revoke-consent="${r.id}">撤回</button>`}</td></tr>`);
+           ${r.revoked_at || !canRevoke ? "" : `<button class="btn danger" data-revoke-consent="${r.id}">撤回</button>`}</td></tr>`);
   };
   const drawTexts = async (scene, includeInactive) => {
     const qs = [scene ? `scene=${encodeURIComponent(scene)}` : "",
@@ -397,6 +403,10 @@ async function renderConsents() {
   };
   let correctionRows = {};
   const drawCorrections = async () => {
+    if (!canReview) {
+      $("#cr-table").innerHTML = '<p class="desc">待审核的更正 / 注销申请由管理层审核，清单只给管理层看。</p>';
+      return;
+    }
     const rows = await api("/api/consents/corrections?status=pending");
     correctionRows = Object.fromEntries(rows.map((r) => [String(r.id), r]));
     $("#cr-table").innerHTML = table(
