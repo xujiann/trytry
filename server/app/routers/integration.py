@@ -19,6 +19,7 @@ M11 交换监控（#26）：
 """
 import base64
 import json
+import re
 from pathlib import Path
 from typing import Any, cast
 
@@ -248,10 +249,10 @@ def parse_hl7v2_patient(message: str) -> tuple[dict, str]:
         return fields[i] if i < len(fields) else ""
 
     id_card = _pid3_id_card(field(3))
-    name = field(5).replace("^", "").strip()
+    name = _pid5_name(field(5))
     birth_raw = field(7).strip()
     gender = _GENDER_HL7.get(field(8).strip(), "未知")
-    phone = field(13).split("^")[0].strip()
+    phone = _pid13_phone(field(13))
 
     if not id_card or len(id_card) < 15:
         raise HTTPException(status_code=422, detail="PID-3 身份证号缺失或格式不正确")
@@ -272,6 +273,30 @@ def parse_hl7v2_patient(message: str) -> tuple[dict, str]:
         },
         control_id,
     )
+
+
+#: HL7 v2 的转义序列（按缺省编码字符 `^~\\&`）：分隔符写进数据要转义，读回来要还原（P2-724）
+_HL7_ESCAPES = {"F": "|", "S": "^", "T": "&", "R": "~", "E": "\\", ".br": "\n", "H": "", "N": ""}
+_HL7_ESCAPE_RE = re.compile(r"\\(F|S|T|R|E|\.br|H|N)\\")
+
+
+def _hl7_unescape(text: str) -> str:
+    """还原 HL7 v2 转义（P2-724）：`\\S\\` → `^`、`\\T\\` → `&`、`\\F\\` → `|`、`\\R\\` → `~`、`\\E\\` → `\\`、`\\.br\\` → 换行，
+    高亮开关 `\\H\\ \\N\\` 去掉；认不得的原样留着。原先原样印进报告：「10\\S\\9/L」「男 130-175 \\T\\ 女 115-150」。"""
+    return _HL7_ESCAPE_RE.sub(lambda m: _HL7_ESCAPES[m.group(1)], text)
+
+
+def _pid5_name(raw: str) -> str:
+    """PID-5（XPN，可重复）取第一个重复的姓、名、其余名三个组件（P2-724）。原先把全部 `^` 删掉拼起来：`张^三^^^^^L`（第 7
+    组件是名称类型码）成了「张三L」，`张三~ZHANG^SAN` 成了「张三~ZHANGSAN」——A08 照此覆盖主索引姓名，居民按姓名实名绑定就找不到档案。"""
+    parts = raw.split("~")[0].split("^")
+    return _hl7_unescape("".join(part.strip() for part in parts[:3])).strip()
+
+
+def _pid13_phone(raw: str) -> str:
+    """PID-13（XTN，可重复）优先取像手机号的那一项，没有取第一项（P2-724）。原先整串「座机~手机」落库，按手机号自动绑定对不上。"""
+    numbers = [value for value in (_hl7_unescape(rep.split("^")[0]).strip() for rep in raw.split("~")) if value]
+    return next((n for n in numbers if re.fullmatch(r"1[0-9]{10}", n)), numbers[0] if numbers else "")
 
 
 #: 身份证那一项的标识类型码：HL7 表 0203 的 NI（国家统一个人标识）/ NNCHN（中国国民身份号），与国内常见写法 ID
@@ -872,19 +897,19 @@ def _parse_pv1_location(message: str) -> tuple[str, str]:
     if pv1 is None:
         raise HTTPException(status_code=422, detail="A01 入院消息缺少 PV1 就诊段")
     parts = _hl7_field(pv1, 3).split("^")
-    ward_name = parts[0].strip()
-    bed_no = parts[2].strip() if len(parts) > 2 else ""
+    ward_name = _hl7_unescape(parts[0].strip())
+    bed_no = _hl7_unescape(parts[2].strip()) if len(parts) > 2 else ""
     if not ward_name or not bed_no:
         raise HTTPException(status_code=422, detail="PV1-3 须为 病区^房间^床号")
     return ward_name, bed_no
 
 
 def _parse_pv1_doctor(message: str) -> str:
-    """PV1-7 主治医师 `工号^姓^名`：取姓名组件（无姓名组件时回落首组件）。"""
+    """PV1-7 主治医师 `工号^姓^名`：取姓名组件（无姓名组件时回落首组件）。可重复（XCN），取第一个重复（P2-724）。"""
     pv1 = next((s for s in _hl7_segments(message) if s.startswith("PV1|")), None)
-    parts = _hl7_field(pv1, 7).split("^") if pv1 else [""]
+    parts = _hl7_field(pv1, 7).split("~")[0].split("^") if pv1 else [""]
     name = "".join(p.strip() for p in parts[1:3])
-    return (name or parts[0].strip())[:64]
+    return _hl7_unescape(name or parts[0].strip())[:64]
 
 
 def _parse_dg1(message: str) -> tuple[str, str]:
@@ -896,9 +921,9 @@ def _parse_dg1(message: str) -> tuple[str, str]:
     if dg1 is None:
         return "", ""
     parts = _hl7_field(dg1, 3).split("^")
-    code = parts[0].strip()
-    name = parts[1].strip() if len(parts) > 1 else ""
-    return code[:64], (name or _hl7_field(dg1, 4).strip() or code)[:256]
+    code = _hl7_unescape(parts[0].strip())
+    name = _hl7_unescape(parts[1].strip()) if len(parts) > 1 else ""
+    return code[:64], (name or _hl7_unescape(_hl7_field(dg1, 4).strip()) or code)[:256]
 
 
 class OruReportOut(BaseModel):
@@ -1008,10 +1033,11 @@ def _oru_report(obr: str, obx_segments: list[str], request: ExamRequest,
     unrecognized: list[str] = []   # 没有一个认得的标志、又带着认不得的标志的结果项——判不了，不当正常
     for seg in obx_segments:
         code_parts = _hl7_field(seg, 3).split("^")
-        label = (code_parts[1].strip() if len(code_parts) > 1 else "") or code_parts[0].strip()
-        value = _hl7_field(seg, 5).strip()
-        unit = _hl7_field(seg, 6).split("^")[0].strip()
-        ref_range = _hl7_field(seg, 7).strip()
+        # 先按分隔符拆、再还原转义（P2-724）
+        label = _hl7_unescape((code_parts[1].strip() if len(code_parts) > 1 else "") or code_parts[0].strip())
+        value = _hl7_unescape(_hl7_field(seg, 5).strip())
+        unit = _hl7_unescape(_hl7_field(seg, 6).split("^")[0].strip())
+        ref_range = _hl7_unescape(_hl7_field(seg, 7).strip())
         flag = _hl7_field(seg, 8).strip().upper()
         flags = {f.strip() for f in flag.split("~")} - {""}
         if flags & _ABNORMAL_FLAGS:
@@ -1029,7 +1055,7 @@ def _oru_report(obr: str, obx_segments: list[str], request: ExamRequest,
             line += f" [{flag}]"
         lines.append(line)
     item_parts = _hl7_field(obr, 4).split("^")
-    item_name = (item_parts[1].strip() if len(item_parts) > 1 else "") or request.item_name
+    item_name = _hl7_unescape((item_parts[1].strip() if len(item_parts) > 1 else "")) or request.item_name
     conclusion = f"{item_name}：共 {len(lines)} 项，异常 {abnormal} 项"
     if critical:
         conclusion += "，含危急值"
