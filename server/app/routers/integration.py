@@ -35,7 +35,7 @@ from .. import clock, events
 from ..clock import now_aware, now_naive, to_aware
 from ..concurrency import upsert_unique
 from ..config import settings
-from ..visibility import assert_obj_org_writable, log_patient_access
+from ..visibility import GLOBAL_ROLES, assert_obj_org_writable, log_patient_access
 from ..database import SessionLocal, get_db
 from ..deps import get_current_user, require_roles
 from ..models import (
@@ -800,7 +800,13 @@ def _do_hl7v2_adt(body: Hl7Message, db: Session, user: User, event: str):
         ward_name, bed_no = _parse_pv1_location(body.message)
         doctor_name = _parse_pv1_doctor(body.message)
         diagnosis_code, diagnosis_name = _parse_dg1(body.message)
-        wards = db.query(Ward).filter(Ward.name == ward_name).all()
+        # 按名找病区只在调用方能以其名义写入的机构里找（P2-727）：原先全县找，两家医院都有「内科病区」（县域里再常见不过）
+        # 时本院对接账号的每一条 A01 都 422「在多家机构存在」，而这位账号本来只能收进本院的病区（下面 create_admission
+        # 按病区机构判写权）。与 `assert_org_writable` 同一判据：全域角色照旧全县找、同名仍 422
+        ward_query = db.query(Ward).filter(Ward.name == ward_name)
+        if user.role not in GLOBAL_ROLES:
+            ward_query = ward_query.filter(Ward.org_id == user.org_id)
+        wards = ward_query.order_by(Ward.id).all()
         if not wards:
             raise HTTPException(status_code=404, detail=f"病区 {ward_name} 不存在")
         if len(wards) > 1:
