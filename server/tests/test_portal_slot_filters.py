@@ -55,6 +55,17 @@ def test_有可约号源的机构_口径与清单一致(client, world):
     assert "X-Total-Count" in got.headers
 
 
+def test_机构下拉印的是剩余名额之和_不是时段条数(client, world):
+    """P2-850（第二十三批「部分之和 vs 整体」扫描 Y4-7）：下拉原先印 `available`（还有余号的时段条数），同一页每条的
+    「余号」是剩余名额——各机构这里都是 1 个时段、5 个号，修前下拉印「1 个号」。"""
+    got = client.get("/api/portal/me/slot-orgs", headers=world["headers"]).json()
+    mine = {r["org_id"]: (r["available"], r["remaining"]) for r in got if r["org_id"] in world["orgs"]}
+    assert mine == {world["orgs"][0]: (1, 5), world["orgs"][1]: (1, 5)}   # 约满的那个时段不算余量
+    start = SRC.index("async function renderAppointments(box)")
+    body = SRC[start:SRC.index("\nasync function renderContracts", start)]
+    assert "（余 ${o.remaining} 个号）" in body and "${o.available} 个号" not in body
+
+
 def test_清单按机构与日期筛(client, world):
     tomorrow = (world["today"] + timedelta(days=1)).isoformat()
     rows = client.get("/api/portal/me/slots", headers=world["headers"],

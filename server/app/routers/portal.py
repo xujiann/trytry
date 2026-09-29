@@ -1286,7 +1286,10 @@ def portal_slots(
 class PortalSlotOrgOut(BaseModel):
     org_id: int
     org_name: str
-    available: int   # 今天及以后还有余号的号源数
+    available: int   # 今天及以后还有余号的号源数（时段条数）
+    # 这些号源的剩余名额之和（P2-850）：下拉原先印 `available`「（3 个号）」，同一页每条的「余号」却是剩余名额——
+    # 3 个时段各 20 个号，居民看下拉以为只剩 3 个号。与医务端按机构的「余量合计」同一算法
+    remaining: int = 0
 
 
 @router.get("/me/slot-orgs", response_model=list[PortalSlotOrgOut])
@@ -1304,7 +1307,8 @@ def portal_slot_orgs(
     """
     # 从机构这头分组：按名称排（下拉按名称找），机构号兜底成全序——翻页（paginate）要求末位键唯一
     query = (
-        db.query(Organization.id, Organization.name, func.count(AppointmentSlot.id))
+        db.query(Organization.id, Organization.name, func.count(AppointmentSlot.id),
+                 func.sum(AppointmentSlot.capacity - AppointmentSlot.booked))
         .join(AppointmentSlot, AppointmentSlot.org_id == Organization.id)
         .filter(AppointmentSlot.booked < AppointmentSlot.capacity,
                 AppointmentSlot.slot_date >= clock.today().isoformat())
@@ -1312,7 +1316,8 @@ def portal_slot_orgs(
         .order_by(Organization.name, Organization.id)
     )
     rows = paginate(query, response, offset, limit)
-    return [{"org_id": org_id, "org_name": name, "available": count} for org_id, name, count in rows]
+    return [{"org_id": org_id, "org_name": name, "available": count, "remaining": int(remaining or 0)}
+            for org_id, name, count, remaining in rows]
 
 
 class PortalBookIn(BaseModel):

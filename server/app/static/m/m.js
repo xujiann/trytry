@@ -732,7 +732,7 @@ async function renderAppointments(box) {
     <div class="sec-title">可约号源</div>
     <div class="m-card">
       <select id="slot-org"><option value="">全部机构</option>${orgs.map((o) =>
-        `<option value="${o.org_id}">${esc(o.org_name)}（${o.available} 个号）</option>`).join("")}</select>
+        `<option value="${o.org_id}">${esc(o.org_name)}（余 ${o.remaining} 个号）</option>`).join("")}</select>
       <input type="date" id="slot-date" aria-label="就诊日期">
     </div>
     <div id="slot-list"><p class="empty">加载中…</p></div>`;
