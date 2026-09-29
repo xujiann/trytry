@@ -31,14 +31,17 @@ async function renderClinicalDocs() {
   // 显示第一条，四个面板和三个写入表单却仍然指向那条已出院的记录。
   const current = pickedId("medplat_doc_adm", inHospital)
     || (inHospital[0] && inHospital[0].id) || 0;
-  const [notes, nursing, vitals, completeness] = current
+  // 在用医嘱给护理记录的「关联医嘱」下拉（P2-863）：执行某条医嘱产生的护理记录挂到那条医嘱上，医嘱执行视图的
+  // 「关联护理记录 N 条」才数得到——原先表单没有这一项，按界面用法恒为 0
+  const [notes, nursing, vitals, completeness, activeOrders] = current
     ? await Promise.all([
         api(`/api/inpatient/admissions/${current}/progress-notes`),
         api(`/api/inpatient/admissions/${current}/nursing-records`),
         api(`/api/inpatient/admissions/${current}/vitals`),
         api(`/api/inpatient/admissions/${current}/document-completeness`),
+        api(`/api/inpatient/orders?admission_id=${current}&status=active`),
       ])
-    : [[], [], [], null];
+    : [[], [], [], null, []];
   // 交接班清单（P2-476）：原先只记得进、没有一个页面看得见——接班的人无从读起。交接班按病区、不挂某次住院，
   // 所以不跟着上面的住院记录走，没有在院患者时照样能看、能交
   const handoverQuery = new URLSearchParams(Object.entries(HANDOVER_FILTER).filter(([, v]) => v !== ""));
@@ -82,6 +85,9 @@ async function renderClinicalDocs() {
       <form class="inline" id="nursing-form">
         <select name="nursing_level">${Object.entries(NURSING_LEVELS).map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}</select>
         <input name="nurse_name" placeholder="护士">
+        <select name="inpatient_order_id"><option value="">关联医嘱（执行某条医嘱时选，可空）</option>${
+          activeOrders.map((o) => `<option value="${o.id}">#${o.id} ${o.order_type === "long" ? "长期" : "临时"} ${
+            esc(o.content.slice(0, 30))}</option>`).join("")}</select>
         <input name="content" placeholder="护理内容" required style="min-width:280px"><button>记录</button></form>
       ${table(["时间", "级别", "护士", "内容"], nursing, (r) =>
         `<tr><td>${esc(r.recorded_at)}</td><td>${esc(NURSING_LEVELS[r.nursing_level] || r.nursing_level)}</td>
@@ -143,7 +149,8 @@ async function renderClinicalDocs() {
   $("#note-form").onsubmit = (e) => { e.preventDefault();
     postAction(`/api/inpatient/admissions/${current}/progress-notes`, formJson(e.target), "#doc-msg"); };
   $("#nursing-form").onsubmit = (e) => { e.preventDefault();
-    postAction(`/api/inpatient/admissions/${current}/nursing-records`, formJson(e.target), "#doc-msg"); };
+    postAction(`/api/inpatient/admissions/${current}/nursing-records`, formJson(e.target, ["inpatient_order_id"]),
+      "#doc-msg"); };
   $("#vital-form").onsubmit = (e) => { e.preventDefault();
     postAction(`/api/inpatient/admissions/${current}/vitals`,
       // 出入量、体重（P2-473）：接口与体温单模型一直有这三项，页面原先录不进、也看不见
