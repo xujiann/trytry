@@ -3950,8 +3950,9 @@ async function renderSpdManager() {
     ${panel("复诊计划看板（个案管理师端 #9 / 智能随访端 #7）", `
       <form class="inline" id="spd-revisit-form">
         <input name="patient_id" type="number" placeholder="患者ID" required>
-        <select name="program_code">${programOptions}</select>
+        <select name="program_code"><option value="">病种：只在管一个病种的按它</option>${spdProgramOptions(catalog)}</select>
         <input name="plan_date" type="date" required>
+        <input name="doctor_user_id" type="number" placeholder="复诊医生ID（留空取主管医生）" style="width:190px">
         <input name="dept" placeholder="科室" style="width:110px">
         <input name="items" placeholder="复查项目">
         <button>新增计划</button>
@@ -3982,7 +3983,7 @@ async function renderSpdManager() {
 
   $("#spd-revisit-form").onsubmit = (e) => {
     e.preventDefault();
-    return postAction("/api/spd/revisits", formJson(e.target, ["patient_id"]), "#spd-revisit-msg");
+    return postAction("/api/spd/revisits", formJson(e.target, ["patient_id", "doctor_user_id"]), "#spd-revisit-msg");
   };
   // 「只看逾期」与状态不相与（P2-828，与随访看板同一处理）：勾上就把状态置灰、不送——后端 overdue=true 就是按「逾期」筛
   const revisitFilter = $("#spd-revisit-filter");

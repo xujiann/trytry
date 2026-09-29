@@ -1344,7 +1344,18 @@ def create_revisit(
     program_problem = unknown_program(db, body.program_code)  # 病种编码先查在不在（P1-120）
     if program_problem:
         raise HTTPException(status_code=404, detail=program_problem)
-    record = SpdRevisit(**body.model_dump(), status="planned")
+    # 没写病种的，患者只在管一个病种就挂它（P1-139 同一口径）；没写复诊医生的，取这份在管档案的主管医生（与高危自动复诊
+    # 同一句，P1-224）——原先页面的病种下拉缺省「全部病种」（空）、没有医生框，建出来的复诊不带病种也不带医生：登记死亡 /
+    # 迁出时档案收尾（`close_open_work` 只收同病种的）撤不掉它，照样被扫成逾期、居民端照样看得到；医生的「今日复诊」
+    # 按本人数，数不到它。在管几个病种又没写的照旧留空（不替人猜）；档案在别家机构的不替人挑别家的医生（系统替人挑的
+    # 跨机构责任人待裁定，P1-211），照旧留空
+    program_code, enrollment = enrollment_for(db, body.patient_id, body.program_code)
+    doctor_user_id = body.doctor_user_id
+    if (doctor_user_id is None and enrollment is not None and enrollment.status == "active"
+            and user.org_id in (None, enrollment.org_id)):
+        doctor_user_id = usable_or_none(db, enrollment.doctor_user_id, roles=SERVICE_ROLES)
+    record = SpdRevisit(**{**body.model_dump(), "program_code": program_code, "doctor_user_id": doctor_user_id},
+                        status="planned")
     db.add(record)
     db.commit()
     return _revisit_out(record)
