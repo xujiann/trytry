@@ -507,21 +507,29 @@ def create_case_summary(
     # DRG 外科组按主手术关键词入组，靠医生手敲这一栏最容易漏，带出来准确得多。
     if not payload.get("operation"):
         payload["operation"] = _operations_of_admission(db, admission_id)
-    summary = insert_or_conflict(db, CaseSummary(
-            admission_id=admission_id,
-            **payload,
-            created_by_name=user.full_name or user.username,
-        ), "病案首页已填写")
-    out = _case_summary_out(summary)
-    # M12：结案时按主诊断关键词自动 DRG 入组（模块可用时）
+    summary = CaseSummary(
+        admission_id=admission_id,
+        **payload,
+        created_by_name=user.full_name or user.username,
+    )
+    # M12：结案时按主诊断关键词自动 DRG 入组（模块可用时）。先入组、再插首页，同一次提交（P2-822）：原先首页先提交、
+    # 入组回填之后再提交一次——入组那一步出错（库抖动、连接断）→ 500，首页已落库却永不入组（drg_code 空、权重 0，
+    # 首页只能新建，P2-182），重新提交 409「病案首页已填写」，DRG 统计按例数计入却不入组
+    drg: dict | None = None
+    grouped = False
     try:
         from .drgs import assign_drg_group
-
-        out["drg"] = assign_drg_group(db, summary)
-        out["drg_code"] = summary.drg_code
-        out["drg_weight"] = summary.drg_weight
     except ImportError:  # pragma: no cover - M12 上线前
         pass
+    else:
+        drg = assign_drg_group(db, summary)
+        grouped = True
+    summary = insert_or_conflict(db, summary, "病案首页已填写")
+    out = _case_summary_out(summary)
+    if grouped:
+        out["drg"] = drg
+        out["drg_code"] = summary.drg_code
+        out["drg_weight"] = summary.drg_weight
     return out
 
 

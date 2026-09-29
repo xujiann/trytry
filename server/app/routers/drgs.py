@@ -67,7 +67,8 @@ def _match_group(group: DrgGroup, diagnosis: str, operation: str) -> tuple[int, 
 def assign_drg_group(db: Session, summary: CaseSummary) -> dict | None:
     """出院病例入组：多关键词 + 主手术标志匹配，未命中落入 QY 兜底组。
 
-    回填 summary.drg_code/drg_weight 并提交，返回入组结果（含 fallback 标志）。
+    回填 summary.drg_code/drg_weight，返回入组结果（含 fallback 标志）。**不提交**（P2-822）：由调用方与病案首页同一次
+    提交——原先这里再提交一次，首页先落了库、入组这一步出错就留下一份永不入组的首页。
     """
     diagnosis = summary.discharge_diagnosis or ""
     operation = summary.operation or ""
@@ -92,7 +93,6 @@ def assign_drg_group(db: Session, summary: CaseSummary) -> dict | None:
             return None
     summary.drg_code = chosen.code
     summary.drg_weight = chosen.base_weight
-    db.commit()
     return {
         "drg_code": chosen.code,
         "drg_name": chosen.name,
