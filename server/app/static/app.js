@@ -62,7 +62,9 @@ const PAGES = [
   { group: "全域慢专病" },
   { id: "spdadmin", title: "平台管理端·运行中枢", render: renderSpdAdmin, roles: ["director"] },
   { id: "spdhc", title: "卫健管理端·决策监管", render: renderSpdHealthCommission, roles: ["director"] },
-  { id: "spdexpert", title: "专病专家端·临床指导", render: renderSpdExpert },
+  // 整页取的是只给医师 / 管理层的专家工作台，页上的中心新建 / 编辑也只收这两个角色（P2-787）：原先不限角色，
+  // 药师、公卫、经办一进页整页只剩「需要以下角色之一：医师、管理层」
+  { id: "spdexpert", title: "专病专家端·临床指导", render: renderSpdExpert, roles: ["doctor", "director"] },
   { id: "spdcenter", title: "全程管理中心端·统筹调度", render: renderSpdCenter },
   { id: "spdteam", title: "服务团队端·基层执行", render: renderSpdTeam },
   { id: "spdmember", title: "服务团队成员端·日常服务", render: renderSpdMember },

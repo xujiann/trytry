@@ -5414,9 +5414,8 @@ def test_知情同意页管理层不摆撤回(page, base_url, seed, consent_page
 ROLE_SWEEP = ("director", "doctor", "pharmacist", "public_health", "operator")
 
 #: 已登记、还没修的「导航给了、一进页整页报错」：页面 id → 报错的角色。只减不增——修好一页就划掉一页，不划掉也红。
-KNOWN_BROKEN_PAGES = {
-    "spdexpert": {"pharmacist", "public_health", "operator"},   # 第二十一批扫描 N4-9：渲染只取医师 / 管理层的专家工作台
-}
+#: 第二十一批扫描抓到的三页已清零（P1-220 手术麻醉、P2-786 知情同意与行权、P2-787 专病专家端）。
+KNOWN_BROKEN_PAGES: dict[str, set[str]] = {}
 
 
 @pytest.mark.parametrize("role", ROLE_SWEEP)
