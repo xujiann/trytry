@@ -451,6 +451,11 @@ def use_consumable(
         if surgery.patient_id != body.patient_id:
             # 耗材记到别人的手术上，追溯链就断了，这里必须拦
             raise HTTPException(status_code=422, detail="该手术不属于此患者")
+        # 已取消（审批不通过）的手术同理（P2-763）：界面上「关联手术申请ID」是手填数字，填成被驳回的旧申请号原先照收——
+        # 追溯链记成「植入于一台没做的手术」，真正做的那台手术下查不到这枚支架，登错了也改不回（P2-752）。
+        # 是否还要求已审批 / 已排班另是口径问题（急诊先做后批），不在此列
+        if surgery.status == "cancelled":
+            raise HTTPException(status_code=409, detail="该手术已取消，不能登记耗材使用")
     # 状态闸门：判定与翻转同一条 SQL（P2-113，同 `_mark_received`）。原先判 in_stock 在内存里：同一条码并发登记给两位
     # 患者，两路都判定在库、都 200，库里只留后写的那位——一枚耗材只植入了一个人，追溯链却可能记在另一个人身上，
     # 按批号召回时找错人
