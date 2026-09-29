@@ -8,7 +8,7 @@
 角色：申请与术中记录限医师；审批限管理层（职责分离，申请人不能自己批）；
 排班限经办与管理层（手术室排班是护士长/手术室的工作）。
 """
-from datetime import timedelta
+from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
@@ -495,6 +495,20 @@ class SurgeryRecordIn(BaseModel):
     postop_diagnosis: str = Field(default="", max_length=256)
 
 
+def _operation_day(db: Session, request_id: int, start_at: str) -> date:
+    """术后随访从手术那天起算（P2-896）：取手术开始时刻的日期，没填取排班日，再没有才取今天。
+
+    原先按术中记录的录入日（今天）起算——9-20 夜里做的手术 9-24 补录（开始时刻写的是 9-20），随访到期 10-08，应为
+    10-04。与出院随访按实际出院日起算（P2-545）、生命周期补登按发生日期（P2-864）同一句。开始时刻已按
+    `check_datetime` 校验过（`YYYY-MM-DD` 开头）；排班日可能是 P1-61 之前的写法，按日历读（`legacy_date`）。
+    """
+    if start_at:
+        return date.fromisoformat(start_at[:10])
+    scheduled = db.query(SurgerySchedule.scheduled_date).filter(SurgerySchedule.request_id == request_id).first()
+    day = legacy_date(scheduled[0]) if scheduled else None
+    return date.fromisoformat(day) if day else clock.today()
+
+
 @router.post(
     "/requests/{request_id}/record", response_model=SurgeryRecordCreatedOut,
     status_code=201, dependencies=[Depends(require_roles("doctor"))]
@@ -533,7 +547,8 @@ def create_record(
                 category="surgery",
                 source_id=request.id,
                 title=f"术后随访：{body.actual_surgery_name}"[:FOLLOWUP_TITLE_MAX],   # 超列宽截断（P1-164）
-                due_date=(clock.today() + timedelta(days=SURGERY_FOLLOWUP_DAYS)).isoformat(),
+                due_date=(_operation_day(db, request_id, body.start_at)
+                          + timedelta(days=SURGERY_FOLLOWUP_DAYS)).isoformat(),
             )
         )
         notify_patient(
