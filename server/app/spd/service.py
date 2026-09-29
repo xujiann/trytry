@@ -726,10 +726,31 @@ def spawn_followup_abnormal_task(db: Session, record: SpdFollowupRecord, level: 
     )
     if level == "high" and task.assignee_id is not None:
         notify_user(
-            db, task.assignee_id, category="spd_task", title="随访重度异常待处置",
+            db, task.assignee_id, category="spd_task", title=SEVERE_ABNORMAL_NOTICE,
             body=f"{title}（患者 {record.patient_id}，次日到期）", link_type="spd_task", link_id=task.id,
         )
     return task
+
+
+#: 随访重度异常处置任务的站内消息标题：派生时发给责任人（P1-184），换了责任人发给接手的人（P2-885）
+SEVERE_ABNORMAL_NOTICE = "随访重度异常待处置"
+
+
+def notify_severe_abnormal_handover(db: Session, task: SpdTask, assignee_id: int, previous_id: int | None) -> None:
+    """随访重度异常的处置任务换了责任人（转派、无责任人的事后分派）时，给接手的人发派生时那一条消息（P2-885）。**不 commit**。
+
+    派生那一刻只发给当时的责任人：转派之后新责任人一条消息都没有，原责任人那条「随访重度异常待处置」还挂着、点去接收
+    得 409——手册教的「停用账号名下的任务逐条转派」、P1-209 无责任人任务的事后分派，接手的人都收不到推送。单条与批量
+    分配共用这一处。认法：只有随访异常派生的任务 `source` 是 followup，重度的派成特急（优先级只在建任务时定，升级只抬到
+    紧急）。其余任务建的时候就不发消息，转派也不发；待审核的不发（接手的人这时办不了，由审核人审）。
+    """
+    if task.source != "followup" or task.priority < 3 or assignee_id == previous_id or task.status == "submitted":
+        return
+    due = f"，{task.due_date} 到期" if task.due_date else ""
+    notify_user(
+        db, assignee_id, category="spd_task", title=SEVERE_ABNORMAL_NOTICE,
+        body=f"{task.title}（患者 {task.patient_id}{due}，已转给您处置）", link_type="spd_task", link_id=task.id,
+    )
 
 
 def plan_offsets(rule: SpdFollowupRule) -> list[int]:

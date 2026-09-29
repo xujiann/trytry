@@ -50,6 +50,7 @@ from ..service import (
     move_task,
     node_due_days,
     node_enter_allowed,
+    notify_severe_abnormal_handover,
     path_overrides_problem,
     spawn_task,
     sweep_overdue_on_read,
@@ -987,6 +988,7 @@ def assign_task(
         raise HTTPException(status_code=422, detail=f"责任人是{role}，派过去办不了这条任务")
     if assignee_outside_org(db, body.assignee_id, task.org_id):
         raise HTTPException(status_code=422, detail="责任人不在任务所属机构，派过去打不开这条任务")
+    previous_id = task.assignee_id
     if task.assignee_id is not None and task.assignee_id != body.assignee_id:
         task.transferred_from = task.assignee_id
     task.assignee_id = body.assignee_id
@@ -997,6 +999,7 @@ def assign_task(
     if not move_task(db, task.id, case((SpdTask.status == "pending", "claimed"), else_=SpdTask.status)):
         db.rollback()
         raise HTTPException(status_code=409, detail="已结束的任务不可再分配")
+    notify_severe_abnormal_handover(db, task, body.assignee_id, previous_id)   # 接手的人收得到（P2-885）
     db.commit()
     return _task_out(task)
 
@@ -1363,11 +1366,13 @@ def batch_tasks(
             # 往对象上赋值——载入整批之后别人刚办结的任务照样被改了责任人（计分记在原责任人名下，任务却显示归新人），
             # 待接收的也一直是待接收：同一个文件里单条分配与批量分配是两种结果
             values: dict[str, Any] = {"assignee_id": body.assignee_id}
-            if task.assignee_id is not None and task.assignee_id != body.assignee_id:
-                values["transferred_from"] = task.assignee_id
+            previous_id = task.assignee_id
+            if previous_id is not None and previous_id != body.assignee_id:
+                values["transferred_from"] = previous_id
             if not move_task(db, task.id, case((SpdTask.status == "pending", "claimed"), else_=SpdTask.status), **values):
                 skipped.append({"id": task.id, "reason": "任务已结束"})
                 continue
+            notify_severe_abnormal_handover(db, task, body.assignee_id, previous_id)   # 与单条同一句（P2-885）
         done += 1
     # 不存在的编号也列进回执（P2-733）：原先既不处理也不提，批量取消 [真, 99991, 99992] 回「处理 1、跳过 0」
     found = {task.id for task in tasks}
