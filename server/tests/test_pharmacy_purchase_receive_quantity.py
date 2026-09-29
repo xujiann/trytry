@@ -79,7 +79,7 @@ def test_不带请求体_照旧按申请量(client, admin, world):
 
 
 def test_页面验收时填实收数():
-    assert 'data-porec="${o.id}" data-qty="${o.quantity}"' in PAGE
+    assert 'data-porec="${o.id}" data-qty="${esc(o.quantity)}"' in PAGE
     start = PAGE.index("if (d.porec) {")
     body = PAGE[start:start + 1000]
     assert 'spdModal("到货验收"' in body and "received_quantity: qty" in body

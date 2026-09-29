@@ -281,7 +281,7 @@ async function renderProcure() {
           ? `<button class="btn secondary" data-poap="${o.id}">批准</button>
              <button class="btn danger" data-poap="${o.id}" data-reject="1">驳回</button>`
           : o.status === "approved" && ["operator", "pharmacist", "admin"].includes(role)
-          ? `<button class="btn secondary" data-porec="${o.id}" data-qty="${o.quantity}">验收入库</button>` : "—";
+          ? `<button class="btn secondary" data-porec="${o.id}" data-qty="${esc(o.quantity)}">验收入库</button>` : "—";
         return `<tr><td>${o.id}</td><td>${o.org_id}</td><td>${esc(supNames[o.supplier_id] || o.supplier_id)}</td>
           <td>${o.item_type === "drug" ? "药品" : "物资"}</td><td>${esc(o.item_name)}（${esc(o.item_code)}）</td>
           <td>${o.quantity}${o.received_quantity != null && o.received_quantity !== o.quantity
