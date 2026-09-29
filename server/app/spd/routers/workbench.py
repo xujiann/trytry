@@ -1399,15 +1399,19 @@ def doctor_mobile_workbench(
             "township": village_profile.township if village_profile else "",
         },
         "todo": my_tasks,
+        # 今日随访 / 复诊只数还没做完的（P2-734）：与同一块的今日任务、上面的到期计数同一口径——原先不看状态，
+        # 死亡收尾或手工移除的照数，同一屏上待办 0、今日任务 0，今日随访、复诊仍各是 1
         "calendar": {
             "today": business_day.isoformat(),
             "followups": db.query(SpdFollowupRecord).filter(
                 SpdFollowupRecord.executor_id == user.id,
                 SpdFollowupRecord.planned_at == business_day.isoformat(),
+                SpdFollowupRecord.status.in_(FOLLOWUP_OPEN_STATUSES),
             ).count(),
             "revisits": db.query(SpdRevisit).filter(
                 SpdRevisit.doctor_user_id == user.id,
                 SpdRevisit.plan_date == business_day.isoformat(),
+                SpdRevisit.status.in_(REVISIT_OPEN_STATUSES),
             ).count(),
             "tasks": db.query(SpdTask).filter(
                 SpdTask.assignee_id == user.id,
