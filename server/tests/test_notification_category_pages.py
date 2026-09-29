@@ -53,3 +53,19 @@ def test_危急值去危急值操作台():
     source = (STATIC / "pages-mgmt.js").read_text(encoding="utf-8")
     assert _js_map(source, "NOTIFY_CATEGORY_PAGE")["critical_value"] == "critical"   # 修前按关联对象落到 exams
     assert "NOTIFY_CATEGORY_PAGE[n.category] || NOTIFY_LINK_PAGE[n.link_type]" in source
+
+
+def test_用户手册写的职工消息与代码一致():
+    """P2-777（第二十批「界面文案 vs 行为」扫描 M2-6）：手册原先写职工站内消息「自动投递四类：危急值、检查报告出具、
+    手术安排、出院随访」，后三类其实只发居民（`notify_patient`），医护一条也收不到。这里钉住：手册那一段点到的职工分类
+    就是代码发给职工的那几类（按消息页的中文名找），居民类写明是发给居民的。"""
+    manual = (ROOT.parent / "docs" / "用户手册.md").read_text(encoding="utf-8")
+    item = manual[manual.index("**站内消息**（总览 → 站内消息）"):]
+    item = item[:item.index("\n7. ")]
+    names = _js_map((STATIC / "pages-mgmt.js").read_text(encoding="utf-8"), "NOTIFY_CATEGORIES")
+    missing = sorted(c for c in staff_categories() if names[c] not in item)
+    assert not missing, f"手册没写到这些发给职工的消息：{missing}"
+    staff_part, _, resident_part = item.partition("发给居民")
+    assert resident_part, item   # 修前没说居民类发给谁
+    for resident_only in ("检查报告出具", "手术安排", "出院随访"):
+        assert resident_only not in staff_part.split("投递给职工的")[-1].split("；")[0], resident_only   # 修前列成职工四类
