@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from ... import clock
 from ...clock import now_naive
-from ...concurrency import insert_if_absent, insert_or_conflict, serialized_on
+from ...concurrency import insert_if_absent, insert_or_conflict, move_row, serialized_on
 from ...database import get_db
 from ...patchtypes import UNSET
 from ...datetypes import DateStr, OptionalDateStr
@@ -1440,11 +1440,15 @@ def record_qc_result(
         raise HTTPException(status_code=404, detail="抽查记录不存在")
     record = db.get(SpdFollowupRecord, sample.record_id)
     assert_org_writable(db, user, record.org_id if record else None)
-    sample.result = body.result
-    sample.method = body.method
-    sample.note = body.note
+    # 已判定的不再改判（P2-760）：判定与写同一条 UPDATE。原先无条件覆写——质控主任判「不合格」之后，被抽查的随访医生
+    # 本人（doctor 角色本就能判）再判一次「合格」照 200、备注清空，合格率跟着变。页面对已判定的样本早就不给「判定」按钮，
+    # 与筛查复核（P2-736）同一个写法；确需改判另设留痕动作属新功能
+    if not move_row(db, SpdQcSample, sample.id, SpdQcSample.result == "",
+                    result=body.result, method=body.method, note=body.note):
+        db.rollback()
+        raise HTTPException(status_code=409, detail="该样本已判定，不能重复判定")
     db.commit()
-    return {"id": sample.id, "result": sample.result}
+    return {"id": sample.id, "result": body.result}
 
 
 @router.get("/qc-samples", response_model=list[QcSampleRowOut])
