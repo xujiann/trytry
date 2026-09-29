@@ -1058,8 +1058,15 @@ def create_enrollment(
     _check_service_window(body.service_start, body.service_end)
 
     stage = body.stage or ((program.stages or [{}])[0].get("key", "") if program.stages else "")
+    values = body.model_dump(exclude={"org_id", "package_id", "stage"})
+    # 签约村医没填、操作人自己是在用的村医的，记成操作人（P1-217），与下面签约计分同一个口径（「谁签的谁得分，村医字段
+    # 没填就按操作人算」）。原先页面表单根本不送这个字段，档案上的签约村医恒为空：签约积分照记给村医本人，移动端「签约
+    # 居民」、考核「村医签约数」却按这一列数成 0，随访类任务办结时的随访积分（只给档案上的村医）一分不记
+    if values.get("village_doctor_id") is None and db.query(SpdVillageDoctor.id).filter(
+            SpdVillageDoctor.user_id == user.id, SpdVillageDoctor.active.is_(True)).first() is not None:
+        values["village_doctor_id"] = user.id
     enrollment = SpdEnrollment(
-        **body.model_dump(exclude={"org_id", "package_id", "stage"}),
+        **values,
         org_id=org_id,
         stage=stage,
         status="active",
@@ -1095,7 +1102,7 @@ def create_enrollment(
 
     # 村医签约计分：口径是"谁签的谁得分"，村医字段没填就按操作人算
     award_points(
-        db, body.village_doctor_id or user.id, "sign",
+        db, enrollment.village_doctor_id or user.id, "sign",
         ref_type="enrollment", ref_id=enrollment.id, note=f"签约{program.name}",
         org_id=org_id,
     )

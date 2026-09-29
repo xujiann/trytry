@@ -1458,6 +1458,7 @@ async function renderSpdPatients() {
           ${catalog.teams.map((t) => `<option value="${t.id}">${esc(t.name)}</option>`).join("")}</select>
         <input name="doctor_user_id" type="number" placeholder="主管医生ID">
         <input name="manager_user_id" type="number" placeholder="个案管理师ID">
+        <input name="village_doctor_id" type="number" placeholder="签约村医ID(村医本人签约可留空)">
         <select name="risk_level">
           <option value="low">低危</option><option value="mid">中危</option>
           <option value="high">高危</option><option value="very_high">极高危</option>
@@ -1621,7 +1622,8 @@ async function renderSpdPatients() {
   $("#spd-enroll-form").onsubmit = (e) => {
     e.preventDefault();
     return postAction("/api/spd/enrollments",
-      formJson(e.target, ["patient_id", "org_id", "team_id", "doctor_user_id", "manager_user_id"]),
+      // 签约村医原先没有输入框（P1-217）：档案上的签约村医恒为空，移动端「签约居民」、考核「村医签约数」数成 0
+      formJson(e.target, ["patient_id", "org_id", "team_id", "doctor_user_id", "manager_user_id", "village_doctor_id"]),
       "#spd-enroll-msg");
   };
   $("#spd-enroll-filter").onsubmit = async (e) => {
@@ -1660,6 +1662,7 @@ async function renderSpdPatients() {
         { name: "team_id", label: "服务团队ID", type: "number" },
         { name: "doctor_user_id", label: "主管医生用户ID", type: "number" },
         { name: "manager_user_id", label: "个案管理师用户ID", type: "number" },
+        { name: "village_doctor_id", label: "签约村医用户ID", type: "number" },
         { name: "next_followup_at", label: "下次随访日期 YYYY-MM-DD" },
         // 服务期可补填、更正（P2-576）：改了起始日，在绑服务包的「有效期至」按绑包时的天数跟着重算
         { name: "service_start", label: "服务起始日 YYYY-MM-DD" },
@@ -1668,7 +1671,7 @@ async function renderSpdPatients() {
       if (!form) return;
       const body = { risk_level: form.risk_level };
       if (form.stage) body.stage = form.stage;
-      for (const k of ["team_id", "doctor_user_id", "manager_user_id"]) if (form[k]) body[k] = form[k];
+      for (const k of ["team_id", "doctor_user_id", "manager_user_id", "village_doctor_id"]) if (form[k]) body[k] = form[k];
       for (const k of ["next_followup_at", "service_start", "service_end"]) if (form[k]) body[k] = form[k];
       return postAction(`/api/spd/enrollments/${enrEdit.dataset.enrEdit}`, body, "#spd-enroll-msg", "PATCH");
     }
