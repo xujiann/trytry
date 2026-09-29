@@ -3704,6 +3704,9 @@ async function renderSpdMember() {
         <select name="program_code"><option value="">病种：随模板 / 只在管一个病种的按它</option>${spdProgramOptions(catalog)}</select>
         <select name="template_id"></select>
         <input name="goal" placeholder="干预目标">
+        <input name="content" placeholder="干预内容（不引用模板时必填；引用了留空取模板）" style="min-width:260px">
+        <input name="measures" placeholder="措施（留空取模板）" style="width:150px">
+        <input name="frequency" placeholder="频次（留空取模板）" style="width:130px">
         <input name="next_at" type="date" title="下次干预时间">
         <label style="font-size:13px"><input type="checkbox" name="create_task" checked> 生成任务</label>
         <button>批量下发</button>
