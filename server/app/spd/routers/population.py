@@ -63,7 +63,7 @@ from ..service import (MEASUREMENT_SOURCE_NAMES, TASK_OPEN_STATUSES, actively_en
 SCREENING_SOURCE_NAMES = {"opportunistic": "机会性", "active": "主动筛查", "self": "居民自查", "import": "数据比对"}
 GROUP_SCOPE_NAMES = {"personal": "本人分组", "dept": "科室分组", "team": "团队分组"}
 #: 迁入确认时原档案处于这些状态，这次迁出即不再生效（P2-527；死亡另有一句 P1-111 的文案）
-from ...visibility import assert_org_writable, assert_patient_visible, visible_org_ids
+from ...visibility import assert_org_writable, assert_patient_visible, can_write_org, visible_org_ids
 
 router = APIRouter(
     prefix="/api/spd",
@@ -266,6 +266,15 @@ class LifecycleEventOut(BaseModel):
     created_at: str
     # 未确认的迁出已不再生效时是原因（原档案已死亡 / 迁出 / 排除 / 结案，确认会 409），否则空串（P2-592）
     void_reason: str = ""
+
+
+class LifecycleEventRowOut(LifecycleEventOut):
+    """清单行再多一个 `can_confirm`：这位用户此刻点「确认迁入」能不能成（P2-829，与 `confirm_migration` 同一判据现算）。
+
+    只加在清单行上。确认由迁入机构做（能以 `target_org_id` 的名义写入）；页面原先只要是未作废的待确认就画按钮——迁出方
+    与无关的第三家机构清单最前面都是别家的「待确认」，点下去 403「无权以该机构名义写入数据」，工作台却只数迁入本机构的。"""
+
+    can_confirm: bool = False
 
 
 class RecallProgressOut(BaseModel):
@@ -1523,7 +1532,7 @@ def confirm_migration(
     }
 
 
-@router.get("/lifecycle-events", response_model=list[LifecycleEventOut])
+@router.get("/lifecycle-events", response_model=list[LifecycleEventRowOut])
 def list_lifecycle_events(
     response: Response,
     event: str | None = None,
@@ -1531,6 +1540,7 @@ def list_lifecycle_events(
     offset: int = 0,
     limit: int = 100,
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     query = db.query(SpdLifecycleEvent)
     if event:
@@ -1549,6 +1559,8 @@ def list_lifecycle_events(
     for row in rows:
         enrollment = enrollments.get(row.enrollment_id)
         brief = briefs.get(enrollment.patient_id) if enrollment else None
+        void = ((migration_void_reason(enrollment.status) if enrollment else "纳管档案不存在")
+                if row.event == "migrate" and not row.confirmed else "")
         out.append({
             "id": row.id, "enrollment_id": row.enrollment_id, "event": row.event,
             "reason": row.reason, "detail": row.detail, "target_org_id": row.target_org_id,
@@ -1557,10 +1569,10 @@ def list_lifecycle_events(
             "patient_id": enrollment.patient_id if enrollment else None,
             "patient_name": (brief or {}).get("name", ""),
             "created_at": row.created_at.isoformat(),
-            "void_reason": (
-                (migration_void_reason(enrollment.status) if enrollment else "纳管档案不存在")
-                if row.event == "migrate" and not row.confirmed else ""
-            ),
+            "void_reason": void,
+            # 与 confirm_migration 同一判据（P2-829）：未确认、没作废的迁出，能以迁入机构的名义写入
+            "can_confirm": (row.event == "migrate" and not row.confirmed and not void
+                            and can_write_org(user, row.target_org_id)),
         })
     return out
 

@@ -1615,7 +1615,7 @@ async function renderSpdPatients() {
     // 工作台「待确认迁入」有数、这里没有按钮。已作废的（原档案已结束）没有可点的，不往前排
     const [recent, pending] = await Promise.all([
       api("/api/spd/lifecycle-events?limit=20"), api("/api/spd/lifecycle-events?event=migrate&confirmed=false&limit=200")]);
-    const rows = actionableFirst(recent, pending.filter((v) => !v.void_reason));
+    const rows = actionableFirst(recent, pending.filter((v) => v.can_confirm));   // 本机构能确认的排前（P2-829）
     $("#spd-life-list").innerHTML = table(
       ["ID", "档案", "患者", "事件", "原因", "发生日期", "确认", "操作"], rows, (v) =>
       `<tr><td>${v.id}</td><td>${v.enrollment_id}</td><td>${esc(v.patient_name || "")}</td>
@@ -1623,7 +1623,8 @@ async function renderSpdPatients() {
        <td>${esc(v.reason || "—")}</td><td>${esc(v.occurred_at || "—")}</td>
        <td>${v.confirmed ? '<span class="tag green">已确认</span>' : v.void_reason ? "—" : '<span class="tag orange">待确认</span>'}</td>
        <td>${v.confirmed ? "—" : v.void_reason ? esc(v.void_reason)
-         : `<button class="btn secondary" data-confirm="${v.id}">确认迁入</button>`}</td></tr>`);
+         // 只有迁入机构能确认（P2-829）：`can_confirm` 与确认接口同一判据现算，原先别家的待确认也画按钮、点了 403
+         : v.can_confirm ? `<button class="btn secondary" data-confirm="${v.id}">确认迁入</button>` : "待迁入机构确认"}</td></tr>`);
   };
   $("#spd-screen-form").onsubmit = async (e) => {
     e.preventDefault();

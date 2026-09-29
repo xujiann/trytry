@@ -101,7 +101,6 @@ UNSCOPABLE_PATIENT_READS = {
     "spd/followup.py:list_call_tasks",
     "spd/followup.py:list_qc_samples",
     "spd/population.py:list_group_members",
-    "spd/population.py:list_lifecycle_events",
     "spd/population.py:list_service_applies",
     "surveys.py:list_surveys",
     "tcm.py:list_orders",
@@ -113,9 +112,11 @@ UNSCOPABLE_PATIENT_READS = {
 #: `Depends(get_current_user)`：结构上能收口了，收到哪儿仍是 P1-49 要答的问题，一行也没收。从上面那份挪到这里
 #: （两份合计不变，`docs/闸门现状.md` 两行都列），动态探针（`scripts/probe_list_exposure.py`）把它当「待裁定（已登记）」，
 #: 模块完成度的「收不了口」一列两份一起数。答了 P1-49、按归属收了口的，从这里删掉。
+#: 2026-09-29：P2-829 同一个理由给慢专病生命周期清单补了身份（按行算「这条迁出你能不能确认」），从上面挪来，一行也没收。
 BOUND_PENDING_SCOPE_READS = {
     "medication.py:list_shortages",
     "referrals.py:list_referrals",
+    "spd/population.py:list_lifecycle_events",
 }
 
 #: 同一形状、但响应只有聚合/计数，没有个体身份。**信息项**，不是欠账。

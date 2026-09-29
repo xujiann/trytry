@@ -31,7 +31,7 @@ def _function(name: str) -> str:
      ['api("/api/spd/screenings?result=suspect&reviewed=false&limit=200")',
       'api("/api/spd/lifecycle-events?event=migrate&confirmed=false&limit=200")'],
      ["const rows = actionableFirst(recent, pending);",
-      "const rows = actionableFirst(recent, pending.filter((v) => !v.void_reason));"]),
+      "const rows = actionableFirst(recent, pending.filter((v) => v.can_confirm));"]),   # P2-829：本机构能确认的排前
     ("renderSpdCenter",
      ['api("/api/spd/recalls?status=pending&limit=200")', 'api("/api/spd/recalls?status=contacted&limit=200")'],
      ["const recalls = actionableFirst(recentRecalls, pendingRecalls, contactedRecalls);"]),
