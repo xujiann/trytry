@@ -78,6 +78,7 @@ from ..routers.portal import register_referral_source as _register_referral_sour
 from ..sms import get_sms_provider as _get_sms_provider
 from ..ws import manager as _ws_manager
 from ..alerting import send_alert as _send_alert
+from ..visibility import GLOBAL_ROLES as _GLOBAL_ROLES
 
 def patient_of(db: Session, patient_id: int) -> Patient | None:
     return db.get(Patient, patient_id)
@@ -96,6 +97,20 @@ def unusable_user(db: Session, user_id: int) -> str:
     if user is None:
         return "不存在"
     return "已停用" if user.status == "disabled" else ""
+
+
+def assignee_outside_org(db: Session, assignee_id: int, org_id: int | None) -> bool:
+    """显式指定的责任人办不了挂在这家机构的业务：不是全域角色、又不在该机构（第十六批 T2-1 / 第十九批 K1-2）。
+
+    办事的写接口都要求「能以记录所属机构的名义写入」（`assert_org_writable`）——指给别家机构的人，他打开是 403；
+    本机构的人认领又是 409（已有责任人），这条记录谁都办不了。与 `assert_org_writable` 同一判据：记录不挂机构的不拦，
+    全域角色（县级中心）不拦。调用前先经 `unusable_user` 查过存在与停用。慢专病任务（P1-210）与目标池分发（P2-725）共用；
+    系统替人挑的责任人（档案上的主管医生在别家机构时派生的任务）另行裁定（P1-211）。
+    """
+    if org_id is None:
+        return False
+    assignee = db.get(User, assignee_id)
+    return assignee is not None and assignee.role not in _GLOBAL_ROLES and assignee.org_id != org_id
 
 
 def usable_or_none(db: Session, user_id: int | None) -> int | None:

@@ -29,7 +29,8 @@ from ...patchtypes import UNSET
 from ...datetypes import OptionalDateStr
 from ...texttypes import NON_BLANK
 from ...deps import get_current_user, paginate, require_date, require_roles, row_dict, keyword_like
-from ..platform import Organization, Patient, User, id_card_variants, pii_filter, unusable_user
+from ..platform import (Organization, Patient, User, assignee_outside_org, id_card_variants, pii_filter,
+                        unusable_user)
 from ..models import (
     SpdAssessment,
     SpdCandidate,
@@ -825,6 +826,15 @@ def distribute_candidates(
         state = unusable_user(db, body.assigned_user_id)
         if state:
             raise HTTPException(status_code=404, detail=f"指派人{state}")
+        # 指给别家机构的人原先照收（P2-725）：他打开是 403、查「指给我的」看不见，本机构的人认领又 409，这条目标患者
+        # 谁都办不了，还从「待分发」里数没了。与任务派人（P1-210）同一判据，按分发之后的机构判；整批拒收，不留半成品
+        stuck = sorted(
+            c.id for c in rows
+            if c.claimed_at is None   # 已被认领的不动（下面的 P2-251），不拦
+            and assignee_outside_org(db, body.assigned_user_id, body.org_id if body.org_id is not None else c.org_id))
+        if stuck:
+            raise HTTPException(status_code=422,
+                                detail=f"指派人不在目标患者所属机构，分过去打不开这些记录：{stuck[:20]}")
     # 已被认领的不动（P2-251）：分发页写着「已被认领的患者不会被覆盖」，原先照样把团队、责任人、机构改掉——团队成员刚
     # 认领的患者被静默改给别人，认领时间还留着。判定压进 UPDATE（`claimed_at IS NULL`）：载入整批之后才被认领的同样不覆盖
     values: dict[str, Any] = {"status": case((SpdCandidate.status == "suspect", "target"), else_=SpdCandidate.status)}

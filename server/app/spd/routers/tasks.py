@@ -25,7 +25,8 @@ from ...database import get_db
 from ...patchtypes import UNSET
 from ...texttypes import NON_BLANK
 from ...deps import get_current_user, paginate, require_date, require_roles, resolve_business_date, row_dict
-from ..platform import Patient, User, evidence_urls, notify_user, unusable_user, valid_task_evidence
+from ..platform import (Patient, User, assignee_outside_org, evidence_urls, notify_user, unusable_user,
+                        valid_task_evidence)
 from ..models import (
     SpdEnrollment,
     SpdPathInstance,
@@ -53,7 +54,7 @@ from ..service import (
     sweep_overdue_on_read,
     unknown_program,
 )
-from ...visibility import GLOBAL_ROLES, assert_org_writable, assert_patient_visible, visible_org_ids
+from ...visibility import assert_org_writable, assert_patient_visible, visible_org_ids
 
 router = APIRouter(
     prefix="/api/spd",
@@ -700,7 +701,7 @@ def create_task(
         state = unusable_user(db, body.assignee_id)
         if state:
             raise HTTPException(status_code=404, detail=f"责任人{state}")
-        if _assignee_outside_org(db, body.assignee_id, org_id):
+        if assignee_outside_org(db, body.assignee_id, org_id):
             raise HTTPException(status_code=422, detail="责任人不在任务所属机构，派过去打不开这条任务")
     if body.team_id is not None:
         team = db.get(SpdTeam, body.team_id)
@@ -853,20 +854,6 @@ def get_task(task_id: int, db: Session = Depends(get_db), user: User = Depends(g
 TASK_LIST_ORDER = (SpdTask.priority.desc(), SpdTask.due_date, SpdTask.id.desc())
 
 
-def _assignee_outside_org(db: Session, assignee_id: int, org_id: int | None) -> bool:
-    """显式指定的责任人办不了这条任务：不是全域角色、又不在任务所属机构（第十六批 T2-1）。
-
-    办任务的每个写接口都经 `_load_task` 要求「能以任务所属机构的名义写入」——派给别家机构的人，他打开是 403；本机构的
-    人认领又是 409（已有责任人），这条任务谁都办不了，催办消息还带着患者姓名发进了别家机构。与 `assert_org_writable`
-    同一判据：任务不挂机构的不拦，全域角色（县级中心）不拦。调用前先经 `unusable_user` 查过存在与停用。
-    系统替人挑的责任人（档案上的主管医生在别家机构时派生的任务）另行裁定。
-    """
-    if org_id is None:
-        return False
-    assignee = db.get(User, assignee_id)
-    return assignee is not None and assignee.role not in GLOBAL_ROLES and assignee.org_id != org_id
-
-
 def _load_task(db: Session, task_id: int, user: User) -> SpdTask:
     """取任务，并**在同一次调用里**校验机构归属。
 
@@ -953,7 +940,7 @@ def assign_task(
     state = unusable_user(db, body.assignee_id)  # 停用的账号登录不了，转过去就没人办（P1-106）
     if state:
         raise HTTPException(status_code=404, detail=f"责任人{state}")
-    if _assignee_outside_org(db, body.assignee_id, task.org_id):
+    if assignee_outside_org(db, body.assignee_id, task.org_id):
         raise HTTPException(status_code=422, detail="责任人不在任务所属机构，派过去打不开这条任务")
     if task.assignee_id is not None and task.assignee_id != body.assignee_id:
         task.transferred_from = task.assignee_id
@@ -1303,7 +1290,7 @@ def batch_tasks(
             if task.status in ("done", "cancelled"):
                 skipped.append({"id": task.id, "reason": "任务已结束"})
                 continue
-            if _assignee_outside_org(db, body.assignee_id, task.org_id):   # 与单条转派同一句（第十六批 T2-1）
+            if assignee_outside_org(db, body.assignee_id, task.org_id):   # 与单条转派同一句（第十六批 T2-1）
                 skipped.append({"id": task.id, "reason": "责任人不在该任务所属机构"})
                 continue
             # 与单条转派同一个状态闸门（P2-347）：判「未结束」、待接收的转成已接收、写责任人，同一条 SQL。原先内存里判过就
