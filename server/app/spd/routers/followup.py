@@ -1662,9 +1662,14 @@ def create_report_task(body: ReportTaskIn, db: Session = Depends(get_db)):
 
 @router.get("/report-tasks", response_model=list[ReportTaskOut])
 def list_report_tasks(status: str | None = None, db: Session = Depends(get_db)):
+    """报告推送任务清单。不带 status 时不列已删除的（P2-832）：「删除」走 PATCH status=deleted 的，说明写着「前端不再
+    展示」，清单原先照列——页面把它画成一条「暂停」的任务，点「启用」就复活、点「立即执行」照样出报告。要看已删除的明说
+    `status=deleted`。"""
     query = db.query(SpdReportTask)
     if status:
         query = query.filter(SpdReportTask.status == status)
+    else:
+        query = query.filter(SpdReportTask.status != "deleted")
     return [
         _task_out(t)
         for t in query.order_by(SpdReportTask.priority, SpdReportTask.id).limit(200).all()
@@ -1687,10 +1692,13 @@ class ReportTaskPatch(BaseModel):
 
 @router.patch("/report-tasks/{task_id}", response_model=ReportTaskOut, dependencies=[Depends(require_roles("director"))])
 def update_report_task(task_id: int, body: ReportTaskPatch, db: Session = Depends(get_db)):
-    """启用 / 暂停 / 改频率 / 调优先级。删除也走这里（status=deleted 由前端不再展示）。"""
+    """启用 / 暂停 / 改频率 / 调优先级。删除也走这里（status=deleted：清单不再列、不能再改回来、不能再手工出报告，P2-832）。"""
     task = db.get(SpdReportTask, task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="报告推送任务不存在")
+    # 已删除的不再改（P2-832）：原先改回 active 照 200，删掉的任务又开始天天推送；要恢复推送请重建
+    if task.status == "deleted":
+        raise HTTPException(status_code=409, detail="该报告推送任务已删除，不能再修改；要推送请重新建一个")
     changes = body.model_dump(exclude_unset=True)
     # 起止与建档同一句，与存量合并后再比；只在这次改了起止时查——存量里已倒置的任务，暂停 / 删除它不该被拦
     if {"valid_from", "valid_to"} & changes.keys():
@@ -1748,6 +1756,8 @@ def generate_report(
     task = db.get(SpdReportTask, body.task_id) if body.task_id is not None else None
     if body.task_id is not None and task is None:
         raise HTTPException(status_code=404, detail="报告推送任务不存在")
+    if task is not None and task.status == "deleted":   # 已删除的任务不再出报告（P2-832，定时推送本就只跑启用的）
+        raise HTTPException(status_code=409, detail="该报告推送任务已删除，不能再生成报告")
     template = (
         db.get(SpdReportTemplate, task.template_id) if task is not None
         else db.query(SpdReportTemplate)

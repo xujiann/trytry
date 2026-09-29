@@ -1469,7 +1469,7 @@ class SpdReportTask(Base):
     valid_from: Mapped[str] = mapped_column(String(10), default="")
     valid_to: Mapped[str] = mapped_column(String(10), default="")
     priority: Mapped[int] = mapped_column(Integer, default=1)
-    # active=启用, paused=暂停
+    # active=启用, paused=暂停, deleted=已删除（PATCH 置；清单默认不列、不能再改、不能再出报告，P2-832）
     status: Mapped[str] = mapped_column(String(16), default="active", index=True)
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
