@@ -2067,6 +2067,7 @@
 - `item_code` · VARCHAR(64) · NOT NULL
 - `item_name` · VARCHAR(128) · NOT NULL
 - `quantity` · INTEGER · NOT NULL
+- `received_quantity` · INTEGER
 - `status` · VARCHAR(16) · NOT NULL · index
 - `requested_by` · INTEGER · NOT NULL · → users.id
 - `approved_by` · INTEGER · → users.id

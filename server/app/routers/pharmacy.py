@@ -888,6 +888,14 @@ class PurchaseOrderOut(BaseModel):
     item_name: str
     quantity: int
     status: str
+    # 实收数（P2-852）：验收时记；验收前、以及本列加入之前验收的单为 null（那些单按申请量整单入库）
+    received_quantity: int | None = None
+
+
+class PurchaseReceiveIn(BaseModel):
+    """到货验收（P2-852）：不传或不带实收数，按申请量整单入库（与原先一致）。"""
+
+    received_quantity: int | None = Field(default=None, gt=0, le=INT4_MAX)
 
 
 @router.post(
@@ -948,24 +956,36 @@ def approve_purchase(
     response_model=PurchaseReceiveOut,
     dependencies=[Depends(require_roles("operator", "pharmacist"))],  # 到货验收
 )
-def receive_purchase(order_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+def receive_purchase(
+    order_id: int,
+    body: PurchaseReceiveIn | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """到货验收：采购单置 received，药品同事务入汇总与兜底批次。
 
     状态闸门走条件 UPDATE 而不是先判后改：两笔验收同时判定"还没验收"，
     库存就按同一张单加两次——这条路径正是往库存里加数的路径。
     采购单没有批号字段，验收量与直接入库同样落 `未标批号` 批次
     （实测只加汇总时：汇总 180 / 批次和 100）。
+
+    按实收数入库（P2-852，与物资采购验收同一句）：原先不收实收数，一律按申请量整单入库——到了 60 盒，汇总与批次各加
+    100，少到的差额成了账上能发、实际不存在的库存。可选的 `received_quantity` 不超过采购量，不传按申请量（与原先一致），
+    记在采购单上；一次验收即结单，分批到货另议。
     """
     order = db.get(PurchaseOrder, order_id)
     if order is None:
         raise HTTPException(status_code=404, detail="采购单不存在")
     assert_obj_org_writable(db, user, order)
+    quantity = body.received_quantity if body is not None and body.received_quantity is not None else order.quantity
+    if quantity > order.quantity:
+        raise HTTPException(status_code=422, detail=f"验收数量不得超过采购数量（采购 {order.quantity}）")
     received = cast(
         CursorResult,
         db.execute(
             update(PurchaseOrder)
             .where(PurchaseOrder.id == order.id, PurchaseOrder.status == "approved")
-            .values(status="received")
+            .values(status="received", received_quantity=quantity)
         ),
     )
     if not received.rowcount:
@@ -999,8 +1019,8 @@ def receive_purchase(order_id: int, db: Session = Depends(get_db), user: User = 
                 .first()
             )
         stock = ensure_present(stock, "药品库存")
-        add_amount(db, DrugStock, stock.id, "quantity", order.quantity)
-        _receive_unspecified(db, order.org_id, order.item_code, order.quantity)
+        add_amount(db, DrugStock, stock.id, "quantity", quantity)
+        _receive_unspecified(db, order.org_id, order.item_code, quantity)
         db.flush()
         db.refresh(stock)
         stock_qty = stock.quantity
@@ -1037,6 +1057,7 @@ def list_purchases(
             "item_name": o.item_name,
             "quantity": o.quantity,
             "status": o.status,
+            "received_quantity": o.received_quantity,
         }
         for o in paginate(q.order_by(PurchaseOrder.id.desc()), response, offset, limit)
     ]

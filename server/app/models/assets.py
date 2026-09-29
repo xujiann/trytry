@@ -132,6 +132,8 @@ class PurchaseOrder(Base):
     item_code: Mapped[str] = mapped_column(String(64))
     item_name: Mapped[str] = mapped_column(String(128))
     quantity: Mapped[int] = mapped_column(Integer)
+    # 实收数（P2-852）：验收时记，可少于申请量；验收前为空，本列加入之前验收的单也为空（那些单按申请量整单入库）
+    received_quantity: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # pending=待审批, approved=已审批, received=已验收入库, rejected=已驳回
     status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
     requested_by: Mapped[int] = mapped_column(ForeignKey("users.id"))

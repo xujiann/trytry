@@ -30,7 +30,8 @@ SUPPLIER_CREATED_KEYS = ["id", "name", "active"]
 SUPPLIER_KEYS = ["id", "name", "contact", "license_no", "active"]
 ORDER_ACTION_KEYS = ["id", "status"]
 ORDER_RECEIVE_KEYS = ["id", "status", "stock_quantity"]
-ORDER_KEYS = ["id", "org_id", "supplier_id", "item_type", "item_code", "item_name", "quantity", "status"]
+ORDER_KEYS = ["id", "org_id", "supplier_id", "item_type", "item_code", "item_name", "quantity", "status",
+              "received_quantity"]   # 实收数（P2-852）：验收时记，验收前为 null
 STOCK_TAKE_CREATED_KEYS = ["id", "book_qty", "actual_qty", "diff"]
 STOCK_TAKE_KEYS = ["id", "org_id", "drug_code", "book_qty", "actual_qty", "diff", "note"]
 SUGGESTION_KEYS = ["drug_code", "drug_name", "usage_30d", "current_stock", "suggested_quantity"]
@@ -222,16 +223,16 @@ def test_采购单列表精确_过滤(client, admin, seed):
     expected = [
         {"id": seed["po_rejected"]["id"], "org_id": org_id, "supplier_id": sid,
          "item_type": "drug", "item_code": "PHCT-IBU", "item_name": "契约布洛芬",
-         "quantity": 20, "status": "rejected"},
+         "quantity": 20, "status": "rejected", "received_quantity": None},
         {"id": seed["po_pending"]["id"], "org_id": org_id, "supplier_id": sid,
          "item_type": "drug", "item_code": "PHCT-AMX", "item_name": "契约阿莫西林",
-         "quantity": 30, "status": "pending"},
+         "quantity": 30, "status": "pending", "received_quantity": None},
         {"id": seed["po_material"]["id"], "org_id": org_id, "supplier_id": sid,
          "item_type": "material", "item_code": "PHCT-GZ", "item_name": "契约纱布",
-         "quantity": 7, "status": "received"},
+         "quantity": 7, "status": "received", "received_quantity": 7},
         {"id": seed["po_drug"]["id"], "org_id": org_id, "supplier_id": sid,
          "item_type": "drug", "item_code": "PHCT-MET", "item_name": "契约二甲双胍",
-         "quantity": 50, "status": "received"},
+         "quantity": 50, "status": "received", "received_quantity": 50},
     ]
     rows = client.get("/api/pharmacy/purchase-orders", headers=admin).json()
     assert [list(r.keys()) for r in rows] == [ORDER_KEYS] * 4  # id 倒序

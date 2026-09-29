@@ -281,10 +281,11 @@ async function renderProcure() {
           ? `<button class="btn secondary" data-poap="${o.id}">批准</button>
              <button class="btn danger" data-poap="${o.id}" data-reject="1">驳回</button>`
           : o.status === "approved" && ["operator", "pharmacist", "admin"].includes(role)
-          ? `<button class="btn secondary" data-porec="${o.id}">验收入库</button>` : "—";
+          ? `<button class="btn secondary" data-porec="${o.id}" data-qty="${o.quantity}">验收入库</button>` : "—";
         return `<tr><td>${o.id}</td><td>${o.org_id}</td><td>${esc(supNames[o.supplier_id] || o.supplier_id)}</td>
           <td>${o.item_type === "drug" ? "药品" : "物资"}</td><td>${esc(o.item_name)}（${esc(o.item_code)}）</td>
-          <td>${o.quantity}</td><td>${statusTag(PO_STATUS, o.status)}</td><td>${actions}</td></tr>`;
+          <td>${o.quantity}${o.received_quantity != null && o.received_quantity !== o.quantity
+            ? `（实收 ${o.received_quantity}）` : ""}</td><td>${statusTag(PO_STATUS, o.status)}</td><td>${actions}</td></tr>`;
       })}`)}
     ${panel("存货盘点（经办/药师，盘后账实相符）", `
       <form class="inline" id="st-form">
@@ -302,7 +303,17 @@ async function renderProcure() {
   $("#page-body").onclick = (e) => {
     const d = e.target.dataset;
     if (d.poap) return postAction(`/api/pharmacy/purchase-orders/${d.poap}/approve${d.reject ? "?reject=true" : ""}`, null, "#po-msg");
-    if (d.porec) return postAction(`/api/pharmacy/purchase-orders/${d.porec}/receive`, null, "#po-msg");
+    if (d.porec) {
+      // 按实收数验收（P2-852）：原先一律按申请量整单入库，少到的差额成了账上能发、实际不存在的库存
+      const form = await spdModal("到货验收", [
+        { name: "received_quantity", label: `实收数量（采购 ${d.qty}，留空按采购量）`, type: "text" }]);
+      if (!form) return;
+      const raw = String(form.received_quantity || "").trim();
+      const qty = Number(raw);
+      if (raw && !(Number.isInteger(qty) && qty > 0)) return setMsg("#po-msg", "实收数量要填正整数", false);
+      return postAction(`/api/pharmacy/purchase-orders/${d.porec}/receive`, raw ? { received_quantity: qty } : null,
+        "#po-msg");
+    }
   };
 }
 
