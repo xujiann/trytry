@@ -1030,10 +1030,16 @@ def submit_task(
 
     `require_evidence` 的任务没传佐证材料时拒绝提交——这是节点配置里
     勾选过的硬要求，提交时不校验等于配置形同虚设。
+
+    已提交待审核的不收（P2-758，与办结同一个集合，P2-244）：原先按「未结束」放行，没刷新的页面上点「保存草稿」
+    （上传佐证走的也是它）把待审核的拉回办理中、移出审核队列，再点「提交审核」把原提交的结果整个换掉，审核人通过的
+    是后写的内容。已退回的照旧能改了再交。
     """
     task = _load_task(db, task_id, user)
     if task.status in ("done", "cancelled"):
         raise HTTPException(status_code=409, detail="该任务已结束")
+    if task.status == "submitted":
+        raise HTTPException(status_code=409, detail=AWAITING_REVIEW)
     task.result = body.result
     if body.evidence:
         problems = valid_task_evidence(db, task.id, body.evidence)
@@ -1041,7 +1047,7 @@ def submit_task(
             raise HTTPException(status_code=422, detail="；".join(problems))
         task.evidence = body.evidence
     if body.draft:
-        _move_or_conflict(db, task, "doing")
+        _submit_move(db, task, "doing")
         db.commit()
         return _task_out(task)
     if task.require_evidence and not (task.evidence or []):
@@ -1049,9 +1055,19 @@ def submit_task(
     task.assignee_id = task.assignee_id or user.id
     if body.note:
         task.review_note = body.note
-    _move_or_conflict(db, task, "submitted")
+    _submit_move(db, task, "submitted")
     db.commit()
     return _task_out(task)
+
+
+def _submit_move(db: Session, task: SpdTask, to_status: str) -> None:
+    """提交 / 草稿的条件翻转：只从能直接办结的状态翻（P2-758）。锁外读到办理中、这时别人刚提交审核的，同样 409、
+    不覆盖——回话按库里的现状说：待审核的说须由审核人审，其余说已结束（与 `_finish_task` 同一个判法）。"""
+    if not move_task(db, task.id, to_status, expect=TASK_COMPLETABLE_STATUSES):
+        db.rollback()
+        current = db.get(SpdTask, task.id)
+        raise HTTPException(status_code=409, detail=AWAITING_REVIEW if current is not None
+                            and current.status == "submitted" else "该任务已结束")
 
 
 def _move_or_conflict(db: Session, task: SpdTask, to_status: str, *, expect: tuple[str, ...] | str = TASK_OPEN_STATUSES,
