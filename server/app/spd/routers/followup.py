@@ -52,7 +52,7 @@ from ..reporting import compose_section, default_period_label
 from ..rules import RuleError, as_validated, grade_abnormal
 from ..service import (CALL_SETTLEABLE_STATUSES, adjust_followup_record, close_followup_record, followup_abnormal,
                        answers_problem, followup_overdue, note_call_dispatch_failure, settle_call_task,
-                       spawn_followup_abnormal_task, unknown_code, unknown_ids, unknown_program)
+                       plan_offsets, spawn_followup_abnormal_task, unknown_code, unknown_ids, unknown_program)
 from ...numtypes import INT4_MAX, INT4_MIN, non_finite_path
 from ...texttypes import NON_BLANK
 from ...visibility import assert_org_writable, assert_patient_visible, visible_org_ids
@@ -420,6 +420,10 @@ def _check_points(points: list[int]) -> None:
         raise HTTPException(status_code=422, detail="随访方案至少要有一个随访时间点")
     if any(p < 0 or p > 3650 for p in points):
         raise HTTPException(status_code=422, detail="随访时间点须在 0~3650 天之间")
+    repeated = sorted({p for p in points if points.count(p) > 1})
+    if repeated:
+        # 同一个时间点写两遍，按方案生成随访就在同一天排两条（P2-719）
+        raise HTTPException(status_code=422, detail=f"随访时间点重复：{'、'.join(map(str, repeated))} 天，同一天会排出两条随访")
 
 
 def _rule_out(r: SpdFollowupRule) -> dict:
@@ -712,7 +716,7 @@ def generate_followup_plan(
             raise HTTPException(status_code=404, detail=f"随访执行人{state}（executor_id={body.executor_id}）")
     base = date.fromisoformat(body.base_date) if body.base_date else clock.today()
     created = []
-    for offset in rule.points or []:
+    for offset in plan_offsets(rule):
         record = SpdFollowupRecord(
             patient_id=body.patient_id, program_code=rule.program_code, rule_id=rule.id,
             questionnaire_code=rule.questionnaire_code, scene=rule.scene,
@@ -829,7 +833,7 @@ def auto_match_plans(
             base = date.fromisoformat(base_date)
         except (ValueError, TypeError):
             base = clock.today()
-        for offset in rule.points or []:
+        for offset in plan_offsets(rule):
             db.add(
                 SpdFollowupRecord(
                     patient_id=patient_id, program_code=rule.program_code, rule_id=rule.id,

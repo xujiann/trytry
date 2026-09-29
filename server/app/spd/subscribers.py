@@ -31,7 +31,7 @@ from .. import events
 from ..concurrency import insert_if_absent
 from ..config import settings
 from .models import SpdCandidate, SpdFollowupRecord, SpdFollowupRule, SpdProgram, SpdScreening
-from .service import actively_enrolled, match_program
+from .service import actively_enrolled, match_program, plan_offsets
 
 logger = logging.getLogger("medplat.spd.subscribers")
 
@@ -81,7 +81,7 @@ def on_admission_discharged(db: Session, payload: dict) -> None:
         base = date.fromisoformat(payload.get("discharged_on") or "")
     except ValueError:
         base = clock.today()
-    for offset in rule.points or []:
+    for offset in plan_offsets(rule):   # 存量里重复的时间点去重（P2-719）
         db.add(
             SpdFollowupRecord(
                 patient_id=patient_id, program_code=rule.program_code, rule_id=rule.id,

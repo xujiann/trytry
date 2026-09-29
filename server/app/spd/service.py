@@ -27,6 +27,7 @@ from .models import (
     SpdCallTask,
     SpdEnrollment,
     SpdFollowupRecord,
+    SpdFollowupRule,
     SpdIntervention,
     SpdMeasurement,
     SpdPathInstance,
@@ -693,6 +694,12 @@ def spawn_followup_abnormal_task(db: Session, record: SpdFollowupRecord, level: 
             body=f"{title}（患者 {record.patient_id}，次日到期）", link_type="spd_task", link_id=task.id,
         )
     return task
+
+
+def plan_offsets(rule: SpdFollowupRule) -> list[int]:
+    """按随访方案排随访时用的时间点，去掉重复的、保留原顺序（P2-719）。按方案生成、自动匹配、出院即派生三处共用：
+    写入口查重复之前存下的 [7, 7, 30] 原先在同一天排两条随访，两条都要执行、都进完成率与超期数。"""
+    return list(dict.fromkeys(int(p) for p in rule.points or []))
 
 
 #: 节点时限的上界（天）：与模板节点的时限同一个界（`config/paths.py` 的 `PathNodeIn.due_days`，le=3650）
