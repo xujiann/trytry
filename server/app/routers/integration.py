@@ -379,8 +379,11 @@ def parse_fhir_patient(resource: dict) -> dict:
 
     id_card = ""
     for ident in resource.get("identifier", []):
-        if ident.get("value"):
-            id_card = ident["value"]
+        # 去首尾空白（P2-790，HL7 一侧 PID-3 早就去了）：上游 CHAR 定长列补的尾随空格、换行原样入库，按证件号幂等建档
+        # 认不出是同一个人，另建一份主档
+        value = str(ident.get("value") or "").strip()
+        if value:
+            id_card = value
             if _is_id_card_identifier(ident):   # 原先只认带 urn:oid: 前缀的写法，认不出就落到最后一个（常是病案号）
                 break
     if not id_card or len(id_card) < 15:
