@@ -3,7 +3,7 @@
 对应招标文件：成员端 #7/#12/#14/#15/#16、个案管理师端 #6/#9/#14、
 医生移动端 #8/#9/#12/#13、患者端 #4/#7/#10/#12。
 """
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -124,6 +124,8 @@ class CareMeasurementOut(BaseModel):
 class MeasurementBatchOut(BaseModel):
     created: int
     abnormal: int
+    #: 与已有读数重复、这次没落的条数（P2-728）；没有跳过的不出这个键，原有回执逐字节不变
+    skipped: int = 0
 
 
 class TrendPointOut(BaseModel):
@@ -407,8 +409,6 @@ def _record_measurement(db: Session, body: MeasurementIn, user_id: int | None) -
     measured_at = now_naive()
     if body.measured_at:
         try:
-            from datetime import datetime
-
             measured_at = datetime.fromisoformat(body.measured_at)
         except ValueError:
             raise HTTPException(status_code=422, detail="measured_at 格式须为 ISO 日期时间") from None
@@ -459,28 +459,59 @@ def create_measurement(
     return _measure_out(record)
 
 
-@router.post("/measurements/batch", response_model=MeasurementBatchOut,
+def _device_reading_key(item: MeasurementIn) -> tuple[int, str, str, datetime] | None:
+    """设备读数的天然键：同一患者、同一指标、同一台设备、同一测定时刻只有一条读数（P2-728）。
+
+    没带设备号或测定时刻的（手工补录、测定时刻取服务器当前时刻）没有天然键，不判重；测定时刻写坏的交给
+    `_record_measurement` 照旧 422。"""
+    if not item.device_sn or not item.measured_at:
+        return None
+    try:
+        return item.patient_id, item.metric, item.device_sn, datetime.fromisoformat(item.measured_at)
+    except ValueError:
+        return None
+
+
+@router.post("/measurements/batch", response_model=MeasurementBatchOut, response_model_exclude_unset=True,
              dependencies=[Depends(require_roles(*SERVICE_ROLES, "operator"))])
 def batch_measurements(
     body: MeasurementBatchIn, db: Session = Depends(get_db),
     user: User = Depends(get_current_user)
 ):
-    """设备批量上传（蓝牙/物联网一次回传多条）。"""
+    """设备批量上传（蓝牙/物联网一次回传多条）。
+
+    按天然键判重（P2-728）：网关断线重连按退避重试、把缓存里的同一批再推一遍，原先再落一份——同一台血压计的两条读数
+    推 3 次，监测清单里 6 行，考核达标率、异常计数、趋势都按 3 倍算。`source_ref` 的注释写明「兼作幂等判重」，公卫采集器
+    就是这么用的；设备回传有现成的天然键（`_device_reading_key`），不必等请求级幂等（P1-191）。重复的跳过、回执给出条数，
+    同一批里重复的同样只落一条。
+    """
     # 病种编码先查在不在，与单条录入同一句（P1-120）：编码在条目里一层，原先漏了这一句、填错照样落库（P2-85）。
     # 点名填错的，整批不落——与生理上不可能的值整批 422 同一口径
     for code in dict.fromkeys(item.program_code for item in body.items):
         program_problem = unknown_program(db, code)
         if program_problem:
             raise HTTPException(status_code=404, detail=f"{program_problem}：{code}")
-    created, abnormal = 0, 0
+    created, abnormal, skipped = 0, 0, 0
+    seen: set[tuple[int, str, str, datetime]] = set()
     for item in body.items:
         assert_patient_visible(db, user, item.patient_id, resource="spd_measurement")
+        key = _device_reading_key(item)
+        if key is not None and (key in seen or db.query(SpdMeasurement.id).filter(
+                SpdMeasurement.patient_id == key[0], SpdMeasurement.metric == key[1],
+                SpdMeasurement.device_sn == key[2], SpdMeasurement.measured_at == key[3]).first() is not None):
+            skipped += 1
+            continue
         record = _record_measurement(db, item, user.id)
+        if key is not None:
+            seen.add(key)
         created += 1
         if record.level in ("high", "low"):
             abnormal += 1
     db.commit()
-    return {"created": created, "abnormal": abnormal}
+    out = {"created": created, "abnormal": abnormal}
+    if skipped:
+        out["skipped"] = skipped
+    return out
 
 
 @router.get("/measurements", response_model=list[CareMeasurementOut])
