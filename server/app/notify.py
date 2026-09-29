@@ -143,10 +143,11 @@ def notify_staff(
 
 
 def patient_recipients(db: Session, patient_id: int) -> set[int]:
-    """某位患者的消息该投给哪些居民账户：本人绑定的在用账户 + 代管该档案的家属账户（口径见 `notify_patient`）。
+    """某位患者的消息该投给哪些居民账户：本人绑定的在用账户 + 代管该档案的家属里在用的账户（口径见 `notify_patient`）。
 
     站内信与慢专病微信宣教（`spd.platform.send_wechat_edu`，P2-502）共用这一处——原先宣教只认本人账户，
-    代管的家属一条都收不到。
+    代管的家属一条都收不到。家属一支与本人一支同样只认在用账户（P2-765）：原先不看账户状态，停用的家属账户（停用后
+    令牌校验即失败、登不上）照收站内信，报告出具、宣教照往它的 openid 推微信模板消息（带检查项目名）。
     """
     account_ids = {
         a.id
@@ -155,9 +156,10 @@ def patient_recipients(db: Session, patient_id: int) -> set[int]:
         .all()
     }
     account_ids |= {
-        m.account_id
-        for m in db.query(ResidentFamilyMember)
-        .filter(ResidentFamilyMember.patient_id == patient_id)
+        account_id
+        for (account_id,) in db.query(ResidentFamilyMember.account_id)
+        .join(ResidentAccount, ResidentAccount.id == ResidentFamilyMember.account_id)
+        .filter(ResidentFamilyMember.patient_id == patient_id, ResidentAccount.status == "active")
         .all()
     }
     return account_ids
