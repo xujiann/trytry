@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from .. import clock
 from ..database import get_db
 from ..datetypes import DateStr
 from ..deps import (
@@ -287,6 +288,12 @@ def create_outbound_visit(
         if referral.status == "rejected":
             # 同一个理由：被退回的转诊单没有转成，患者是自行外出——挂上去就算成了有序转诊
             raise HTTPException(status_code=422, detail="该转诊单已退回，不能作为有序转诊依据")
+        # 还是同一个理由：就诊之后才开的转诊单没有把人转出去（P2-883）——原先 9-01 自行去了省院、9-20 补开的上转单照样挂上，
+        # 有序转诊率算成 100%。建单日按本地日期比；转诊单多久内有效、待接诊的算不算、一张单能挂几次另行待裁定
+        created_on = clock.to_local(referral.created_at).date().isoformat()
+        if created_on > body.visit_date:
+            raise HTTPException(status_code=422,
+                                detail=f"该转诊单开于 {created_on}，晚于这次县外就诊（{body.visit_date}），不能作为有序转诊依据")
     visit = OutboundVisit(**body.model_dump(), created_by=user.id)
     db.add(visit)
     db.commit()

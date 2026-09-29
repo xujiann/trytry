@@ -1,9 +1,11 @@
 """阶段四：县外就诊与就医流向、运行效率、自定义绩效公式与受限求值器。"""
-from datetime import date
+from datetime import date, datetime
 
 import pytest
 
+from app.database import SessionLocal
 from app.formula import FormulaError, evaluate, validate
+from app.models import Referral
 
 
 @pytest.fixture(scope="module")
@@ -107,6 +109,9 @@ def test_patient_flow_rates(client, admin, setup):
               "to_org_id": setup["county"]["id"], "direction": "up", "reason": "需上级诊治"},
         headers=admin,
     ).json()
+    with SessionLocal() as db:   # 转诊单开在就诊之前（P2-883：就诊之后才开的单不能挂）
+        db.get(Referral, referral["id"]).created_at = datetime(2026, 8, 1, 2, 0)
+        db.commit()
     assert client.post(
         "/api/analytics/outbound-visits",
         json={"patient_id": setup["patient"]["id"], "visit_date": "2026-08-05",

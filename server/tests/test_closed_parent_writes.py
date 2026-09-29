@@ -23,11 +23,13 @@
 from __future__ import annotations
 
 import ast
+from datetime import datetime
 
 import pytest
 import test_datestr_single_source as ds
 
 from app.database import SessionLocal
+from app.models import Referral
 
 # ---------------------------------------------------------------- 行为回归
 
@@ -114,6 +116,9 @@ def test_县外就诊不挂已退回的转诊单(client, admin, world):
         r = client.post("/api/referrals", json={"patient_id": pid, "from_org_id": world["org"], "to_org_id": other,
                                                 "direction": "up"}, headers=admin)
         assert r.status_code == 201, r.text
+        with SessionLocal() as db:   # 开在就诊之前（P2-883：就诊之后才开的单不能挂）
+            db.get(Referral, r.json()["id"]).created_at = datetime(2026, 8, 31, 2, 0)
+            db.commit()
         return r.json()["id"]
 
     rejected = referral()

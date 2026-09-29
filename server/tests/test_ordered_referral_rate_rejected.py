@@ -4,7 +4,12 @@
 可挂的时候还是待审、之后才被退回的，原先一直算数：县外就诊没有改挂 / 解挂的入口，有序转诊率（医共体的头条指标）
 就一直停在 50%。同文件的原则是「统计是现算的，之后被退回自然就掉出去」。
 """
+from datetime import datetime
+
 import pytest
+
+from app.database import SessionLocal
+from app.models import Referral
 
 
 @pytest.fixture(scope="module")
@@ -18,6 +23,9 @@ def world(client, admin):
         "name": "P2200 患者", "id_card": "330106196606061564"}).json()["id"]
     referral = client.post("/api/referrals", headers=admin, json={
         "patient_id": patient, "from_org_id": orgs["town"], "to_org_id": orgs["county"], "direction": "up"}).json()
+    with SessionLocal() as db:   # 开在就诊之前（P2-883：就诊之后才开的单不能挂）
+        db.get(Referral, referral["id"]).created_at = datetime(2026, 8, 1, 2, 0)
+        db.commit()
     for referral_id, date in ((referral["id"], "2026-08-05"), (None, "2026-08-09")):
         resp = client.post("/api/analytics/outbound-visits", headers=admin, json={
             "patient_id": patient, "visit_date": date, "external_org_name": "市第一人民医院",
