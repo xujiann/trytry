@@ -28,7 +28,7 @@ from ..numtypes import INT4_MAX
 from ..texttypes import NON_BLANK
 from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org_list, scope_patient_list
 from ..database import get_db
-from ..datetypes import DateStr, DateTimeSecStr
+from ..datetypes import DateStr, DateTimeSecStr, check_date
 from ..deps import (
     get_current_user,
     paginate,
@@ -551,6 +551,16 @@ def report_aefi(
             raise HTTPException(status_code=404, detail="接种记录不存在")
         if record.patient_id != body.patient_id:
             raise HTTPException(status_code=422, detail="接种记录不属于该患者")
+        # 反应只能发生在这一剂之后（P2-884）：关联剂次是为了查得出是哪一针引起的——9-10 发病的挂到 9-20 那一剂上，这一批
+        # 凭空多一例反应，严重反应还牵动这一批的封存判断。同日照收；存量里认不出的接种日期比不出先后，不拦。发病距接种
+        # 多久还算这一剂（监测窗口）不在这一条
+        try:
+            vaccinated_on = check_date(record.vaccinated_date)
+        except ValueError:
+            vaccinated_on = ""
+        if vaccinated_on and body.onset_date < vaccinated_on:
+            raise HTTPException(status_code=422, detail=f"发病日期 {body.onset_date} 早于这一剂的接种日期 {vaccinated_on}，"
+                                                        "不会是这一剂引起的：请关联发病之前的那次接种")
         data["vaccine_code"] = record.vaccine_code
         batch_no = record.batch_no
     elif not body.vaccine_code.strip():   # 一串空格不算填了（P2-309）
