@@ -396,10 +396,13 @@ def submit_simulation(
             # 答错才给解析：答对的人不需要，堆一屏解析反而没人看
             "explain": "" if correct else p.get("explain", ""),
         })
-    score = round(earned * 100 / total) if total else 0
+    # 判及格用没取整的比例（P2-893）：原先先 `round` 成整数分再比及格线，答对 119/200 = 59.5% 取整成 60、判及格；Python
+    # 的 round 还逢 .5 取偶（60.5 显示 60、61.5 显示 62）。页面写的是「得分 = 答对的分值 ÷ 满分 × 100」，没说取整。
+    # 展示分改成常规四舍五入（逢 .5 进一），整数算，不经浮点
+    score = int((earned * 200 + total) // (2 * total)) if total else 0
     attempt = SimulationAttempt(
         case_id=case_id, user_id=user.id, answers=body.answers,
-        score=score, passed=score >= case.pass_score,
+        score=score, passed=bool(total) and earned * 100 >= case.pass_score * total,
     )
     db.add(attempt)
     db.commit()
