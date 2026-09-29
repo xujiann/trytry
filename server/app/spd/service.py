@@ -695,16 +695,45 @@ def spawn_followup_abnormal_task(db: Session, record: SpdFollowupRecord, level: 
     return task
 
 
+#: 节点时限的上界（天）：与模板节点的时限同一个界（`config/paths.py` 的 `PathNodeIn.due_days`，le=3650）
+NODE_DUE_DAYS_MAX = 3650
+
+
 def node_due_days(instance: SpdPathInstance, node: SpdPathNode) -> int:
     """节点任务的时限（天）：实例的个性化覆盖优先（`overrides[节点键]["due_days"]`），没覆盖按模板（P2-258）。
 
     实例表的列注释写着「个性化覆盖：{"node_key": {"due_days": 3}}，为空表示完全按模板」，启动与调整接口也照收——原先
-    派任务一律取模板的时限，覆盖存了不用。覆盖写得不成形（不是字典、不是非负整数）的按模板，不因为它派不出任务。"""
+    派任务一律取模板的时限，覆盖存了不用。覆盖写得不成形（不是字典、不是 0～3650 的整数）的按模板，不因为它派不出
+    任务：写入口查结构之前（P2-717）存下的 10**9 天加到今天上溢出，派任务整条 500。"""
     override = (instance.overrides or {}).get(node.key) if isinstance(instance.overrides, dict) else None
     days = override.get("due_days") if isinstance(override, dict) else None
-    if isinstance(days, int) and not isinstance(days, bool) and days >= 0:
+    if isinstance(days, int) and not isinstance(days, bool) and 0 <= days <= NODE_DUE_DAYS_MAX:
         return days
     return node.due_days
+
+
+def path_overrides_problem(overrides: dict, node_keys: set[str]) -> str:
+    """路径实例个性化覆盖的结构问题，没问题返回空串（P2-717，启动与调整共用）。
+
+    覆盖是按节点求值的配置（`node_due_days`），原先写接口只要是个对象就收：时限 36500 天照存，派出去的任务百年后
+    才到期；10**9 天在派任务那一刻溢出、500；节点键写错、`due_days` 拼错的悄悄不生效。只认模板里的节点键、只认
+    `due_days`，时限与模板节点同一个界（0～3650 天）；节点写成空对象等于不覆盖。"""
+    bad = non_finite_path(overrides, "overrides")   # 与各配置校验同一道（P2-466）
+    if bad:
+        return f"{bad} 不能是 NaN / Infinity"
+    for key, value in overrides.items():
+        if key not in node_keys:
+            return f"覆盖里的节点 {key} 不在这条路径的模板里（可选：{'、'.join(sorted(node_keys)) or '无'}）"
+        if not isinstance(value, dict):
+            return f'节点 {key} 的覆盖要写成 {{"due_days": 天数}} 这样的对象'
+        unknown = sorted(str(k) for k in value if k != "due_days")
+        if unknown:
+            return f"节点 {key} 的覆盖只认 due_days（收到 {'、'.join(unknown)}）"
+        days = value.get("due_days")
+        if "due_days" in value and (isinstance(days, bool) or not isinstance(days, int)
+                                    or not 0 <= days <= NODE_DUE_DAYS_MAX):
+            return f"节点 {key} 的时限（due_days）须是 0～{NODE_DUE_DAYS_MAX} 的整数天（收到 {days!r}）"
+    return ""
 
 
 def start_path(

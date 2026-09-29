@@ -48,6 +48,7 @@ from ..service import (
     move_task,
     node_due_days,
     node_enter_allowed,
+    path_overrides_problem,
     spawn_task,
     sweep_overdue_on_read,
     unknown_program,
@@ -258,6 +259,10 @@ class StartPathIn(BaseModel):
     overrides: dict = Field(default_factory=dict)
 
 
+def _template_node_keys(db: Session, template_id: int) -> set[str]:
+    return {key for (key,) in db.query(SpdPathNode.key).filter(SpdPathNode.template_id == template_id).order_by(SpdPathNode.id)}
+
+
 def _instance_out(db: Session, i: SpdPathInstance) -> dict:
     template = db.get(SpdPathTemplate, i.template_id)
     enrollment = db.get(SpdEnrollment, i.enrollment_id)
@@ -305,6 +310,9 @@ def start_path_instance(
     template = db.get(SpdPathTemplate, body.template_id)
     if template is None:
         raise HTTPException(status_code=404, detail="路径模板不存在")
+    overrides_problem = path_overrides_problem(body.overrides, _template_node_keys(db, template.id))   # P2-717
+    if overrides_problem:
+        raise HTTPException(status_code=422, detail=overrides_problem)
     # 「同一档案同一模板只一条在途」的判定与建实例圈进档案这一行的临界区（P2-269）：原先查完没有在途的
     # 再建——两个人同时点启动（或双击），两路都查不到、各建一条，两份并行任务正是 docstring 要防的
     with serialized_on(db, SpdEnrollment, enrollment.id):
@@ -456,6 +464,11 @@ def adjust_path_instance(
     if instance.status == "cancelled":
         raise HTTPException(status_code=409, detail="已取消的路径不可调整")
     data = body.model_dump(exclude_unset=True)
+    # 覆盖按节点求值（`node_due_days`），与启动同一道结构校验（P2-717）
+    if "overrides" in data:
+        overrides_problem = path_overrides_problem(data["overrides"], _template_node_keys(db, instance.template_id))
+        if overrides_problem:
+            raise HTTPException(status_code=422, detail=overrides_problem)
     # 改负责人先查存在（P1-90）：不查的话开发库存成悬空 id，生产库撞外键直接 500；停用的账号也不收，
     # 与现值相同的不再查（P1-106）
     if data.get("owner_user_id") is not None and data["owner_user_id"] != instance.owner_user_id:

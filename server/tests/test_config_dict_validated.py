@@ -56,6 +56,9 @@ CONFIG = {
     "spd/routers/population.py:GroupIn.auto_rule": ("as_validated(",),
     "spd/routers/referral.py:ReferralRuleIn.conditions": ("validate_conditions(",),
     "spd/routers/referral.py:ReferralRulePatch.conditions": ("validate_conditions(",),
+    # 路径实例的个性化覆盖（P2-717）：原先登记在数据一侧「只存只回显」，P2-258 起派任务按它取时限，已是配置
+    "spd/routers/tasks.py:StartPathIn.overrides": ("path_overrides_problem(",),
+    "spd/routers/tasks.py:InstanceAdjustIn.overrides": ("path_overrides_problem(",),
 }
 
 #: 数据字段：不是之后被反复求值的配置——逐条写明理由
@@ -87,8 +90,6 @@ DATA = {
     "spd/routers/referral.py:ReferralIn.materials": "转诊材料：只存只回显",
     "spd/routers/referral.py:ReferralIn.trigger_evidence": "触发依据：只存只回显",
     "spd/routers/referral.py:RuleCheckIn.extra": "试算事实：当次求值、不落库，求值对任意取值都不抛错",
-    "spd/routers/tasks.py:StartPathIn.overrides": "路径实例的覆盖项：只存只回显（2026-09-25 没有按它求值的地方）",
-    "spd/routers/tasks.py:InstanceAdjustIn.overrides": "路径实例的覆盖项：只存只回显（2026-09-25 没有按它求值的地方）",
 }
 
 
