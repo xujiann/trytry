@@ -5161,6 +5161,66 @@ def test_医生移动端_发起人撤回自己的转诊单_不摆审核(page, ba
     assert spd_seed["read"](f"/api/spd/referrals/{case['id']}")["status"] == "withdrawn"
 
 
+def test_医生移动端_村医发起上转_退回后看意见再重新发起(page, base_url, seed, spd_seed, admin_call):
+    """P2-795：村医手册写「在『转诊办理』里发起上转，写清理由」「转诊单退回：看退回理由，补材料后重新发起」，手机上的
+    转诊办理原先只有在途单的审核 / 到院 / 承接按钮——发起要回电脑上的管理端，退回的单子（已结束）从清单里消失、
+    退回意见看不到。修后：「发起上转」从本人名下的在管患者里选人、写理由；本人发起、被退回的单列出来，能看退回意见、
+    带着上次的内容重新发起。"""
+    import json
+    from urllib.request import Request
+
+    def call(path, payload=None, token=None):
+        req = Request(f"{base_url}{path}", data=json.dumps(payload).encode() if payload is not None else None,
+                      headers={"Content-Type": "application/json",
+                               **({"Authorization": f"Bearer {token}"} if token else {})})
+        with urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read())
+
+    read = spd_seed["read"]
+    vill_id = next(u["id"] for u in read(f"/api/users?org_id={spd_seed['village']['id']}")
+                   if u["username"] == "e2e_spd_vill")
+    patient = admin_call("POST", "/api/patients", {"name": "E2E移动端上转患者", "id_card": "330127196505052795"})
+    admin_call("POST", "/api/spd/enrollments", {"patient_id": patient["id"], "program_code": "hypertension",
+                                                "org_id": spd_seed["village"]["id"], "doctor_user_id": vill_id})
+
+    def cases():
+        return [c for c in read(f"/api/spd/referrals?patient_id={patient['id']}&open_only=false")]
+
+    page.goto(f"{base_url}/m/doctor")
+    page.fill("#lg-user", "e2e_spd_vill")
+    page.fill("#lg-pass", "passw0rd1")
+    page.click('#login-form button[type="submit"]')
+    expect(page.locator("#workbench")).to_be_visible()
+    page.click('[data-tab="spd"]')
+    page.click('[data-dspd="referral"]')
+    page.click("[data-spd-ref-new]")   # 修前这一页没有发起入口
+    form = page.locator("form.spd-ref-new-form")
+    form.locator('select[name="enrollment"]').select_option(f"{patient['id']}|hypertension")
+    form.locator('select[name="target_org_id"]').select_option(label="E2E县人民医院")
+    form.locator('textarea[name="reason"]').fill("E2E 移动端上转：血压控制不佳")
+    form.locator("button[type=submit]").click()
+    # 等提交后整块重画出新单子（消息行会留着上一次的「操作成功」，不能拿它当信号）
+    expect(page.locator("#spd-list")).to_contain_text("E2E 移动端上转：血压控制不佳")
+    [first] = cases()
+    assert (first["status"], first["initiator_id"], first["reason"], first["target_org_id"]) == (
+        "submitted", vill_id, "E2E 移动端上转：血压控制不佳", seed["org"]["id"]), first
+
+    township = call("/api/auth/login", {"username": "e2e_spd_doc", "password": "passw0rd1"})["access_token"]
+    call(f"/api/spd/referrals/{first['id']}/review", {"action": "reject", "opinion": "请补充近一周血压记录"}, township)
+    page.click('[data-dspd="referral"]')
+    page.click(f'[data-spd-reject-view="{first["id"]}"]')   # 修前退回的单子在手机上看不到
+    expect(page.locator(f'[data-spd-reject-note="{first["id"]}"]')).to_contain_text("请补充近一周血压记录")
+    page.click(f'[data-spd-ref-again="{first["id"]}"]')
+    again = page.locator("form.spd-ref-new-form")
+    expect(again.locator('textarea[name="reason"]')).to_have_value("E2E 移动端上转：血压控制不佳")
+    again.locator('textarea[name="reason"]').fill("E2E 移动端上转：已补一周血压记录")
+    again.locator("button[type=submit]").click()
+    expect(page.locator("#spd-list")).to_contain_text("E2E 移动端上转：已补一周血压记录")
+    latest = max(cases(), key=lambda c: c["id"])
+    assert (latest["status"], latest["reason"], latest["target_org_id"]) == (
+        "submitted", "E2E 移动端上转：已补一周血压记录", first["target_org_id"]), latest
+
+
 def test_医生移动端要佐证的任务_传了佐证才办得结(page, base_url, spd_seed, admin_call, admin_read, tmp_path):
     """P2-84：医生移动端待办卡片原先一律摆着「接收」「办结」、没有上传佐证的入口——要佐证的任务在手机上点办结恒 422
     「该任务要求上传佐证材料后才能办结」，只能回管理端传。现在按状态给按钮：要佐证的多一个「上传佐证」（与管理端同一走法：

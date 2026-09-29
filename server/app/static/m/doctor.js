@@ -300,9 +300,45 @@ function spdReferralOps(r) {
   return ops.join("\n    ");
 }
 
+/** 发起上转的卡片内表单（P2-795）：村医手册写的是「在『转诊办理』里发起，写清理由」，原先这一页只有在途单的
+ *  审核 / 到院 / 承接按钮，发起要回电脑上的管理端。患者从本人名下的在管档案里选（病种随档案带上），目标机构从
+ *  县级机构里选（可空：不写目标的由审核环节定），理由必填。`prefill` 给「重新发起」用。 */
+async function openSpdReferralForm(card, patients, prefill = {}) {
+  let counties;
+  try { counties = await api("/api/organizations?level=county"); }
+  catch (err) { $("#spd-msg").textContent = err.message; return; }
+  const pick = `${prefill.patient_id || ""}|${prefill.program_code || ""}`;
+  cardForm(card, "spd-ref-new-form", `
+    <select name="enrollment" required><option value="">选择患者（本人名下在管）</option>${patients.map((e) =>
+      `<option value="${e.patient_id}|${esc(e.program_code)}"${`${e.patient_id}|${e.program_code}` === pick ? " selected" : ""}>${
+        esc(e.patient_name || String(e.patient_id))}（${esc(e.program_code)}）</option>`).join("")}</select>
+    <select name="target_org_id"><option value="">目标机构（可空）</option>${counties.map((o) =>
+      `<option value="${o.id}"${o.id === prefill.target_org_id ? " selected" : ""}>${esc(o.name)}</option>`).join("")}</select>
+    <textarea name="reason" rows="2" placeholder="转诊理由（血压 / 血糖控制情况、预警症状）" required>${esc(prefill.reason || "")}</textarea>`,
+    "提交上转", (f) => {
+      const [patientId, programCode] = f.enrollment.value.split("|");
+      if (!patientId || !f.reason.value.trim()) {
+        $("#spd-msg").textContent = "请选择患者并写清转诊理由";
+        return;
+      }
+      return spdPost("/api/spd/referrals", { patient_id: Number(patientId), program_code: programCode,
+        direction: "up", target_org_id: f.target_org_id.value ? Number(f.target_org_id.value) : null,
+        reason: f.reason.value.trim() });
+    });
+}
+
 async function loadSpdReferral(box) {
-  const rows = await api("/api/spd/referrals?open_only=true&limit=30");
-  box.innerHTML = rows.map((r) => `<div class="m-card">
+  const me = spdMe || (await api("/api/spd/workbench/doctor-mobile")).user;
+  const mine = me.is_village_doctor ? `village_doctor_id=${me.id}` : `doctor_user_id=${me.id}`;
+  // 本人发起、被退回的单子单列（P2-795）：手册写「看退回理由，补材料后重新发起」，原先这一页只取在途的，
+  // 退回的单子（已结束）从清单里消失，退回意见在手机上看不到
+  const [rows, rejected, patients] = await Promise.all([
+    api("/api/spd/referrals?open_only=true&limit=30"), api("/api/spd/referrals?status=rejected&limit=50"),
+    api(`/api/spd/enrollments?limit=100&${mine}`)]);
+  const myRejected = rejected.filter((r) => r.initiator_id === me.id).slice(0, 10);
+  box.innerHTML = `<div class="m-card" id="spd-ref-new-card">
+      <button type="button" class="ghost-btn" data-spd-ref-new>发起上转</button>
+    </div>` + (rows.map((r) => `<div class="m-card">
     ${kv("患者", esc(r.patient_name))}
     ${kv("方向", r.direction === "up" ? "上转" : "下转")}
     ${kv("当前环节", esc({ submitted: "待卫生院审核", station_reviewed: "待卫生院审核(存量)",
@@ -310,7 +346,29 @@ async function loadSpdReferral(box) {
       arrived: "已到院", down_referred: "待承接随访" }[r.status] || r.status))}
     ${kv("理由", esc(r.reason || "—"))}
     ${spdReferralOps(r)}
-  </div>`).join("") || '<p class="empty">暂无在途转诊</p>';
+  </div>`).join("") || '<p class="empty">暂无在途转诊</p>') + (myRejected.length ? `
+    <p class="hint">我发起的、被退回的（最近 ${myRejected.length} 张）</p>` + myRejected.map((r) => `<div class="m-card">
+    ${kv("患者", esc(r.patient_name))}
+    ${kv("理由", esc(r.reason || "—"))}
+    ${kv("退回时间", esc((r.closed_at || "").replace("T", " ").slice(0, 16) || "—"))}
+    <div data-spd-reject-note="${r.id}"></div>
+    <button type="button" class="ghost-btn" data-spd-reject-view="${r.id}">看退回意见</button>
+    <button type="button" class="ghost-btn" data-spd-ref-again="${r.id}">重新发起</button>
+  </div>`).join("") : "");
+  box.querySelector("[data-spd-ref-new]").addEventListener("click", () =>
+    openSpdReferralForm(box.querySelector("#spd-ref-new-card"), patients));
+  box.querySelectorAll("[data-spd-reject-view]").forEach((b) => b.addEventListener("click", async () => {
+    const note = b.closest(".m-card").querySelector("[data-spd-reject-note]");
+    try {
+      const detail = await api(`/api/spd/referrals/${b.dataset.spdRejectView}`);
+      const step = [...(detail.steps || [])].reverse().find((x) => x.action === "reject");
+      note.innerHTML = kv("退回意见", esc((step && step.opinion) || "（审核人没写意见）"));
+    } catch (err) { note.innerHTML = kv("退回意见", esc(err.message)); }
+  }));
+  box.querySelectorAll("[data-spd-ref-again]").forEach((b) => b.addEventListener("click", () => {
+    const r = myRejected.find((x) => String(x.id) === b.dataset.spdRefAgain);
+    openSpdReferralForm(b.closest(".m-card"), patients, r);
+  }));
   const bind = (attr, path, body) => box.querySelectorAll(`[${attr}]`).forEach((b) =>
     b.addEventListener("click", () => spdPost(path(b), body ? body() : null)));
   // 通过 / 退回的意见在卡片里填（与管理端同一口径：意见可空）。原先 prompt 点"取消"照样通过、
