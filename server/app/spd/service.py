@@ -27,6 +27,7 @@ from .platform import (User, diagnosis_codes, diagnosis_names, notify_user, pati
 from .models import (
     SpdCallTask,
     SpdCandidate,
+    SpdDevice,
     SpdEnrollment,
     SpdFollowupRecord,
     SpdFollowupRule,
@@ -1410,6 +1411,19 @@ PACKAGE_BINDING_STATUS_NAMES = {"bound": "绑定中", "unbound": "已解绑"}
 #: `risk_level` → 中文（成员端四级危险分层）。**不与平台的 1/2/3 互相映射**：
 #: 那是控制情况、这是并发症风险，两把尺子量的不是同一件事。写进给人看的文字（自动干预的目标）也用它（P2-767）
 RISK_LEVEL_NAMES = {"low": "低危", "mid": "中危", "high": "高危", "very_high": "极高危"}
+
+
+def touch_device_sync(db: Session, device_sn: str) -> None:
+    """带设备号的监测值落库时刷新设备台账的「最近同步」（P2-975）：医护端录入、设备批量、居民端回传共用这一处。
+
+    原先只有医护端（`care._record_measurement`）刷新，居民 App 回传收同样的字段、只写监测值——两台都绑好的血压计，居民家里
+    回传的那台「最近同步」一直是空，台账看不出哪台还在用。只认台账里有的序列号，不比对绑给了谁（要不要校验绑定随 P2-746 定）。
+    不 commit。"""
+    if not device_sn:
+        return
+    device = db.query(SpdDevice).filter(SpdDevice.sn == device_sn).first()
+    if device is not None:
+        device.last_sync_at = now_naive()
 
 
 def candidate_reason(matched: list | None) -> str:

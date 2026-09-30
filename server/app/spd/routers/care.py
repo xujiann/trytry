@@ -37,7 +37,6 @@ from ..models import (
     SpdCaseReportTask,
     SpdConsult,
     SpdConsultMessage,
-    SpdDevice,
     SpdEduMaterial,
     SpdEduPush,
     SpdEnrollment,
@@ -53,7 +52,7 @@ from ..service import (ENROLL_STATUS_LABELS, ENROLLMENT_ENDED_STATUSES, MEASUREM
                        RISK_LEVEL_NAMES, award_points, enrollment_for, feedback_appended, judge_measurement,
                        measure_program_for,
                        measure_value_problem, scale_program_mismatch, scale_unusable, scale_version_problem, spawn_task,
-                       unknown_program, withdraw_calls)
+                       touch_device_sync, unknown_program, withdraw_calls)
 from ...visibility import assert_org_writable, assert_patient_visible, scope_patient_list, visible_org_ids
 
 router = APIRouter(
@@ -435,10 +434,7 @@ def _record_measurement(db: Session, body: MeasurementIn, user_id: int | None) -
     )
     db.add(record)
     db.flush()
-    if body.device_sn:
-        device = db.query(SpdDevice).filter(SpdDevice.sn == body.device_sn).first()
-        if device is not None:
-            device.last_sync_at = now_naive()
+    touch_device_sync(db, body.device_sn)
     return record
 
 

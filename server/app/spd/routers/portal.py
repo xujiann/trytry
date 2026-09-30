@@ -55,7 +55,7 @@ from ..service import (CONSULT_ROLES, FOLLOWUP_OPEN_STATUSES, MEASUREMENT_SOURCE
                        measure_program_for, measure_value_problem, move_task,
                        exclusion_problem, feedback_appended, scale_program_mismatch, scale_unusable,
                        scale_version_problem,
-                       spawn_followup_abnormal_task, unknown_program)
+                       spawn_followup_abnormal_task, touch_device_sync, unknown_program)
 from .followup import ABNORMAL_LEVEL_NAMES, FOLLOWUP_SCENE_NAMES
 from fastapi import File, Form, UploadFile
 
@@ -414,6 +414,7 @@ def add_measurement(
         device_sn=body.device_sn, note=body.note,
     )
     db.add(record)
+    touch_device_sync(db, body.device_sn)   # 与医护端录入同一处刷新设备台账的「最近同步」（P2-975）
     db.commit()
     return {"id": record.id, "level": level, "measured_at": record.measured_at.isoformat()}
 
