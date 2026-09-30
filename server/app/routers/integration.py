@@ -84,12 +84,26 @@ _INBOUND_TYPES = {
 }
 
 
+def _validation_summary(exc: RequestValidationError) -> list[dict[str, Any]]:
+    """请求体校验失败落交换日志用的摘要：每条错误只留 type / loc / msg，丢掉 input 与 ctx（P2-1143，见 `_InboundRoute`）。"""
+    return [{key: error.get(key) for key in ("type", "loc", "msg")} for error in exc.errors()]
+
+
 class _InboundRoute(APIRoute):
     """入站端点在进处理函数之前被拒（请求体校验 422、未登录 401、角色 403）同样落交换日志（P2-521）。
 
     `_log_exchange` 写着「失败也留痕」、ORU 写着「全部入站落 ExchangeLog」，原先只有进了处理函数的（`_run_inbound`）才记：
     空消息、缺字段、FHIR 资源不是对象、令牌过期、账号角色不对，接口方收到的全是失败，监控页却只数得到那几条解析失败的，
     失败率看着比真实的低。处理函数里已经记过的异常带着标记（`_run_inbound`），这里不重记。
+
+    请求体校验失败只记每条错误的 type / loc / msg（`_validation_summary`），不记 pydantic 附带的 input 与 ctx（P2-1143）：
+    input 是整个请求体——字段名写错的 HL7 是整条报文（PID 的证件号、姓名、电话，ORU 还有 OBX 检验结果），发成数组的 FHIR
+    是整个资源。交换日志没有保留期，任一机构的经办都读得到（`exchange_logs`），同样的原文在 ESB 那一侧只给管理员看（P0-49）。
+    回给对接方的 422 响应不变（那是它自己发来的报文）。修前落下的存量不在迁移里改：运维按
+    `SELECT id, created_at, source_system, message_type FROM exchange_logs WHERE error_detail LIKE '422: 请求体校验失败%'
+    AND error_detail LIKE '%''input'':%'` 出清单，核对后把这些行的 error_detail 改写成不带报文的摘要（如
+    `UPDATE exchange_logs SET error_detail = '422: 请求体校验失败（原文含报文，按 P2-1143 清除）' WHERE id IN (…)`）；
+    成败、消息类型、来源系统不动，失败率统计不变。
     """
 
     def get_route_handler(self):
@@ -103,7 +117,7 @@ class _InboundRoute(APIRoute):
                 return await handler(request)
             except (RequestValidationError, HTTPException) as exc:
                 if not getattr(exc, "exchange_logged", False):
-                    detail = (f"422: 请求体校验失败 {exc.errors()!r}" if isinstance(exc, RequestValidationError)
+                    detail = (f"422: 请求体校验失败 {_validation_summary(exc)!r}" if isinstance(exc, RequestValidationError)
                               else f"{exc.status_code}: {exc.detail}")
                     await run_in_threadpool(_log_exchange, message_type, False, detail,
                                             request.headers.get("x-source-system", ""))
