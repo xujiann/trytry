@@ -279,6 +279,10 @@ def update_charge_item(
     if item is None:
         raise HTTPException(status_code=404, detail="收费项目不存在")
     changes = body.model_dump(exclude_unset=True)
+    # 停用的再启用与新建同一道字典管控（P2-923）：原先启用了四统一收费字典，字典外的自编码项目新建 422，
+    # 可「停用 → 再启用」照样回到目录、照常计费。排在改价之前，免得价已改、启用被拦
+    if changes.get("active") and not item.active and _charge_dict_blocked(db, item.code):
+        raise HTTPException(status_code=422, detail="编码不在四统一收费字典内")
     # 价格从 changes 里摘出来单独走 _change_price，且**必须排在下面的赋值循环之前**：
     # 抢输时它会回滚，排在后面会把已经改好的名称/分类一起冲掉；留在循环里则等于
     # 在条件 UPDATE 之后再无条件写一次价，把刚关上的竞态重新打开。
