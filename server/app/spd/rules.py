@@ -336,6 +336,10 @@ def scale_overlap_problem(scoring: dict) -> str:
     return ""
 
 
+#: 量表得分落段前取整到的小数位（P2-985）：分值逐项累加后先取到这个精度再和分段上下限比，返回与提示照旧取两位
+_SCORE_DIGITS = 6
+
+
 def score_scale(items: list[dict], answers: dict, scoring: dict) -> dict:
     """量表评分：按题目选项分值累加，再落到 scoring.ranges 给出风险等级与建议。
 
@@ -344,7 +348,7 @@ def score_scale(items: list[dict], answers: dict, scoring: dict) -> dict:
     未作答的题按 0 分计入，并在返回里给出 `answered` / `total_items`——
     做了一半的量表不该看起来和"全选最低分"一样。
     """
-    total = 0.0
+    parts: list[float] = []
     answered = 0
     for item in items or []:
         key = item.get("key")
@@ -356,14 +360,18 @@ def score_scale(items: list[dict], answers: dict, scoring: dict) -> dict:
         options = {str(o.get("label")): o.get("score", 0) for o in item.get("options", [])}
         if item_type == "multi":
             for one in value if isinstance(value, list) else [value]:
-                total += float(options.get(str(one), 0) or 0)
+                parts.append(float(options.get(str(one), 0) or 0))
         elif item_type == "number":
             per = _as_number(item.get("score_per_unit"))
             number = _as_number(value)
             if per is not None and number is not None:
-                total += per * number
+                parts.append(per * number)
         else:
-            total += float(options.get(str(value), 0) or 0)
+            parts.append(float(options.get(str(value), 0) or 0))
+    # 逐项分值用 fsum 相加、取到固定精度再落段（P2-985）：原先浮点逐项累加再直接和上下限比，0.1+0.2 = 0.30000000000000004
+    # 落不进「0–0.3」，0.7+0.1+0.1+0.1 = 0.9999999999999999 落不进「1 起」——压线的分挤进分段缺口记「未分级」，筛查判
+    # 正常、不进目标池，提示语印的得分却是 0.3 / 1.0；同一张表把分值 ×10 写成整数就判得出来
+    total = round(math.fsum(parts), _SCORE_DIGITS)
 
     risk, advice, banded = "", "", False
     ranges = (scoring or {}).get("ranges", [])
