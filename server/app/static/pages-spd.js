@@ -1658,6 +1658,8 @@ async function renderSpdPatients() {
       const picked = await spdModal(`${scale.name} · 逐题作答（没答的题留空）`, spdQuestionFields(scale.items, "q_"));
       if (!picked) return;
       body.answers = spdCollectAnswers(scale.items, picked, "q_");
+      // 带上作答的那一版（P2-921）：页面打开后发布了新版，后端按编码取新版评分、结论对不上题目，带上后改为 409 请刷新
+      body.scale_id = scale.id;
     }
     return postAction("/api/spd/screenings", body, "#spd-screen-msg");
   };
@@ -3851,8 +3853,9 @@ async function renderSpdMember() {
     if (!answersRaw) return;
     const answers = spdCollectAnswers(scale.items, answersRaw, "q_");
     try {
+      // 带上作答的那一版（P2-921）：与筛查同一句
       const r = await api("/api/spd/assessments", { method: "POST", body: JSON.stringify({
-        patient_id: picked.patient_id, scale_code: scale.code, answers }) });
+        patient_id: picked.patient_id, scale_code: scale.code, scale_id: scale.id, answers }) });
       /* 不调 route() 刷新整页——那会把这条结果消息一并刷掉。
        * 统计卡片下次进入页面自然更新，当下要紧的是让操作者看到评估结论。 */
       setMsg("#spd-assess-msg",

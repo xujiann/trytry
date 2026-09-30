@@ -19,6 +19,7 @@ from ...config import settings
 from ...database import get_db
 from ...patchtypes import UNSET
 from ...datetypes import DateStr, OptionalDateStr, OptionalDateTimeSecStr
+from ...numtypes import INT4_MAX, INT4_MIN
 from ...texttypes import NON_BLANK
 from ...deps import (
     get_current_user,
@@ -50,7 +51,7 @@ from ..models import (
 from ..rules import score_scale
 from ..service import (ENROLL_STATUS_LABELS, ENROLLMENT_ENDED_STATUSES, MEASUREMENT_SOURCE_NAMES, REVISIT_OPEN_STATUSES,
                        RISK_LEVEL_NAMES, award_points, enrollment_for, judge_measurement, measure_program_for,
-                       measure_value_problem, scale_program_mismatch, scale_unusable, spawn_task,
+                       measure_value_problem, scale_program_mismatch, scale_unusable, scale_version_problem, spawn_task,
                        unknown_program, withdraw_calls)
 from ...visibility import assert_org_writable, assert_patient_visible, scope_patient_list, visible_org_ids
 
@@ -636,6 +637,8 @@ def measurement_trend(
 class AssessIn(BaseModel):
     patient_id: int
     scale_code: str = Field(min_length=1, max_length=32, pattern=NON_BLANK)
+    # 作答的那一版（P2-921）：不是现行发布版 409；不带照旧按现行版
+    scale_id: int | None = Field(default=None, ge=INT4_MIN, le=INT4_MAX)
     answers: dict = Field(default_factory=dict)
     program_code: str = Field(default="", max_length=32)
     channel: str = Field(default="doctor", pattern="^(doctor|self)$")
@@ -674,6 +677,9 @@ def create_assessment(
     )
     if scale is None:
         raise HTTPException(status_code=404, detail="量表不存在或未发布")
+    version_problem = scale_version_problem(scale, body.scale_id)   # 按旧版的题作答、按新版评分（P2-921）
+    if version_problem:
+        raise HTTPException(status_code=409, detail=version_problem)
     scale_problem = scale_unusable(scale)   # 修前存进去的坏量表：说清楚、不 500（P2-80）
     # 写了病种的，量表须是这个病种的或通用的（P2-98）：别的病种的量表评出的风险等级会回写这个病种的档案、高危自动派干预
     scale_problem = scale_problem or scale_program_mismatch(scale, body.program_code, "评估")

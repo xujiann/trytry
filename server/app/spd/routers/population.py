@@ -28,6 +28,7 @@ from ...config import settings
 from ...database import get_db
 from ...patchtypes import UNSET
 from ...datetypes import OptionalDateStr
+from ...numtypes import INT4_MAX, INT4_MIN
 from ...texttypes import NON_BLANK
 from ...deps import get_current_user, paginate, require_date, require_roles, row_dict, keyword_like
 from ..platform import (Organization, Patient, User, assignee_outside_org, id_card_variants, pii_filter,
@@ -57,7 +58,7 @@ from ..models import (
 from ..rules import RuleError, as_validated, evaluate, is_suspect_risk, score_scale
 from ..service import (MEASUREMENT_SOURCE_NAMES, TASK_OPEN_STATUSES, actively_enrolled, award_points, build_facts,
                        candidate_undistributed, close_open_work, match_program, migration_void_reason, package_items_ok,
-                       scale_program_mismatch, scale_unusable, unknown_program)
+                       scale_program_mismatch, scale_unusable, scale_version_problem, unknown_program)
 
 # 筛查来源、分组范围文案（措辞照抄 SpdScreening.source / SpdGroup.scope 列注释——P2-74）
 SCREENING_SOURCE_NAMES = {"opportunistic": "机会性", "active": "主动筛查", "self": "居民自查", "import": "数据比对"}
@@ -452,6 +453,8 @@ class ScreeningIn(BaseModel):
     source: str = Field(default="opportunistic", pattern="^(opportunistic|active|self|import)$")
     org_id: int | None = None
     scale_code: str = Field(default="", max_length=32)
+    # 作答的那一版（P2-921）：不是现行发布版 409；不带照旧按现行版
+    scale_id: int | None = Field(default=None, ge=INT4_MIN, le=INT4_MAX)
     answers: dict = Field(default_factory=dict)
 
 
@@ -508,6 +511,9 @@ def create_screening(
         )
         if scale is None:
             raise HTTPException(status_code=404, detail="量表不存在或未发布")
+        version_problem = scale_version_problem(scale, body.scale_id)   # 与评估同一句（P2-921）
+        if version_problem:
+            raise HTTPException(status_code=409, detail=version_problem)
         scale_problem = scale_unusable(scale)   # 修前存进去的坏量表：说清楚、不 500（P2-80）
         # 别的病种的量表不收（P2-98）：按糖尿病问卷的分数判高血压疑似，这位患者进的是高血压的目标池
         scale_problem = scale_problem or scale_program_mismatch(scale, body.program_code, "筛查")

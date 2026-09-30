@@ -1790,7 +1790,8 @@ async function renderSpdScreen(box) {
         if (el.checked) (answers[el.dataset.q] = answers[el.dataset.q] || []).push(el.value);
       } else if (el.value) answers[el.dataset.q] = el.value;
     });
-    const body = { program_code: scale.program_code, scale_code: scale.code, answers };
+    // 带上作答的那一版（P2-921）：页面打开后发布了新版，原先按新版评分、结论对不上题目；现在 409 请刷新
+    const body = { program_code: scale.program_code, scale_code: scale.code, scale_id: scale.id, answers };
     if (viewingPatientId !== null) body.patient_id = viewingPatientId;
     try {
       const r = await authApi("/api/portal/spd/screenings", {

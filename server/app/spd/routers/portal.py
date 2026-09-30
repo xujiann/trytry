@@ -53,7 +53,8 @@ from ..service import (CONSULT_ROLES, FOLLOWUP_OPEN_STATUSES, MEASUREMENT_SOURCE
                        REFERRAL_STATUS_LABELS, TASK_COMPLETABLE_STATUSES, TASK_OPEN_STATUSES, actively_enrolled, answers_problem, referral_ends,
                        close_followup_record, enrollment_for, judge_measurement, mark_intervention_done,
                        measure_program_for, measure_value_problem, move_task,
-                       scale_program_mismatch, scale_unusable, spawn_followup_abnormal_task, unknown_program)
+                       scale_program_mismatch, scale_unusable, scale_version_problem, spawn_followup_abnormal_task,
+                       unknown_program)
 from .followup import ABNORMAL_LEVEL_NAMES, FOLLOWUP_SCENE_NAMES
 from fastapi import File, Form, UploadFile
 
@@ -539,6 +540,8 @@ class SelfScreenIn(BaseModel):
     patient_id: int | None = None
     program_code: str = Field(min_length=1, max_length=32, pattern=NON_BLANK)
     scale_code: str = Field(default="", max_length=32)
+    # 作答的那一版（P2-921）：不是现行发布版 409；不带照旧按现行版
+    scale_id: int | None = Field(default=None, ge=INT4_MIN, le=INT4_MAX)
     answers: dict = Field(default_factory=dict)
     draft: bool = False
 
@@ -601,6 +604,9 @@ def self_screening(
         )
         if scale is None:
             raise HTTPException(status_code=404, detail="量表不存在或未发布")
+        version_problem = scale_version_problem(scale, body.scale_id)   # 与评估、筛查同一句（P2-921）
+        if version_problem:
+            raise HTTPException(status_code=409, detail=version_problem)
         scale_problem = scale_unusable(scale)   # 修前存进去的坏量表：说清楚、不 500（P2-80）
         # 与筛查登记同一口径（P2-98）：居民端页面按量表带病种，接口调用方可以对不上
         scale_problem = scale_problem or scale_program_mismatch(scale, body.program_code, "筛查")

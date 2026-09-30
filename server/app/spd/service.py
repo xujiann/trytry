@@ -248,6 +248,19 @@ def scale_unusable(scale: SpdScale) -> str:
     return f"量表配置有误（{problem}），暂不能作答，请联系管理员修正" if problem else ""
 
 
+def scale_version_problem(scale: SpdScale, answered_id: int | None) -> str:
+    """作答的那一版不是现行发布版时说出来（P2-921）；没带作答版本的旧调用照旧按现行版评分，返回空串。
+
+    筛查、评估、居民自查都按量表编码取「最新发布」的那一版评分，还把那一版记进评估记录；页面按载入时的目录出题、提交只送
+    编码。页面打开之后发布了同编码的新版（或停用了作答的那一版、回落到旧版），这一页上照旧弹出原来的题目，提交后按另一版的
+    题目与分段评分（按 v1 作答 5 分高危，按 v2 评成 0 分低危），评估记录还写成另一版——「量表版本随记录固化」对不上
+    （P1-136 ③ 后端那一半）。调用方带上作答的那一版，不是现行版就 409，请刷新后重答。
+    """
+    if answered_id is None or answered_id == scale.id:
+        return ""
+    return f"量表「{scale.name}」现行发布的是 {scale.version}，不是作答时的那一版，题目与评分可能已变，请刷新后重答"
+
+
 def scale_program_mismatch(scale: SpdScale, program_code: str, what: str) -> str:
     """量表挂在病种上（空串是通用量表）：拿别的病种的量表给这个病种筛查 / 评估，按那张量表的分数判高危——筛查即进
     这个病种的疑似目标池，评估即回写这个病种档案的风险等级、高危自动派干预与复诊（P2-98）。对得上返回空串。"""
