@@ -907,7 +907,9 @@ def score_of(indicator: SpdIndicator, value: float) -> tuple[float, str]:
         if value >= target:
             return full, ""
         got = round(full * value / target, 2) if target else 0.0
-        return got, f"未达目标值{target}（实际{round(value, 2)}）"
+        # 「实际」按判定用的精度印（P2-991，与公式求值同一个 4 位，P2-892）：原先印两位，分母上万时 89.9955 判未达 90、
+        # 理由却写「未达目标值90.0（实际90.0）」，自相矛盾
+        return got, f"未达目标值{target}（实际{round(value, 4)}）"
     if kind == "step":
         for step in rule.get("steps", []):
             low, high = step.get("min"), step.get("max")
