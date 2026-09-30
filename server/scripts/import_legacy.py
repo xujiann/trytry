@@ -56,6 +56,10 @@
 （P2-732，与患者导入「同批内重复单独报错」同一口径）——同日两笔同额挂号、同机构两位同名员工，后一条库里原本没有，
 原先被当成已存在悄悄丢掉。
 
+原样落库的文本列按模型列宽校验（P2-1094）：姓名、职称、职务、地址、医生、诊断编码、病区、床号、药品编码超过列宽的
+记错误行、点名哪一列几个字，别的行照导；诊断名称、摘要、药品名称照旧超长截断。万一写库仍中途失败：汇总照样打出
+（点名回滚的是第几行到第几行的那一批）、错误明细照样落盘，异常照原样抛出。
+
 退出码：0=全部行成功（含幂等跳过）；1=存在错误行；2=参数/文件错误。
 数据库连接沿用 MEDPLAT_DATABASE_URL（与应用一致）。
 """
@@ -104,6 +108,13 @@ def _field_len(model, field: str) -> tuple[int, int]:
     return low, high
 
 
+def _column_len(model, column: str) -> int | None:
+    """模型列宽（`String(N)` 的 N；不限长为 None）：与 `consents.PATIENT_NAME_MAX` 等同一个真源，不手抄数字（P2-1094）。
+
+    `_field_len` 管请求模型：导入没有请求模型的列（病区、床号、药品编码……）按它落进的模型列算。"""
+    return model.__table__.c[column].type.length
+
+
 ORG_TYPES = {"lead_hospital", "township", "village", "public_health"}
 ORG_NAME_LEN = _field_len(OrganizationCreate, "name")
 ORG_LEVELS = {"city", "county", "township", "village"}
@@ -123,6 +134,8 @@ class ImportReport:
     errors: list[tuple[int, str]] = field(default_factory=list)  # (行号, 原因)
     # 错误行原始数据（供 errors.csv 落盘）：(行号, 原因, 原始行)
     error_rows: list[tuple[int, str, dict]] = field(default_factory=list)
+    # 写库中途失败时回滚的是哪一批、为什么（P2-1094，见 `ImportContext.abort`）；正常跑完为空
+    aborted: str = ""
 
     def error(self, line_no: int, reason: str, row: dict | None = None) -> None:
         self.errors.append((line_no, reason))
@@ -138,6 +151,8 @@ class ImportReport:
         ]
         if self.filled:   # 只在补过的时候出现，其余实体的报告一字不变
             lines.insert(3, f"  {'将补' if self.dry_run else '已补'}到期日(已存在、原先为空): {self.filled} 行")
+        if self.aborted:   # 紧跟抬头：「已落库」三个字底下先说清中途断了（P2-1094）；正常跑完的报告一字不变
+            lines.insert(1, f"  中断: {self.aborted}")
         for line_no, reason in self.errors[:50]:
             lines.append(f"    - 第 {line_no} 行: {reason}")
         if len(self.errors) > 50:
@@ -160,6 +175,10 @@ class ImportContext:
         self.operator = operator
         self.processed = 0
         self._pending = 0
+        # 读到第几行、未提交的这一批从第几行起、上次提交时的计数：写库中途失败时据此说清哪一批回滚了（P2-1094）
+        self.line_no = 0
+        self.batch_from: int | None = None
+        self._committed = (0, 0)   # (imported, filled)
 
     def tick(self) -> None:
         self.processed += 1
@@ -170,11 +189,39 @@ class ImportContext:
                 f"（导入 {r.imported} / 跳过 {r.skipped} / 错误 {len(r.errors)}）"
             )
 
-    def checkpoint(self) -> None:
+    def checkpoint(self, next_from: int | None = None) -> None:
+        """`next_from`：提交后下一批从第几行算起。默认当前行已写进这一批；处方按张提交，触发提交的那一行是下一张的
+        首行、还没写，由处方导入器传进来（P2-1094）。"""
         self._pending += 1
         if not self.dry_run and self._pending >= self.batch_size:
             self.db.commit()
             self._pending = 0
+            self.batch_from = self.line_no + 1 if next_from is None else next_from
+            self._committed = (self.report.imported, self.report.filled)
+
+    def abort(self, exc: BaseException) -> str:
+        """导入中途失败（P2-1094；多是批末提交时写库出错）：记下回滚的是第几行到第几行的那一批，计数退回上次提交时，
+        返回这句说明。
+
+        原先提交一失败就「回滚、原样抛出」：汇总不打，已落库多少、哪些行随这一批丢了都说不清，errors.csv 也不落盘。
+        原因只取驱动报错的首行：SQL 与参数（可能带证件号）照旧只在异常原文里。
+        """
+        r = self.report
+        end = self.line_no
+        start = self.batch_from or end
+        cause = getattr(exc, "orig", None) or exc   # SQLAlchemy 包着的驱动原错
+        detail = str(cause).strip()
+        reason = type(cause).__name__ + (f": {detail.splitlines()[0]}" if detail else "")
+        if self.dry_run:
+            r.aborted = f"第 {start}～{end} 行校验到一半失败（dry-run 不落库），第 {end} 行之后未校验。原因: {reason}"
+            return r.aborted
+        lost = r.imported + r.filled - sum(self._committed)
+        r.imported, r.filled = self._committed
+        # 刚提交完、下一行还没读进来就断了（读文件出错）：没有回滚的行
+        done = (f"第 {start}～{end} 行这一批整批回滚（其中计入导入的 {lost} 行未落库），此前各批已提交" if start <= end
+                else f"第 {end} 行及之前各批均已提交")
+        r.aborted = f"{done}；第 {end} 行之后未处理，排除原因后重导整个文件即可（已落库的按幂等键跳过）。原因: {reason}"
+        return r.aborted
 
     def operator_id(self) -> int:
         """created_by 经办账号解析（一次查询缓存）。"""
@@ -195,6 +242,26 @@ def _require(row: dict, line_no: int, report: ImportReport, *cols: str) -> bool:
         report.error(line_no, f"缺少必填列: {', '.join(missing)}", row)
         return False
     return True
+
+
+def _too_long(row: dict, line_no: int, report: ImportReport, **columns: tuple[type, str]) -> bool:
+    """原样落库的文本列逐列对模型列宽（P2-1094）：`CSV 列=(模型, 列)`，取值与落库同一句（去首尾空白）；
+    超长的记错误行，点名哪一列、几个字、上限几个字，调用方跳过这一行。
+
+    原先只有机构名查了长度：开发库（SQLite 不管 VARCHAR 多长）照存；生产库（PostgreSQL）批末提交时
+    StringDataRightTruncation，同一批里别人的有效行跟着回滚、导入中断，汇总不打、errors.csv 不落；dry-run 从不提交，
+    超长行还算进「将导入」。诊断名称、摘要、药品名称照旧超长截断；电话是加密列、存的是密文，上限随 P1-61 / 加密列
+    容量一并定（与更正的 `consents._check_correction_value` 同一句），这里都不另起口径。
+    """
+    over = []
+    for col, (model, column) in columns.items():
+        value, limit = (row.get(col) or "").strip(), _column_len(model, column)
+        if limit is not None and len(value) > limit:
+            over.append(f"{col} {len(value)} 字（上限 {limit} 字）")
+    if over:
+        report.error(line_no, f"列超长: {'；'.join(over)}", row)
+        return True
+    return False
 
 
 def _dup_in_batch(seen: dict, key, line_no: int, report: ImportReport, row: dict, what: str) -> bool:
@@ -319,6 +386,8 @@ def import_organizations(db, rows, report: ImportReport, ctx: ImportContext) -> 
             # 与建档同口径（P2-40）：单字机构名让机构清单的出参校验失败、对所有人 500；超长的在 PG 上写库即失败
             report.error(line_no, f"name 长度非法: {len(name)} 字（须为 {low}～{high} 字）", row)
             continue
+        if _too_long(row, line_no, report, address=(Organization, "address")):   # P2-1094
+            continue
         if org_type not in ORG_TYPES:
             report.error(line_no, f"org_type 非法: {org_type}（须为 {'/'.join(sorted(ORG_TYPES))}）", row)
             continue
@@ -367,6 +436,8 @@ def import_patients(db, rows, report: ImportReport, ctx: ImportContext) -> None:
     seen_batch: set[str] = set()
     for line_no, row in rows:
         if not _require(row, line_no, report, "name", "id_card"):
+            continue
+        if _too_long(row, line_no, report, name=(Patient, "name")):   # P2-1094
             continue
         id_card = row["id_card"].strip()
         if len(id_card) not in (15, 18):
@@ -489,6 +560,9 @@ def import_employees(db, rows, report: ImportReport, ctx: ImportContext) -> None
     for line_no, row in rows:
         if not _require(row, line_no, report, "org_name", "name"):
             continue
+        if _too_long(row, line_no, report, name=(Employee, "name"), title=(Employee, "title"),
+                     position=(Employee, "position")):   # P2-1094
+            continue
         name = row["name"].strip()
         org_id = _resolve_org(row, line_no, report, orgs)
         if org_id is None:
@@ -528,6 +602,9 @@ def import_encounters(db, rows, report: ImportReport, ctx: ImportContext) -> Non
     seen_batch: dict[tuple, int] = {}
     for line_no, row in rows:
         if not _require(row, line_no, report, "org_name", "visit_date"):
+            continue
+        if _too_long(row, line_no, report, doctor_name=(Encounter, "doctor_name"),
+                     diagnosis_code=(Encounter, "diagnosis_code")):   # P2-1094
             continue
         visit_date = row["visit_date"].strip()
         if not _valid_date(visit_date):
@@ -601,7 +678,7 @@ def import_prescriptions(db, rows, report: ImportReport, ctx: ImportContext) -> 
     group: dict | None = None  # 当前处方组：header + items + tainted
     seen_batch: dict[tuple, int] = {}
 
-    def flush_group() -> None:
+    def flush_group(next_from: int | None = None) -> None:
         nonlocal group
         if group is None:
             return
@@ -632,7 +709,7 @@ def import_prescriptions(db, rows, report: ImportReport, ctx: ImportContext) -> 
                 db.add(PrescriptionItem(prescription_id=rx.id, **item))
             seen_batch[key] = group["line_no"]
             report.imported += 1
-            ctx.checkpoint()
+            ctx.checkpoint(next_from)
         finally:
             group = None
 
@@ -640,7 +717,7 @@ def import_prescriptions(db, rows, report: ImportReport, ctx: ImportContext) -> 
     for line_no, row in rows:
         rx_no = (row.get("rx_no") or "").strip()
         if group is not None and rx_no != group["rx_no"]:
-            flush_group()
+            flush_group(next_from=line_no)   # 本行是下一张处方的首行，还没写进要提交的这一批（P2-1094）
         if not _require(row, line_no, report, "rx_no", "org_name", "rx_date", "drug_code", "drug_name"):
             if group is not None and rx_no == group["rx_no"]:
                 group["tainted"] = True
@@ -676,6 +753,9 @@ def import_prescriptions(db, rows, report: ImportReport, ctx: ImportContext) -> 
                 "tainted": tainted or rx_no == bad_rx_no,
             }
         # 明细行（组首行同时也是一条明细）
+        if _too_long(row, line_no, report, drug_code=(PrescriptionItem, "drug_code")):   # P2-1094：与剂量非法同样整组不导
+            group["tainted"] = True
+            continue
         daily_dose_raw = (row.get("daily_dose") or "").strip()
         days_raw = (row.get("days") or "").strip() or "1"
         try:
@@ -810,6 +890,10 @@ def import_admissions(db, rows, report: ImportReport, ctx: ImportContext) -> Non
     for line_no, row in rows:
         if not _require(row, line_no, report, "org_name", "ward_name", "bed_no", "admitted_at"):
             continue
+        # 病区、床位缺了会就地建（P2-1094）：超长的病区名 / 床号在生产库上 flush 即失败，连同这一批别人的行一起回滚
+        if _too_long(row, line_no, report, ward_name=(Ward, "name"), bed_no=(Bed, "bed_no"),
+                     doctor_name=(Admission, "doctor_name")):
+            continue
         admitted_at = row["admitted_at"].strip()
         if not _valid_date(admitted_at):
             report.error(line_no, f"admitted_at 格式非法: {admitted_at}（须 YYYY-MM-DD）", row)
@@ -916,16 +1000,19 @@ def run_import(
 
     CSV 流式逐行处理；实导每 batch_size 个导入行提交一次；错误行不中断，
     结束后（有错且指定 errors_csv 时）落盘错误明细。
+
+    导入中途失败（P2-1094，多是批末提交时写库出错）：回滚未提交的这一批，错误明细照样落盘、汇总照样经 `out` 打出
+    （点名回滚的是第几行到第几行），异常照原样抛出并附上同一句说明——退出码与原先一样。
     """
     report = ImportReport(entity=entity, dry_run=dry_run)
     create_all_for_scripts(dry_run)  # 只在开发环境、非 dry-run 时建表（P2-1089，ADR-0002）
     db = SessionLocal()
     fieldnames: list[str] = []
+    ctx = ImportContext(
+        db, report, dry_run=dry_run, batch_size=batch_size,
+        progress_every=progress_every, out=out, operator=operator,
+    )
     try:
-        ctx = ImportContext(
-            db, report, dry_run=dry_run, batch_size=batch_size,
-            progress_every=progress_every, out=out, operator=operator,
-        )
         with open(csv_path, newline="", encoding="utf-8-sig") as f:
             reader = csv.DictReader(f)
             fieldnames = list(reader.fieldnames or [])
@@ -933,6 +1020,9 @@ def run_import(
             def stream():
                 # 行号从 2 起（第 1 行为表头），便于对照原始文件定位错误
                 for i, row in enumerate(reader, start=2):
+                    ctx.line_no = i
+                    if ctx.batch_from is None:
+                        ctx.batch_from = i
                     yield i, {k: (v or "") for k, v in row.items() if k is not None}
                     ctx.tick()
 
@@ -941,13 +1031,20 @@ def run_import(
             db.rollback()
         else:
             db.commit()
-    except Exception:
+    except Exception as exc:
         db.rollback()
+        if ctx.line_no:   # 读过行才有「哪一批回滚」可说；开读之前的错（经办账号不存在等）照旧原样抛出
+            exc.add_note(ctx.abort(exc))
         raise
     finally:
         db.close()
-    if errors_csv and report.error_rows:
-        _write_errors_csv(Path(errors_csv), fieldnames, report)
+        # 原先落盘写在 try 之后，一提交失败就跳过了（P2-1094）：之前查出的错误行随之丢失
+        if errors_csv and report.error_rows:
+            _write_errors_csv(Path(errors_csv), fieldnames, report)
+        if report.aborted:   # 异常照原样往外抛、调用方拿不到报告：汇总在这里打
+            out(report.summary())
+            if errors_csv and report.error_rows:
+                out(f"  错误行明细已写入: {errors_csv}")
     return report
 
 
