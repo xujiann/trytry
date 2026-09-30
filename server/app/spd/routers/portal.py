@@ -626,7 +626,7 @@ def self_screening(
     risk: str = str(graded["risk_level"])
     # 排除规则与医护筛查同一口径先跑（P2-935）：原先只按量表出结论，15 岁的居民自查高危 → 可申请 → 受理，进了成人
     # 高血压的目标池。纳入规则不跑——自查不进目标池，疑似照旧只看量表；命中排除的记「排除」、不提示申请，并说出是哪条
-    program = db.query(SpdProgram).filter(SpdProgram.code == body.program_code).first()
+    program = db.query(SpdProgram).filter(SpdProgram.code == body.program_code, SpdProgram.active.is_(True)).first()
     excluded = exclusion_problem(db, patient.id, program, {"score": graded["score"]} if scale else None,
                                  answers=body.answers) if program is not None else ""
     record = SpdScreening(
@@ -676,7 +676,7 @@ def apply_service(
     if actively_enrolled(db, patient.id, body.program_code):
         raise HTTPException(status_code=409, detail="该病种已在专病管理中，无需申请")
     # 命中病种排除规则的不收（P2-935，与自查、受理同一口径）：原先 15 岁的居民照样申请成人高血压管理、受理进目标池
-    program = db.query(SpdProgram).filter(SpdProgram.code == body.program_code).first()
+    program = db.query(SpdProgram).filter(SpdProgram.code == body.program_code, SpdProgram.active.is_(True)).first()
     excluded = exclusion_problem(db, patient.id, program) if program is not None else ""
     if excluded:
         raise HTTPException(status_code=409, detail=f"{excluded}，不能申请该病种的专病服务")
