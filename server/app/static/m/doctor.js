@@ -892,12 +892,28 @@ async function loadRound() {
   await refreshRoundDetail();
 }
 
+// 区块只画最后一次切换的那一位（P1-231）：先切甲、立刻改乙，甲那一批晚到会把甲的病程 / 体征画在乙名下
+let roundSeq = 0;
+
 async function refreshRoundDetail() {
-  const [completeness, notes, vitals] = await Promise.all([
-    api(`/api/inpatient/admissions/${roundAdmissionId}/document-completeness`),
-    api(`/api/inpatient/admissions/${roundAdmissionId}/progress-notes`),
-    api(`/api/inpatient/admissions/${roundAdmissionId}/vitals`),
-  ]);
+  const seq = ++roundSeq;
+  const admissionId = roundAdmissionId;
+  let completeness, notes, vitals;
+  try {
+    [completeness, notes, vitals] = await Promise.all([
+      api(`/api/inpatient/admissions/${admissionId}/document-completeness`),
+      api(`/api/inpatient/admissions/${admissionId}/progress-notes`),
+      api(`/api/inpatient/admissions/${admissionId}/vitals`),
+    ]);
+  } catch (err) {
+    // 取不到就说清楚、清掉上一位的区块——原先报错没人接，屏幕上一直挂着上一位的病程 / 体征
+    if (seq !== roundSeq) return;
+    $("#round-status").innerHTML = `<p class="empty">${esc(err.message)}</p>`;
+    $("#round-notes").innerHTML = "";
+    $("#round-vitals").innerHTML = "";
+    return;
+  }
+  if (seq !== roundSeq) return;
   $("#round-status").innerHTML = `<div class="m-card">
     ${kv("文书完整性", completeness.complete
       ? '<span class="tag green">完整</span>'
@@ -928,6 +944,12 @@ async function refreshRoundDetail() {
 
 $("#round-pick").addEventListener("submit", async (e) => {
   e.preventDefault();
+  roundAdmissionId = Number($("#round-adm").value);
+  await refreshRoundDetail();
+});
+// 下拉一改就切换（P1-231）：原先只有点「切换患者」才改写入对象——下拉显示乙、没点切换，病程与体征照旧写进甲，
+// 回执照样「病程已记录」。区块不写姓名，屏幕上看不出没切过去
+$("#round-adm").addEventListener("change", async () => {
   roundAdmissionId = Number($("#round-adm").value);
   await refreshRoundDetail();
 });
@@ -963,7 +985,8 @@ $("#round-vital").addEventListener("submit", async (e) => {
   try {
     await api(`/api/inpatient/admissions/${roundAdmissionId}/vitals`, {
       method: "POST", body: JSON.stringify(body) });
-    ["#rv-temp", "#rv-pulse", "#rv-resp", "#rv-sbp", "#rv-dbp", "#rv-in", "#rv-out", "#rv-weight"]
+    // 测量时刻一并清空（P1-231）：原先只清数值，换人后下一位带着上一位的测量时刻
+    ["#rv-at", "#rv-temp", "#rv-pulse", "#rv-resp", "#rv-sbp", "#rv-dbp", "#rv-in", "#rv-out", "#rv-weight"]
       .forEach((s) => { $(s).value = ""; });
     setMsg("#round-msg", "体征已录入", true);
     await refreshRoundDetail();

@@ -132,11 +132,14 @@ async function renderClinicalDocs() {
          <td>${esc(h.critical_count)}</td><td>${esc(h.content)}</td></tr>`)}
       ${handovers.length >= 50 ? '<p class="desc"><b>只列最新 50 条</b>，按病区 / 日期筛看更早的。</p>' : ""}`)}`;
 
+  const pickAdmission = (admissionId) => { localStorage.setItem("medplat_doc_adm", admissionId); route(); };
   $("#doc-pick").onsubmit = (e) => {
     e.preventDefault();
-    localStorage.setItem("medplat_doc_adm", new FormData(e.target).get("admission_id"));
-    route();
+    pickAdmission(new FormData(e.target).get("admission_id"));
   };
+  // 下拉一改就切换（P1-231）：原先只有点「切换」才记住——下拉显示乙、没点切换，下面的病程 / 护理 / 体温单
+  // 照旧按甲写，回执照样「已记录」（core.js `pickedId` 注释里要防的「屏幕上写着甲，病程记录写进了乙」同一种坏法）
+  $("#doc-pick select").onchange = (e) => pickAdmission(e.target.value);
   $("#handover-form").onsubmit = (e) => { e.preventDefault();
     postAction("/api/inpatient/handovers", formJson(e.target, ["ward_id", "critical_count"]), "#handover-msg"); };
   $("#handover-filter").onsubmit = (e) => {
@@ -1641,10 +1644,20 @@ async function renderOutpatientDocs() {
 
   $("#od-pick").onsubmit = (e) => { e.preventDefault();
     localStorage.setItem("medplat_od_encounter", e.target.encounter_id.value.trim()); route(); };
+  // 改了就诊ID、没点「载入」就提交的一律拦下（P1-231）：原先下面几张表单按上次载入的那一次就诊写，
+  // 框里的号是另一次——处置、护理记录进了上一次就诊，回执照样「已记录」
+  const encounterUnloaded = (msgSel) => {
+    const typed = $("#od-pick").encounter_id.value.trim();
+    if (Number(typed || 0) === encounterId) return false;
+    setMsg(msgSel, `就诊ID 改成了 ${typed || "（空）"}，还没载入：先点「载入该次就诊的文书」再提交`, false);
+    return true;
+  };
   if (encounterId) {
     $("#od-treat").onsubmit = (e) => { e.preventDefault();
+      if (encounterUnloaded("#od-msg")) return;
       postAction(`/api/outpatient/encounters/${encounterId}/treatments`, formJson(e.target), "#od-msg"); };
     $("#od-nurse").onsubmit = (e) => { e.preventDefault();
+      if (encounterUnloaded("#od-msg")) return;
       postAction(`/api/outpatient/encounters/${encounterId}/nursing-records`, formJson(e.target), "#od-msg"); };
   }
   $("#od-consent").onsubmit = (e) => {
@@ -1657,6 +1670,7 @@ async function renderOutpatientDocs() {
     // 那两格「告知书 / 待签署」恒为 0——注释里说「真正该追的是待签」的那一项从来追不到
     delete body.link_encounter;
     if (e.target.link_encounter && e.target.link_encounter.checked) {
+      if (encounterUnloaded("#od-cmsg")) return;
       body.related_type = "encounter";
       body.related_id = Number(encounterId);
     }

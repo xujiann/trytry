@@ -3400,6 +3400,61 @@ def test_体温单缺测的不画成0_在那儿断开(page, base_url, admin_read
     expect(chart.locator('polyline[stroke="#c0392b"]')).to_have_count(2)
 
 
+def _two_admissions(admin_call, tag, cards):
+    """同一病区两位在院患者（甲、乙），给「下拉换了人」的用例用。"""
+    org = admin_call("POST", "/api/organizations",
+                     {"name": f"E2E{tag}县医院", "org_type": "lead_hospital", "level": "county"})
+    ward = admin_call("POST", "/api/inpatient/wards", {"org_id": org["id"], "name": f"E2E{tag}病区"})
+    adms = []
+    for i, (name, id_card, dx) in enumerate(zip(("甲", "乙"), cards, ("肺炎", "心衰"))):
+        bed = admin_call("POST", "/api/inpatient/beds", {"ward_id": ward["id"], "bed_no": f"E2E-{tag}{i}"})
+        patient = admin_call("POST", "/api/patients", {"name": f"E2E{tag}{name}", "id_card": id_card, "gender": "男"})
+        adms.append(admin_call("POST", "/api/inpatient/admissions", {
+            "patient_id": patient["id"], "ward_id": ward["id"], "bed_id": bed["id"], "diagnosis_name": dx}))
+    return adms
+
+
+def _note_contents(admin_read, admission_id):
+    return [n["content"] for n in admin_read(f"/api/inpatient/admissions/{admission_id}/progress-notes")]
+
+
+def test_住院文书下拉改成乙_不点切换_病程写进乙(page, base_url, admin_read, admin_call):
+    """P1-231：下拉显示乙、没点「切换」，病程原先照旧写进甲，回执照样「已记录」。修后下拉一改就切换。"""
+    a, b = _two_admissions(admin_call, "切换", ("320981198606061210", "320981198707071311"))
+    _login(page, base_url)
+    page.evaluate(f"localStorage.setItem('medplat_doc_adm', '{a['id']}')")
+    _open_page(page, "clinicaldocs", "住院临床文书")
+    expect(page.locator("#doc-pick select[name=admission_id]")).to_have_value(str(a["id"]))
+    # 只在下拉里选乙、不点切换：修前页面不重画（这一步就等不到），病程写进甲
+    _redrawn(page, lambda: page.select_option("#doc-pick select[name=admission_id]", str(b["id"])))
+    expect(page.locator("#doc-pick select[name=admission_id]")).to_have_value(str(b["id"]))
+    page.locator("#note-form input[name=content]").fill("E2E 乙的日常病程")
+    _submit(page, "#note-form button")
+    assert _note_contents(admin_read, b["id"]) == ["E2E 乙的日常病程"]
+    assert _note_contents(admin_read, a["id"]) == []
+
+
+def test_查房下拉改成乙_不点切换患者_病程写进乙(page, base_url, admin_read, admin_call):
+    """P1-231：医生移动端查房同形——下拉显示乙、没点「切换患者」，病程原先写进甲。"""
+    a, b = _two_admissions(admin_call, "查房", ("320981198808081412", "320981198909091513"))
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.goto(f"{base_url}/m/doctor")
+    page.fill("#lg-user", "admin")
+    page.fill("#lg-pass", "admin123")
+    page.click("#login-form button[type=submit]")
+    expect(page.locator("#workbench")).to_be_visible()
+    page.click('a.tab-btn[data-tab="round"]')
+    page.locator("#round-adm").select_option(str(a["id"]))
+    page.click("#round-pick button[type=submit]")
+    expect(page.locator("#round-status")).to_contain_text("病程记录")
+    page.locator("#round-adm").select_option(str(b["id"]))   # 不点切换患者
+    page.locator("#round-content").fill("E2E 乙查房：体温降至37.2℃")
+    page.click("#round-note button[type=submit]")
+    expect(page.locator("#round-msg")).to_contain_text("病程已记录")
+    assert _note_contents(admin_read, b["id"]) == ["E2E 乙查房：体温降至37.2℃"]
+    assert _note_contents(admin_read, a["id"]) == []
+
+
 def test_surgery_full_flow(page, base_url, seed):
     """手术麻醉（T2.3）：申请 → 审批 → 排班 → 术中记录，状态逐级推进。
 
