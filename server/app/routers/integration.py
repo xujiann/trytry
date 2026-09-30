@@ -59,7 +59,7 @@ from ..models import (
 )
 from ..privacy import desensitize, mask_id_card, mask_phone
 from ..schemas import EncounterCreate, ExamReportCreate, FollowUpCreate, PatientOut
-from ..texttypes import NON_BLANK
+from ..texttypes import NON_BLANK, normalize_gender
 from ..vitals import bp_order_problem
 from .chronic import _evaluate_level
 from .encounters import create_encounter
@@ -119,8 +119,6 @@ router = APIRouter(
     route_class=_InboundRoute,
 )
 
-_GENDER_HL7 = {"M": "男", "F": "女"}
-_GENDER_FHIR = {"male": "男", "female": "女"}
 _GENDER_TO_FHIR = {"男": "male", "女": "female"}
 
 ID_CARD_SYSTEM = "urn:oid:2.16.156.10011.1.3"  # 中国居民身份证号 OID
@@ -268,7 +266,9 @@ def parse_hl7v2_patient(message: str) -> tuple[dict, str]:
     id_card = _pid3_id_card(field(3))
     name = _pid5_name(field(5))
     birth_raw = field(7).strip()
-    gender = _GENDER_HL7.get(field(8).strip(), "未知")
+    # 性别与建档同一口径（P2-1078，`normalize_gender`）：原先入站只认 M / F，PID-8 送 1 / 2（GB/T 2261.1）、小写、「男 / 女」
+    # 一律记成「未知」，A08 又不拿「未知」覆盖，之后也改不回来
+    gender = normalize_gender(field(8).split("^")[0]) or "未知"
     phone = _pid13_phone(field(13))
 
     if not id_card or len(id_card) < 15:
@@ -421,10 +421,12 @@ def parse_fhir_patient(resource: dict) -> dict:
             phone = telecom["value"]
             break
 
+    # 性别同 PID-8（P2-1078）：原先只认全小写的 male / female，Male、FEMALE 都成了「未知」
+    raw_gender = resource.get("gender")
     return {
         "name": name,
         "id_card": id_card,
-        "gender": _GENDER_FHIR.get(resource.get("gender", ""), "未知"),
+        "gender": normalize_gender(raw_gender if isinstance(raw_gender, str) else "") or "未知",
         "birth_date": resource.get("birthDate", ""),
         "phone": phone,
     }
