@@ -39,7 +39,7 @@ from ...database import get_db
 from ...patchtypes import UNSET
 from ...texttypes import NON_BLANK
 from ...deps import get_current_user, paginate, require_roles, through_day
-from ...formula import FormulaError, evaluate as eval_formula
+from ...formula import FormulaError, evaluate as eval_formula, validate as validate_formula
 from ...numtypes import non_finite_path
 from ..platform import Organization, User
 from ..service import INDICATOR_SOURCES, point_account_for, task_overdue, unknown_program, unknown_programs
@@ -377,11 +377,9 @@ def _indicator_out(i: SpdIndicator) -> dict:
 @router.post("/indicators", response_model=IndicatorOut, status_code=201,
              dependencies=[Depends(require_roles("director"))])
 def create_indicator(body: IndicatorIn, db: Session = Depends(get_db)):
-    if body.formula:
-        try:
-            eval_formula(body.formula, dict.fromkeys(_metric_names(body.data_source), 1.0))
-        except FormulaError as exc:
-            raise HTTPException(status_code=422, detail=f"公式非法：{exc}") from None
+    formula_problem = indicator_formula_problem(body.formula, body.data_source)   # 留空的公式同样查（P2-1119）
+    if formula_problem:
+        raise HTTPException(status_code=422, detail=f"公式非法：{formula_problem}")
     rule_problem = score_rule_problem(body.score_rule)   # 评分规则写坏了计分时 500（P2-79）
     if rule_problem:
         raise HTTPException(status_code=422, detail=f"评分规则非法：{rule_problem}")
@@ -455,14 +453,13 @@ def update_indicator(indicator_id: int, body: IndicatorPatch, db: Session = Depe
     if indicator is None:
         raise HTTPException(status_code=404, detail="指标不存在")
     changes = body.model_dump(exclude_unset=True)
-    if changes.get("formula"):
-        try:
-            eval_formula(
-                changes["formula"],
-                dict.fromkeys(_metric_names(changes.get("data_source", indicator.data_source)), 1.0),
-            )
-        except FormulaError as exc:
-            raise HTTPException(status_code=422, detail=f"公式非法：{exc}") from None
+    # 与建指标同一句；清空公式（`formula: ""`）同样查（P2-1119）：原先只查非空的，PATCH 空串直接清空。
+    # 只改取数口径、不带公式的不在此列（原地改口径不重验存量公式，随 P2-520 定）
+    if "formula" in changes:
+        formula_problem = indicator_formula_problem(
+            changes["formula"], changes.get("data_source", indicator.data_source))
+        if formula_problem:
+            raise HTTPException(status_code=422, detail=f"公式非法：{formula_problem}")
     if "score_rule" in changes:   # 与建指标同一句（P2-79）
         rule_problem = score_rule_problem(changes["score_rule"])
         if rule_problem:
@@ -507,6 +504,22 @@ def _metric_names(data_source: str) -> tuple[str, ...]:
     """各取数口径产出的变量名——公式只能引用这些名字（口径表见 `service.INDICATOR_SOURCES`）。"""
     source = INDICATOR_SOURCES.get(data_source)
     return tuple(source[1]) if source else ("total",)
+
+
+def indicator_formula_problem(formula: str, data_source: str) -> str:
+    """指标公式在这个取数口径下写得对不对，没问题返回空串（P2-1119）。建 / 改指标同一句。
+
+    公式留空按 `total` 取值（计分 `run_scoring` 与报告段落 `reporting._indicator` 同一口径），就按 `total` 查：纳管 /
+    评估 / 建档 / 上报四个口径没有 total，留空与写 `total` 同一句报错——原先只查非空的公式，留空的照收，计分恒 0 分、
+    不记错。校验与平台绩效公式同一口径（`formula.validate`）：哑值下算不出不算写错（`(total - done - overdue) ** 0.5`
+    在三者都是 1 时开负数的平方根，换组真实取值就算得出，算不出的计分时逐指标记错）——原先拿严格的 `evaluate` 代哑值
+    试算，能算的公式挡在门外。
+    """
+    try:
+        validate_formula(formula or "total", set(_metric_names(data_source)))
+    except FormulaError as exc:
+        return str(exc)
+    return ""
 
 
 #: 考核期的三种写法（跑分弹窗与工作量筛选框的占位符都这么写）。形状用 `[0-9]`
@@ -1135,10 +1148,9 @@ def run_scoring(body: RunScoreIn, db: Session = Depends(get_db)):
                 continue
             metrics = metrics_by_code[code][object_id]
             try:
-                value = (
-                    eval_formula(indicator.formula, metrics)
-                    if indicator.formula else float(metrics.get("total", 0))
-                )
+                # 公式留空按 total 取值，照 total 求值（P2-1119）：口径没有 total 的存量空公式记「未知变量：total」，
+                # 原先 `metrics.get("total", 0)` 恒 0 分、理由写「未达目标值」，看着像真没做到
+                value = eval_formula(indicator.formula or "total", metrics)
             except FormulaError as exc:
                 detail.append({"indicator_code": code, "error": f"公式求值失败：{exc}"})
                 continue

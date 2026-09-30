@@ -2804,7 +2804,7 @@ async function renderSpdAssess() {
         <select name="object_type">${Object.entries(objectNames).map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join("")}</select>
         <select name="data_source">${sources.map((x) => `<option value="${esc(x.key)}">${esc(x.name)}</option>`).join("")}</select>
         <input name="formula" placeholder="公式，如 done / total * 100" required style="min-width:220px"
-          title="留空的公式按 total 取值，而纳管 / 评估 / 建档 / 上报几个口径没有 total，计分恒为 0——所以这里必填">
+          title="留空的公式按 total 取值，而纳管 / 评估 / 建档 / 上报几个口径没有 total，留空会被拒（P2-1119）——所以这里必填">
         <input name="weight" type="number" step="any" min="0" placeholder="权重" style="width:80px">
         <input name="target_value" type="number" step="any" placeholder="目标值（如 90）" style="width:110px"
                title="与公式结果同一量纲：公式 ×100 算百分数的，目标写 90，不写 0.9">

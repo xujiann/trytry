@@ -357,10 +357,8 @@ def _indicator(db, section, org_id, period):
                         "计分，报告按机构出、不能引用：按机构汇总出来的数没有对应的考核分"}
     metrics = collect_metrics(db, indicator, "org", org_id, period_value)
     try:
-        value = (
-            eval_formula(indicator.formula, metrics)
-            if indicator.formula else float(metrics.get("total", 0))
-        )
+        # 公式留空按 total 取值，与计分同一句（P2-1119）：口径没有 total 的写明求值失败，原先印成 0
+        value = eval_formula(indicator.formula or "total", metrics)
     except FormulaError as exc:
         return {**_head(section, "text"), "note": f"公式求值失败：{exc}"}
     return {

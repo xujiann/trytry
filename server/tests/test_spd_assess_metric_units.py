@@ -49,8 +49,10 @@ def _metrics(client, admin, world, source):
     from app.spd.routers.assess import collect_metrics_batch
 
     code = f"p2139_{source}"
+    # 探针指标带一条合法公式（两个口径都有 enrolled）：没有 total 的口径，公式留空建不进来（P2-1119）
     created = client.post(f"{B}/indicators", headers=admin, json={
-        "code": code, "name": f"P2139 {source}", "data_source": source, "object_type": "org"})
+        "code": code, "name": f"P2139 {source}", "data_source": source, "object_type": "org",
+        "formula": "enrolled"})
     assert created.status_code == 201, created.text
     with SessionLocal() as db:
         indicator = db.query(SpdIndicator).filter(SpdIndicator.code == code).one()

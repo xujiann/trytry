@@ -111,7 +111,8 @@ def test_每种取数口径都给全它承诺的变量(client, h, world, data_so
     from app.database import SessionLocal
     from app.spd.routers.assess import collect_metrics_batch
 
-    indicator = _indicator(client, h, f"probe_{data_source}", data_source)
+    # 探针指标带一条合法公式：没有 total 的口径，公式留空建不进来（P2-1119）
+    indicator = _indicator(client, h, f"probe_{data_source}", data_source, formula=sorted(expect_keys)[0])
     org_ids = [o["id"] for o in world["orgs"]]
     with SessionLocal() as db:
         from app.spd.models import SpdIndicator
