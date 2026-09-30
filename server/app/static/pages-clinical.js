@@ -3199,12 +3199,20 @@ async function renderBilling() {
            <td>${esc(d.amount)}</td><td>${d.settled ? `已结算（结算单 ${esc(d.settlement_id)}）` : '<span class="tag orange">未结清</span>'}</td></tr>`)}`;
     } catch (err) { setMsg("#bill-msg", err.message, false); }
   };
-  $("#settle-form").onsubmit = (e) => {
+  $("#settle-form").onsubmit = async (e) => {
     e.preventDefault();
     // 只送结算类型对应的那个号（P2-913）：两个号框并排，报错后表单保留原值，换成门诊结算时上次填的住院号会一起送上去
     const body = formJson(e.target, ["admission_id", "encounter_id", "insurance_pay"]);
     delete body[body.bill_type === "inpatient" ? "encounter_id" : "admission_id"];
-    postAction("/api/billing/settlements", body, "#bill-msg");
+    // 回执说出来（P2-914）：原先走 postAction，成功即整页重画、回执整个丢掉——住院结算回执里的押金冲抵、应补缴、押金
+    // 余额页面上哪里都不显示，冲抵后剩下的押金、要补缴多少，收费员只能再去查押金流水
+    try {
+      const r = await api("/api/billing/settlements", { method: "POST", body: JSON.stringify(body) });
+      await route();
+      const deposit = r.deposit_offset === undefined ? ""
+        : `；押金冲抵 ${r.deposit_offset} 元，应补缴 ${r.payable_after_offset} 元，押金余额 ${r.deposit_balance} 元`;
+      setMsg("#bill-msg", `已结算（结算单 #${r.id}）：总额 ${r.total_amount} 元，医保 ${r.insurance_pay} 元，自付 ${r.self_pay} 元${deposit}`);
+    } catch (err) { setMsg("#bill-msg", err.message, false); }
   };
   $("#pay-form").onsubmit = async (e) => {
     e.preventDefault();
