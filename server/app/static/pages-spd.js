@@ -1290,7 +1290,8 @@ async function renderSpdTeam() {
          <td>${t.org_id}</td><td>${esc((t.program_codes || []).join("、") || "—")}</td>
          <td>${t.leader_user_id ?? "—"}</td><td>${t.member_count ?? "—"}</td>
          <td><button class="btn secondary" data-team-members="${t.id}">成员</button>
-             <button class="btn secondary" data-team-edit="${t.id}" data-name="${esc(t.name)}" data-level="${esc(t.level)}">编辑</button></td></tr>`)}
+             <button class="btn secondary" data-team-edit="${t.id}" data-name="${esc(t.name)}" data-level="${esc(t.level)}"
+               data-active="${t.active === false ? "0" : "1"}">编辑</button></td></tr>`)}
       <div id="spd-team-detail"></div>`)}
     ${panel("村医档案", `
       <form class="inline" id="spd-vd-form">
@@ -1385,18 +1386,24 @@ async function renderSpdTeam() {
     }
     if (teamMembers) return showTeam(teamMembers.dataset.teamMembers);
     if (teamEdit) {
+      const d = teamEdit.dataset;
       const form = await spdModal("编辑团队", [
-        { name: "name", label: "团队名称", value: teamEdit.dataset.name, required: true },
-        { name: "level", label: "层级", type: "select", value: teamEdit.dataset.level,
+        { name: "name", label: "团队名称", value: d.name, required: true },
+        { name: "level", label: "层级", type: "select", value: d.level,
           options: Object.entries(SPD_TEAM_LEVELS).map(([k, v]) => ({ value: k, label: v })) },
         { name: "leader_user_id", label: "组长用户ID（留空不改）", type: "number" },
-        { name: "active", label: "状态", type: "select", value: "1",
+        { name: "active", label: "状态", type: "select", value: d.active || "1",
           options: [{ value: "1", label: "启用" }, { value: "0", label: "停用" }] },
       ]);
       if (!form) return;
-      const body = { name: form.name, level: form.level, active: form.active === "1" };
+      // 只送改过的字段（P2-968，与编辑商品 P2-920 同一口径）：原先名称、层级、状态恒送，状态固定预填「启用」——别人刚停用
+      // （撤并）的团队，旧页面改个名就重新启用、又能分发患者
+      const body = {};
+      if (form.name !== d.name) body.name = form.name;
+      if (form.level !== d.level) body.level = form.level;
+      if (form.active !== (d.active || "1")) body.active = form.active === "1";
       if (form.leader_user_id) body.leader_user_id = form.leader_user_id;
-      return postAction(`/api/spd/teams/${teamEdit.dataset.teamEdit}`, body, "#spd-team-msg", "PATCH");
+      return postAction(`/api/spd/teams/${d.teamEdit}`, body, "#spd-team-msg", "PATCH");
     }
     if (tmEdit) {
       const form = await spdModal("调整成员角色与权限", [
@@ -2884,7 +2891,7 @@ async function renderSpdAssess() {
         `<tr><td>${g.id}</td><td>${esc(g.code)}</td><td>${esc(g.name)}</td><td>${g.points}</td>
          <td>${g.stock}</td>
          <td><button class="btn secondary" data-goods-edit="${g.id}" data-name="${esc(g.name)}" data-points="${g.points}"
-              data-stock="${g.stock}">编辑</button></td></tr>`)}`)}
+              data-stock="${g.stock}" data-active="${g.active ? "1" : "0"}">编辑</button></td></tr>`)}`)}
     ${panel("兑换记录", `
       <p class="desc">村医在移动端兑换后拿到核销码、到点位出示，经办在上方「核销」栏录码完成发放；这里只看状态，核销码不回显</p>
       ${table(["ID", "商品", "积分", "状态", "兑换时间", "核销时间"], redeems, (r) =>
@@ -3042,14 +3049,16 @@ async function renderSpdAssess() {
         { name: "name", label: "名称", value: goodsEdit.dataset.name, required: true },
         { name: "points", label: "所需积分", type: "number", value: goodsEdit.dataset.points },
         { name: "stock", label: "库存", type: "number", value: goodsEdit.dataset.stock },
-        { name: "active", label: "状态", type: "select", value: "1",
+        { name: "active", label: "状态", type: "select", value: goodsEdit.dataset.active || "1",
           options: [{ value: "1", label: "上架" }, { value: "0", label: "下架" }] },
       ]);
       if (!form) return;
       // 只送改过的字段（P2-920，与缺药阈值 P1-146 同形）：原先四格原样 PATCH——页面加载时的库存整值写回，这期间兑换占掉的
-      // 件数被「还」回库存、造成超兑。改了库存时带上页面看到的数，库存刚变过的后端 409「请刷新后再改」
+      // 件数被「还」回库存、造成超兑。改了库存时带上页面看到的数，库存刚变过的后端 409「请刷新后再改」。
+      // 上架 / 下架同样只在改了才送、按行上的现值预填（P2-968）：原先固定预填「上架」、恒送——别人刚下架的，旧页面改个积分又上架了
       const d = goodsEdit.dataset;
-      const body = { active: form.active === "1" };
+      const body = {};
+      if (form.active !== (d.active || "1")) body.active = form.active === "1";
       if (form.name !== d.name) body.name = form.name;
       if (String(form.points) !== String(d.points)) body.points = form.points;
       if (String(form.stock) !== String(d.stock)) Object.assign(body, { stock: form.stock, stock_seen: Number(d.stock) });
