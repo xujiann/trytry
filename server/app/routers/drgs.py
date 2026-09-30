@@ -308,15 +308,18 @@ def update_group(group_id: int, body: DrgGroupUpdate, db: Session = Depends(get_
     group = db.get(DrgGroup, group_id)
     if group is None:
         raise HTTPException(status_code=404, detail="分组不存在")
-    changes = {field: value for field, value in body.model_dump(exclude_unset=True).items() if value is not None}
-    # 动了匹配配置才判、与存量合并后判（P2-1019）：只改名、改权重、停用的照旧放行——存量里已经写坏的组也改得了名、停得了
-    if not group.is_fallback and changes.keys() & {"keywords", "procedure_keywords", "require_procedure"}:
-        merged = {f: changes.get(f, getattr(group, f)) for f in ("keywords", "procedure_keywords", "require_procedure")}
+    changes = body.model_dump(exclude_unset=True)
+    # 动了匹配配置才判、与存量合并后判（P2-1019）：只改名、改权重、停用的照旧放行——存量里已经写坏的组也改得了名、停得了。
+    # 传 null 的等于不改（下面照旧跳过 None），合并时取存量值
+    matching = ("keywords", "procedure_keywords", "require_procedure")
+    if not group.is_fallback and any(changes.get(f) is not None for f in matching):
+        merged = {f: getattr(group, f) if changes.get(f) is None else changes[f] for f in matching}
         problem = _never_matches(**merged)
         if problem:
             raise HTTPException(status_code=422, detail=problem)
     for field, value in changes.items():
-        setattr(group, field, value)
+        if value is not None:
+            setattr(group, field, value)
     db.commit()
     return _group_out(group)
 
