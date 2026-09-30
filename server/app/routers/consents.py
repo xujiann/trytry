@@ -32,7 +32,7 @@ from sqlalchemy.orm import Session
 from .. import clock
 from ..database import get_db
 from ..datetypes import check_date
-from ..texttypes import NON_BLANK
+from ..texttypes import NON_BLANK, normalize_gender
 from ..deps import get_current_user, paginate, require_roles
 from ..models import (
     ConsentRecord,
@@ -384,6 +384,9 @@ def _check_correction_value(field: str, value: str) -> None:
         check_date(value)
         if value > clock.today().isoformat():   # 与建档同一句（P2-713）：将来的出生日期算出负年龄
             raise ValueError(f"出生日期（{value}）不得晚于今天")
+    # 性别与建档同一口径（P2-941）：原先「女性」审批通过即落库，区域结构、审方、FHIR 出站都认不得
+    if field == "gender" and normalize_gender(value) is None:
+        raise ValueError(f"性别（{value}）只能是 男 / 女 / 未知")
 
 
 def validate_correction_changes(request_type: str, changes: dict[str, str]) -> str:
@@ -411,6 +414,8 @@ def validate_correction_changes(request_type: str, changes: dict[str, str]) -> s
             _check_correction_value(field, str(value).strip())
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=f"更正字段 {field}：{exc}") from None
+    if "gender" in changes:   # 编码写法（1 / 2、M / F）归一后再存，审批执行时落库的就是「男 / 女 / 未知」（P2-941）
+        changes = {**changes, "gender": normalize_gender(str(changes["gender"])) or str(changes["gender"])}
     return json.dumps(changes, ensure_ascii=False)
 
 

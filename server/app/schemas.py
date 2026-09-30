@@ -1,9 +1,9 @@
 from typing import Annotated
 
-from pydantic import AfterValidator, BaseModel, Field, FiniteFloat
+from pydantic import AfterValidator, BaseModel, BeforeValidator, Field, FiniteFloat
 from .datetypes import DateStr, OptionalDateStr
 from .numtypes import INT4_MAX
-from .texttypes import NON_BLANK, split_list
+from .texttypes import NON_BLANK, normalize_gender, split_list
 
 
 class LoginRequest(BaseModel):
@@ -37,10 +37,20 @@ class OrganizationOut(OrganizationCreate):
     model_config = {"from_attributes": True}
 
 
+def _gender_input(value: object) -> object:
+    """建档的性别归一成「男 / 女 / 未知」，认不出的 422（P2-941）；不是字符串的交给类型校验。"""
+    if not isinstance(value, str):
+        return value
+    normalized = normalize_gender(value)
+    if normalized is None:
+        raise ValueError(f"性别（{value}）只能是 男 / 女 / 未知（也认 1 / 2、M / F、male / female 这类编码）")
+    return normalized
+
+
 class PatientCreate(BaseModel):
     name: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
     id_card: str = Field(min_length=15, max_length=18, pattern=NON_BLANK)
-    gender: str = "未知"
+    gender: Annotated[str, BeforeValidator(_gender_input)] = "未知"
     # 年龄全靠它现算（审方的儿童/老年规则、未满 14 周岁须监护人、慢专病的年龄纳入规则），
     # 算不出的一律当"不知道"放过：`2016/03/05` 建档的 10 岁孩子登记知情同意不要监护人（P1-61，实测）
     birth_date: OptionalDateStr = ""
@@ -50,6 +60,8 @@ class PatientCreate(BaseModel):
 class PatientOut(PatientCreate):
     id: int
     ehc_no: str
+    # 出参不带入参的归一校验（P2-941）：库里修之前存进去的「1」「F」要原样读出来，而不是让清单 500 或悄悄改写
+    gender: str = "未知"
     # 出参不带入参的日历校验（P1-63）：库里的存量坏日期要原样读出来，而不是让响应 500
     birth_date: str = ""
     # 证件号 15–18 位、姓名 1–64 字是**建档入口**的约束。HL7/FHIR/ESB 入站不走请求模型，

@@ -57,3 +57,21 @@ def has_keyword(text: str | None, keywords) -> bool:
     `k in text`，诊断写成 `i10`、`Ｉ１０`、`copd急性加重` 就不派随访，也没有任何提示。"""
     key = text_key(text)
     return any(k and k in key for k in (text_key(kw) for kw in keywords or []))
+
+
+#: 性别只有三个取值（P2-941）：区域结构、审方、慢专病规则、FHIR 出站都只认「男 / 女 / 未知」。常见的编码写法归一过来——
+#: GB/T 2261.1（0 未知、1 男、2 女、9 未说明）、HL7 v2 PID-8（M / F / U / O / A / N）、FHIR（male / female / unknown /
+#: other）、「男性 / 女性」。原先建档、更正、存量导入都原样收：导入的 1 / 2 / F 三行在区域结构里全算「未知」，存成「1」
+#: 的男性有孕产档案时审方当孕产妇，更正成「女性」审批通过即落库
+_GENDER_WORDS = {
+    "男": "男", "女": "女", "未知": "未知", "男性": "男", "女性": "女", "": "未知",
+    "0": "未知", "1": "男", "2": "女", "9": "未知",
+    "m": "男", "f": "女", "u": "未知", "o": "未知", "a": "未知", "n": "未知",
+    "male": "男", "female": "女", "unknown": "未知", "other": "未知",
+}
+
+
+def normalize_gender(value: str | None) -> str | None:
+    """性别的常见写法归一成「男 / 女 / 未知」（拉丁字母不分大小写）；认不出返回 None，由调用方决定 422 还是记错误行。"""
+    key = (value or "").strip()
+    return _GENDER_WORDS.get(key.lower() if key.isascii() else key)

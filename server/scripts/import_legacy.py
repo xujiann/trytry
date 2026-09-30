@@ -6,7 +6,8 @@
     列：name, org_type(lead_hospital|township|village|public_health),
         level(city|county|township|village), parent_name(可空), address(可空)
 - patients：患者（EMPI 按身份证号幂等，自动生成电子健康卡号）
-    列：name, id_card, gender(可空), birth_date(可空 YYYY-MM-DD), phone(可空)
+    列：name, id_card, gender(可空；男 / 女 / 未知，也认 1 / 2、M / F、male / female 这类编码，认不出的记错误行),
+        birth_date(可空 YYYY-MM-DD), phone(可空)
 - chronic：慢病档案（患者身份证号 + 病种 幂等）
     列：id_card, disease(慢病病种目录里启用的编码，如 hypertension / diabetes，与平台建档同一个真源),
         level(1-3 可空默认1), managed_by_org(机构名),
@@ -92,6 +93,7 @@ from app.models import (  # noqa: E402
 from app.routers.chronic import _suggest_next_due  # noqa: E402
 from app.routers.patients import id_card_variants  # noqa: E402
 from app.schemas import OrganizationCreate  # noqa: E402
+from app.texttypes import normalize_gender  # noqa: E402
 
 
 def _field_len(model, field: str) -> tuple[int, int]:
@@ -389,12 +391,17 @@ def import_patients(db, rows, report: ImportReport, ctx: ImportContext) -> None:
         if _has_id_card(existing_id_cards, id_card):
             report.skipped += 1
             continue
+        # 性别按常见编码归一（P2-941，与建档同一口径）：原先 1 / 2 / F 原样落库，区域结构全算「未知」、审方认不得
+        gender = normalize_gender(row.get("gender"))
+        if gender is None:
+            report.error(line_no, f"性别（{(row.get('gender') or '').strip()}）认不出：只能是 男 / 女 / 未知，或 1 / 2、M / F 这类编码", row)
+            continue
         db.add(
             Patient(
                 ehc_no=_generate_ehc_no(existing_ehc),
                 name=row["name"].strip(),
                 id_card=id_card,
-                gender=(row.get("gender") or "").strip() or "未知",
+                gender=gender,
                 birth_date=birth_date,
                 phone=(row.get("phone") or "").strip(),
             )
