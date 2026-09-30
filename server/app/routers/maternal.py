@@ -1,5 +1,6 @@
 """㉔妇幼保健业务协同：孕产妇建册/高危管理/产检/产后访视/分娩记录，
 儿童保健档案与访视、新生儿疾病筛查、高危儿管理，婚前/孕前/妇女保健与避孕节育记录。"""
+from datetime import datetime
 from typing import cast
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -181,6 +182,17 @@ def add_visit(record_id: int, body: VisitCreate, db: Session = Depends(get_db)):
     # 按旧档案号记的产检会挂到上一胎名下（页面上结案的档案本就没有访视按钮）
     if record.status == "closed":
         raise HTTPException(status_code=409, detail="档案已结案，不可记录访视")
+    # 访视日期与这一胎登记了的分娩日期对得上（P2-1020，与 P2-233「晚于这一胎分娩的不可能是这一胎的产前筛查」同一条规矩）：
+    # 原先不看——分娩 09-20 之后记一条 08-20 的「产后访视」照收、随即就能结案；分娩之后记「产前检查 40 周 150/95」照收，
+    # 已分娩的档案被标成高危「妊娠期高血压可能」。没填访视日期的按今天算：补录孕期的检查要填当时的日期
+    delivered = _delivered_on(db, record_id)
+    if delivered is not None:
+        day = body.visit_date or clock.today().isoformat()
+        if body.visit_type == "postpartum" and day < delivered:
+            raise HTTPException(status_code=409, detail=f"产后访视日期 {day} 早于这一胎的分娩日期 {delivered}")
+        if body.visit_type == "prenatal" and day > delivered:
+            raise HTTPException(status_code=409, detail=f"产前检查日期 {day} 晚于这一胎的分娩日期 {delivered}，"
+                                                        "不是这一胎的产前检查：补录孕期的检查请填当时的检查日期")
     if body.visit_type == "postpartum" and record.status == "registered":
         record.status = "delivered"
     visit = MaternalVisit(record_id=record_id, **body.model_dump())
@@ -212,13 +224,19 @@ def close_record(record_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=409, detail="须完成产后访视（分娩后）方可结案")
     # 「已分娩」不等于「做过产后访视」（P2-211）：分娩登记也把档案推到 delivered，原先分娩当天就能结案、一次产后访视都
     # 没有——结案之后产后访视反被 409「档案已结案」挡在外面，产妇还从审方的孕产妇人群里提前掉出去（P2-120）
-    if (
-        db.query(MaternalVisit.id)
+    postpartum = (
+        db.query(MaternalVisit.visit_date, MaternalVisit.created_at)
         .filter(MaternalVisit.record_id == record.id, MaternalVisit.visit_type == "postpartum")
-        .first()
-        is None
-    ):
+        .all()
+    )
+    if not postpartum:
         raise HTTPException(status_code=409, detail="须完成产后访视方可结案：本档案还没有产后访视记录")
+    # 只认分娩日及以后的产后访视（P2-1020）：存量里日期早于分娩的那条不是这一胎的产后访视；日子不可考的照认
+    delivered = _delivered_on(db, record.id)
+    if delivered is not None and all(
+        (day := _visit_day(v.visit_date, v.created_at)) is not None and day < delivered for v in postpartum
+    ):
+        raise HTTPException(status_code=409, detail=f"须完成产后访视方可结案：本档案的产后访视都早于分娩日期 {delivered}")
     record.status = "closed"
     db.commit()
     return {"id": record_id, "status": "closed"}
@@ -343,6 +361,17 @@ def add_delivery(record_id: int, body: DeliveryCreate, db: Session = Depends(get
         raise HTTPException(status_code=409, detail="档案已结案，不可登记分娩")
     if db.query(DeliveryRecord).filter(DeliveryRecord.record_id == record_id).first():
         raise HTTPException(status_code=409, detail="该档案已有分娩记录")
+    # 分娩日期与已记的访视对得上（P2-1020）：只比填了访视日期的——没填的按录入那天算，事后集中补录的产检会把分娩挡住
+    for visit_type, visit_date in (
+        db.query(MaternalVisit.visit_type, MaternalVisit.visit_date)
+        .filter(MaternalVisit.record_id == record_id, MaternalVisit.visit_date != "")
+        .all()
+    ):
+        day = legacy_date(visit_date)
+        if day and visit_type == "postpartum" and day < body.delivery_date:
+            raise HTTPException(status_code=409, detail=f"分娩日期 {body.delivery_date} 晚于已记的产后访视 {day}")
+        if day and visit_type == "prenatal" and day > body.delivery_date:
+            raise HTTPException(status_code=409, detail=f"分娩日期 {body.delivery_date} 早于已记的产前检查 {day}")
     delivery = DeliveryRecord(record_id=record_id, **body.model_dump())
     record.status = "delivered"
     # 上面那句"已有分娩记录"预检是 check-then-act：两路并发都查不到就都会插，
@@ -649,24 +678,35 @@ def _pregnancy_ended_on(db: Session, record_id: int) -> tuple[str, str] | None:
     - 日期是 P1-61 之前的非规范写法（「2026/03/10」）：按字符串比，同一年里比任何规范日期都「晚」，9 月新一胎的高风险
       唐筛照样录进旧档案、把旧档案标成高危（P2-211 要防的正是这个）。按日历读（`legacy_date`），读不成的不参与。
     """
-    deliveries = db.query(DeliveryRecord.delivery_date).filter(DeliveryRecord.record_id == record_id).all()
-    delivered = [day for day in (legacy_date(raw) for (raw,) in deliveries) if day]
-    if delivered:
-        return min(delivered), "分娩日期"
+    delivered = _delivered_on(db, record_id)
+    if delivered is not None:
+        return delivered, "分娩日期"
     visits = (
         db.query(MaternalVisit.visit_date, MaternalVisit.created_at)
         .filter(MaternalVisit.record_id == record_id, MaternalVisit.visit_type == "postpartum")
         .all()
     )
-    # 录入那天取本地日期（第十五批 S2-6）：落库时刻是 naive UTC，原先直接 `.date()`，东八区 0–8 点录的产后访视算成前一天，
-    # 产后访视当天的筛查被当成「晚于这一胎结束」409
-    dates = [day for day in (
-        legacy_date(v.visit_date) if v.visit_date
-        else None if v.created_at is None or v.created_at.year <= 1970
-        else clock.to_local(v.created_at).date().isoformat()
-        for v in visits
-    ) if day]
+    dates = [day for day in (_visit_day(v.visit_date, v.created_at) for v in visits) if day]
     return (min(dates), "产后访视日期") if dates else None
+
+
+def _delivered_on(db: Session, record_id: int) -> str | None:
+    """登记了分娩的取分娩日期：一档两条的取最早的，读不成的不参与（P2-895）；没登记分娩返回 None。"""
+    deliveries = db.query(DeliveryRecord.delivery_date).filter(DeliveryRecord.record_id == record_id).all()
+    delivered = [day for day in (legacy_date(raw) for (raw,) in deliveries) if day]
+    return min(delivered) if delivered else None
+
+
+def _visit_day(visit_date: str, created_at: datetime | None) -> str | None:
+    """访视是哪一天：填了访视日期的按它（按日历读，`legacy_date`）；没填的按录入那天，录入时刻是补列回填的 1970 哨兵的
+    不可考（P2-895）。录入那天取本地日期（第十五批 S2-6）：落库时刻是 naive UTC，原先直接 `.date()`，东八区 0–8 点录的
+    产后访视算成前一天，产后访视当天的筛查被当成「晚于这一胎结束」409。
+    """
+    if visit_date:
+        return legacy_date(visit_date)
+    if created_at is None or created_at.year <= 1970:
+        return None
+    return clock.to_local(created_at).date().isoformat()
 
 
 @router.post(
