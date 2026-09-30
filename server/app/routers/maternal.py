@@ -361,7 +361,8 @@ def add_delivery(record_id: int, body: DeliveryCreate, db: Session = Depends(get
         raise HTTPException(status_code=404, detail="孕产妇档案不存在")
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="机构不存在")
-    # 与 `add_visit` 同一个临界区（P2-1020 跟进）：分娩日按已记的访视判、访视按分娩日判，两边读的都是别的行
+    # 与 `add_visit` 同一个临界区（P2-1020 跟进）：分娩日按已记的访视判、访视按分娩日判，两边读的都是别的行；
+    # 与 `create_screening` 同理（P2-1115）
     with serialized_on(db, MaternalRecord, record_id):
         db.refresh(record)
         if record.status == "closed":
@@ -379,6 +380,15 @@ def add_delivery(record_id: int, body: DeliveryCreate, db: Session = Depends(get
                 raise HTTPException(status_code=409, detail=f"分娩日期 {body.delivery_date} 晚于已记的产后访视 {day}")
             if day and visit_type == "prenatal" and day > body.delivery_date:
                 raise HTTPException(status_code=409, detail=f"分娩日期 {body.delivery_date} 早于已记的产前检查 {day}")
+        # 已记的产前筛查同样对一遍（P2-1115，P2-233 的反方向）：`create_screening` 只在「先有分娩、后录筛查」的次序下拦，
+        # 次序一反就照收——没登记分娩的旧档案先收进本次妊娠 9-10 的高风险 NIPT、被标成高危，随后补登上一胎 2025-12-20
+        # 的分娩照样 201，上一胎带着这一胎的筛查结案。与产前检查同一句；日期按日历读，读不成的不参与（P2-895）
+        for (screen_date,) in (
+            db.query(PrenatalScreening.screen_date).filter(PrenatalScreening.record_id == record_id).all()
+        ):
+            day = legacy_date(screen_date)
+            if day and day > body.delivery_date:
+                raise HTTPException(status_code=409, detail=f"分娩日期 {body.delivery_date} 早于已记的产前筛查 {day}")
         delivery = DeliveryRecord(record_id=record_id, **body.model_dump())
         record.status = "delivered"
         # 上面那句"已有分娩记录"预检是 check-then-act：两路并发都查不到就都会插，
@@ -729,23 +739,27 @@ def create_screening(
     record = db.get(MaternalRecord, body.record_id)
     if record is None:
         raise HTTPException(status_code=404, detail="孕产妇档案不存在")
-    # 产前筛查只能是这一胎结束之前的事（P2-233）：日期晚于分娩（没登记分娩的按最早一次产后访视）的，不可能是这一胎
-    # 的产前筛查——一孕一册之后同一位妇女名下有上一胎的旧档案，按旧档案号录进来的本次妊娠的高风险结果把上一胎标成
-    # 高危、这一胎仍是「正常」。不按「已结案」一刀切（P2-211 原先那样挡）：结案之后才补录的、这一胎孕期里做的筛查
-    # 照收，结论是这次孕期的事实（`test_closed_parent_writes.py` 的 BY_DESIGN 写着这条）
-    ended = _pregnancy_ended_on(db, record.id)
-    if ended is not None and body.screen_date > ended[0]:
-        raise HTTPException(status_code=409, detail=f"筛查日期 {body.screen_date} 晚于这一胎的{ended[1]} {ended[0]}，"
-                                                    "不是这一胎的产前筛查：本次妊娠请先建册，按新档案登记")
-    screening = PrenatalScreening(created_by=user.id, **body.model_dump())
-    screening.flagged_high_risk = body.result in HIGH_RISK_RESULTS
-    if screening.flagged_high_risk:
-        record.high_risk = True
-        factor = f"{SCREEN_TYPES[body.screen_type]}{'高风险' if body.result == 'high_risk' else '临界风险'}"
-        # 同一本册子的几项筛查常常同一天出结果、同时录入：追加下沉到 SQL，每一项都留下。
-        append_text(db, MaternalRecord, body.record_id, "risk_factors", factor)
-    db.add(screening)
-    db.commit()
+    # 与 `add_delivery` 同一个临界区（P2-1115）：这里按这一胎的分娩日判筛查、`add_delivery` 按已记的筛查判分娩日，读的
+    # 都是别的行——只圈分娩那一边挡不住这一边（P2-1020 跟进同一个理由），同时落下的筛查与分娩登记各自读到「没对方」、都放行
+    with serialized_on(db, MaternalRecord, record.id):
+        db.refresh(record)
+        # 产前筛查只能是这一胎结束之前的事（P2-233）：日期晚于分娩（没登记分娩的按最早一次产后访视）的，不可能是这一胎
+        # 的产前筛查——一孕一册之后同一位妇女名下有上一胎的旧档案，按旧档案号录进来的本次妊娠的高风险结果把上一胎标成
+        # 高危、这一胎仍是「正常」。不按「已结案」一刀切（P2-211 原先那样挡）：结案之后才补录的、这一胎孕期里做的筛查
+        # 照收，结论是这次孕期的事实（`test_closed_parent_writes.py` 的 BY_DESIGN 写着这条）
+        ended = _pregnancy_ended_on(db, record.id)
+        if ended is not None and body.screen_date > ended[0]:
+            raise HTTPException(status_code=409, detail=f"筛查日期 {body.screen_date} 晚于这一胎的{ended[1]} {ended[0]}，"
+                                                        "不是这一胎的产前筛查：本次妊娠请先建册，按新档案登记")
+        screening = PrenatalScreening(created_by=user.id, **body.model_dump())
+        screening.flagged_high_risk = body.result in HIGH_RISK_RESULTS
+        if screening.flagged_high_risk:
+            record.high_risk = True
+            factor = f"{SCREEN_TYPES[body.screen_type]}{'高风险' if body.result == 'high_risk' else '临界风险'}"
+            # 同一本册子的几项筛查常常同一天出结果、同时录入：追加下沉到 SQL，每一项都留下。
+            append_text(db, MaternalRecord, body.record_id, "risk_factors", factor)
+        db.add(screening)
+        db.commit()
     db.refresh(screening)
     return _screening_out(screening)
 
