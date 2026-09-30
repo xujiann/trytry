@@ -1752,6 +1752,13 @@ def create_health_prescription(
         raise HTTPException(status_code=404, detail=program_problem)
     record = SpdHealthPrescription(**body.model_dump(), doctor_id=user.id)
     db.add(record)
+    db.flush()
+    from ..platform import notify_resident
+
+    # 居民端「干预」页可见，开具时给居民发一条站内消息（P2-1051）：原先居民端读不到、也不通知，开出的指导等于没开
+    notify_resident(db, body.patient_id, category="spd_health_rx", title="医生为您开具了健康处方",
+                    body="用药、康复与日常健康管理指导，请在「慢专病 · 干预」里查看", link_type="spd_health_rx",
+                    link_id=record.id)
     db.commit()
     return {"id": record.id, "created_at": record.created_at.isoformat()}
 

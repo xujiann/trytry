@@ -1072,7 +1072,8 @@ $("#price-search").addEventListener("input", (e) => {
 /* ---------------- 站内消息 ---------------- */
 
 // 慢专病宣教推送（spd_edu）也投居民站内信，原先缺这一类，印成「spd_edu · …」（P2-210）
-const NOTIFY_LABELS = { exam_report: "检查报告", surgery: "手术安排", followup: "随访提醒", spd_edu: "健康宣教" };
+const NOTIFY_LABELS = { exam_report: "检查报告", surgery: "手术安排", followup: "随访提醒", spd_edu: "健康宣教",
+  spd_health_rx: "健康处方" };
 
 $("#btn-notify-login").addEventListener("click", () => {
   switchTab("archive");
@@ -1549,8 +1550,20 @@ async function renderSpdFollowups(box) {
 }
 
 async function renderSpdPlans(box) {
-  const rows = await authApi(`/api/portal/spd/interventions${spdQuery()}`);
-  box.innerHTML = rows.map((p) => `<div class="m-card">
+  // 健康处方与干预方案同页（P2-1051）：管理端开具页写着「居民端『干预』页可见」，原先居民端读不到
+  const [rows, prescriptions] = await Promise.all([
+    authApi(`/api/portal/spd/interventions${spdQuery()}`),
+    authApi(`/api/portal/spd/health-prescriptions${spdQuery()}`),
+  ]);
+  const rxCards = prescriptions.map((rx) => `<div class="m-card">
+    <h3>健康处方${rx.program_name ? ` · ${esc(rx.program_name)}` : ""}</h3>
+    ${rx.drug_advice ? kv("用药指导", esc(rx.drug_advice)) : ""}
+    ${rx.rehab_advice ? kv("康复训练", esc(rx.rehab_advice)) : ""}
+    ${rx.life_advice ? kv("日常管理", esc(rx.life_advice)) : ""}
+    ${rx.target_note ? kv("管理目标", esc(rx.target_note)) : ""}
+    ${kv("开具", `${esc(rx.doctor_name || "—")} · ${esc((rx.created_at || "").slice(0, 10))}`)}
+    </div>`).join("");
+  box.innerHTML = rxCards + rows.map((p) => `<div class="m-card">
     ${kv("干预目标", esc(p.goal || "—"))}
     ${kv("方案内容", esc(p.content))}
     ${p.measures ? kv("具体措施", esc(p.measures)) : ""}
@@ -1558,7 +1571,7 @@ async function renderSpdPlans(box) {
     ${kv("下次执行", esc(p.next_at || "—"))}
     ${kv("状态", esc(p.status_name || p.status))}
     ${p.read || p.status === "removed" ? "" : `<button type="button" class="ghost-btn" data-spd-read="${p.id}">标记已读并反馈</button>`}
-    </div>`).join("") || '<p class="empty">暂无干预方案</p>';
+    </div>`).join("") || (rxCards ? "" : '<p class="empty">暂无干预方案</p>');
   box.querySelectorAll("[data-spd-read]").forEach((btn) => {
     btn.addEventListener("click", async () => {
       // 请求放进表单的提交回调（P2-1014）：提交失败时原因写在表单里、写的反馈还在

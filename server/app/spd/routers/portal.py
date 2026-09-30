@@ -30,6 +30,7 @@ from ..models import (
     SpdEduPush,
     SpdEnrollment,
     SpdFollowupRecord,
+    SpdHealthPrescription,
     SpdIntervention,
     SpdMeasurement,
     SpdPackageBinding,
@@ -1230,6 +1231,52 @@ def my_interventions(
          "frequency": r.frequency, "next_at": r.next_at, "status": r.status,
          "status_name": INTERVENTION_STATUS_NAMES.get(r.status, r.status),
          "feedback": r.feedback, "read": r.read_at is not None,
+         "created_at": r.created_at.isoformat()}
+        for r in rows
+    ]
+
+
+class SpdHealthRxOut(BaseModel):
+    id: int
+    program_code: str
+    program_name: str
+    drug_advice: str
+    rehab_advice: str
+    life_advice: str
+    target_note: str
+    doctor_name: str
+    created_at: str
+
+
+@router.get("/health-prescriptions", response_model=list[SpdHealthRxOut])
+def my_health_prescriptions(
+    response: Response,
+    patient_id: int | None = None,
+    offset: int = 0,
+    limit: int = 50,
+    account: ResidentAccount = Depends(current_resident),
+    db: Session = Depends(get_db),
+):
+    """医生开的健康处方：用药指导、康复训练、日常健康管理（个案管理师端 #14，P2-1051）。
+
+    管理端开具页写着「用药 / 康复 / 生活三段至少填一段；居民端『干预』页可见」，原先居民端没有任何接口读得到它——医生以为
+    开出的指导居民手机上看得到，居民那边既看不到、也收不到消息。与干预方案同一口径：本人与代管家属可见、读留痕。"""
+    patient = _patient(db, account, patient_id, resource="spd_health_rx")
+    rows = paginate(
+        db.query(SpdHealthPrescription)
+        .filter(SpdHealthPrescription.patient_id == patient.id)
+        .order_by(SpdHealthPrescription.id.desc()),
+        response,
+        offset,
+        limit,
+    )
+    names = _program_names(db, [r.program_code for r in rows])
+    doctors = {u.id: u.full_name for u in db.query(User).filter(
+        User.id.in_([r.doctor_id for r in rows if r.doctor_id] or [0]))}
+    return [
+        {"id": r.id, "program_code": r.program_code, "program_name": names.get(r.program_code, ""),
+         "drug_advice": r.drug_advice, "rehab_advice": r.rehab_advice, "life_advice": r.life_advice,
+         "target_note": r.target_note, "doctor_name": doctors.get(r.doctor_id, "") if r.doctor_id else "",
          "created_at": r.created_at.isoformat()}
         for r in rows
     ]
