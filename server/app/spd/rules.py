@@ -125,6 +125,11 @@ def _check_comparison_value(field: str, op: str, value) -> None:
     求值按数比、读不成数判不命中，区间按 `low <= 值 <= high` 比——「介于 200,160」「180,」（页面把空段读成 0）
     「180，abc」（读成 null）、「≥ 18O」（字母 O）都建得成，之后永远不命中，也没有任何报错。读得成数的文本（"180"）
     照收，与求值同一个读法。
+
+    等于 / 不等于 / 包含的值、属于 / 不属于的列表同一个口径，不能留空（P2-1117）：页面值框留空交上来的就是 `""`、
+    属于 / 不属于交 `[]`，新加一行的缺省是「年龄 等于（空）」。`== ""`、`in []` 永远不成立，`!= ""`、`contains ""`、
+    `not_in []` 对任何有值的事实都成立——纳入规则（全部满足）混进一行谁都纳不进，排除 / 转诊触发 / 问卷异常（任一
+    满足）混进一行人人命中，也没有任何报错。
     """
     if op == "between":
         low, high = _finite_number(value[0]), _finite_number(value[1])
@@ -134,6 +139,22 @@ def _check_comparison_value(field: str, op: str, value) -> None:
             raise RuleError(f"条件 {field} 的区间下限 {value[0]} 大于上限 {value[1]}，永远不会命中")
     elif op in (">", ">=", "<", "<=") and _finite_number(value) is None:
         raise RuleError(f"条件 {field} 的比较值必须是数（收到 {value!r}）")
+    elif op in ("==", "!=", "contains") and _blank(value):
+        outcome = "永远不会命中" if op == "==" else "对任何有值的数据都成立"
+        raise RuleError(f"条件 {field} 的比较值不能为空（「{OPERATORS[op]}」空值{outcome}）")
+    elif op in ("in", "not_in"):
+        if not isinstance(value, list):
+            raise RuleError(f"条件 {field} 的「{OPERATORS[op]}」要写成值的列表（收到 {value!r}）")
+        if not value:
+            outcome = "永远不会命中" if op == "in" else "对任何有值的数据都成立"
+            raise RuleError(f"条件 {field} 的「{OPERATORS[op]}」至少要填一个值（空列表{outcome}）")
+        if any(_blank(item) for item in value):
+            raise RuleError(f"条件 {field} 的「{OPERATORS[op]}」列表里有空值（收到 {value!r}）")
+
+
+def _blank(value) -> bool:
+    """比较值留空：没写（None）或去掉两端空白后是空串（P2-1117）。等值按去掉首尾空白的文本比（`_same`），空白串即空串。"""
+    return value is None or (isinstance(value, str) and not value.strip())
 
 
 def as_validated(conditions: list[dict]) -> list[dict]:
