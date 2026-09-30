@@ -56,7 +56,7 @@ from ..models import (
     SpdVillageDoctor,
 )
 from ..rules import RuleError, as_validated, evaluate, is_suspect_risk, score_scale
-from ..service import (MEASUREMENT_SOURCE_NAMES, TASK_OPEN_STATUSES, actively_enrolled, award_points, build_facts,
+from ..service import (PACKAGE_ITEM_NAME_MAX, SCALE_ADVICE_MAX, MEASUREMENT_SOURCE_NAMES, TASK_OPEN_STATUSES, actively_enrolled, award_points, build_facts,
                        candidate_reason, candidate_undistributed, close_open_work, exclusion_problem, match_program, migration_void_reason,
                        package_items_ok,
                        scale_program_mismatch, scale_unusable, scale_version_problem, unknown_program)
@@ -538,7 +538,8 @@ def create_screening(
     screening = SpdScreening(
         patient_id=body.patient_id, program_code=body.program_code, source=body.source,
         org_id=org_id, operator_id=user.id, scale_code=body.scale_code,
-        answers=body.answers, score=score, risk_level=risk, result=result, advice=advice,
+        answers=body.answers, score=score, risk_level=risk, result=result,
+        advice=advice[:SCALE_ADVICE_MAX],   # 存量量表的长建议（P2-1048）
     )
     db.add(screening)
     db.flush()
@@ -2104,7 +2105,8 @@ def add_usage(
         target["used"] = int(target.get("used", 0)) + body.qty
         binding.items = items
         usage = SpdPackageUsage(
-            binding_id=binding_id, item_code=body.item_code, item_name=target.get("name", ""),
+            binding_id=binding_id, item_code=body.item_code,
+            item_name=str(target.get("name", ""))[:PACKAGE_ITEM_NAME_MAX],   # 存量服务包的长项目名（P2-1048）
             qty=body.qty, price=target.get("price", 0), operator_id=user.id, note=body.note,
         )
         db.add(usage)

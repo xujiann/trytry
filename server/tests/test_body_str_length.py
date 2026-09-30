@@ -1161,3 +1161,48 @@ def test_档案更正_姓名超长与内容过长_提交时422_恰好到上限�
     reviewed = client.post(f"/api/consents/corrections/{exact.json()['id']}/review", headers=admin, json={"approve": True})
     assert reviewed.status_code == 200, reviewed.text
 
+
+# 慢专病配置 JSON 里的自由文本不设上限、派生写进窄列：服务包项目名写进扣减流水（64），量表分段的「建议」写进评估 / 筛查记录
+# （512）——超长的配置照建、照绑，扣减一次、评估落到那一段在生产库上即 500（P2-1048，第三十批 D1-9）。建 / 改时 422；
+# 存量里已经超长的照常用、写入时截断。
+def test_服务包项目名与量表建议超长_建时422_存量的照常扣减与评估(client, admin, world):
+    from app.database import SessionLocal
+    from app.spd.models import SpdAssessment, SpdEnrollment, SpdPackageUsage, SpdScale, SpdServicePackage
+    from app.spd.service import PACKAGE_ITEM_NAME_MAX, SCALE_ADVICE_MAX
+
+    assert SpdAssessment.__table__.c.advice.type.length == SCALE_ADVICE_MAX
+    assert SpdPackageUsage.__table__.c.item_name.type.length == PACKAGE_ITEM_NAME_MAX
+    long_item = "项" * (PACKAGE_ITEM_NAME_MAX + 11)
+    bad_pkg = client.post("/api/spd/service-packages", headers=admin, json={
+        "code": "p21048_bad", "name": "P21048 包", "items": [{"code": "BP", "name": long_item, "times": 3}]})
+    assert bad_pkg.status_code == 422 and "服务包项目名称不超过" in bad_pkg.json()["detail"], bad_pkg.text   # 修前 201
+    long_advice = "议" * (SCALE_ADVICE_MAX + 88)
+    scoring = {"ranges": [{"min": 0, "max": 100, "risk": "high", "advice": long_advice}]}
+    items = [{"key": "q1", "title": "是否头晕", "options": [{"label": "是", "score": 5}, {"label": "否", "score": 0}]}]
+    bad_scale = client.post("/api/spd/scales", headers=admin, json={
+        "code": "p21048_bad", "name": "P21048 量表", "items": items, "scoring": scoring})
+    assert bad_scale.status_code == 422 and "建议不超过" in bad_scale.json()["detail"], bad_scale.text   # 修前 201
+    with SessionLocal() as db:   # 存量：修之前建进去的长配置
+        db.add_all([
+            SpdScale(code="p21048_old", name="P21048 存量量表", category="risk", status="published",
+                     items=items, scoring=scoring),
+            SpdServicePackage(code="p21048_old", name="P21048 存量包", items=[{"code": "BP", "name": long_item, "times": 3}]),
+        ])
+        enrollment = SpdEnrollment(patient_id=world["patient"], program_code="hypertension", org_id=world["township"],
+                                   status="active")
+        db.add(enrollment)
+        db.commit()
+        enrollment_id = enrollment.id
+        package_id = db.query(SpdServicePackage.id).filter_by(code="p21048_old").scalar()
+    assessed = client.post("/api/spd/assessments", headers=admin, json={
+        "patient_id": world["patient"], "scale_code": "p21048_old", "answers": {"q1": "是"}})
+    assert assessed.status_code == 201, (assessed.status_code, assessed.text[:200])   # 修前生产库 500
+    bound = client.post(f"/api/spd/enrollments/{enrollment_id}/packages", headers=admin, json={"package_id": package_id})
+    assert bound.status_code == 201, bound.text
+    used = client.post(f"/api/spd/package-bindings/{bound.json()['id']}/usages", headers=admin, json={"item_code": "BP"})
+    assert used.status_code == 201, (used.status_code, used.text[:200])   # 修前生产库 500
+    with SessionLocal() as db:
+        (advice,) = db.query(SpdAssessment.advice).filter_by(scale_code="p21048_old").one()
+        (item_name,) = db.query(SpdPackageUsage.item_name).filter_by(id=used.json()["usage_id"]).one()
+    assert (advice, item_name) == (long_advice[:SCALE_ADVICE_MAX], long_item[:PACKAGE_ITEM_NAME_MAX])
+

@@ -49,7 +49,7 @@ from ..models import (
     SpdTeam,
 )
 from ..rules import is_suspect_risk, score_scale
-from ..service import (CONSULT_ROLES, FOLLOWUP_OPEN_STATUSES, MEASUREMENT_SOURCE_NAMES, MEDIA_TYPE_NAMES, PACKAGE_BINDING_STATUS_NAMES,
+from ..service import (SCALE_ADVICE_MAX, CONSULT_ROLES, FOLLOWUP_OPEN_STATUSES, MEASUREMENT_SOURCE_NAMES, MEDIA_TYPE_NAMES, PACKAGE_BINDING_STATUS_NAMES,
                        REFERRAL_ACTION_NAMES, REFERRAL_STATUS_LABELS, TASK_COMPLETABLE_STATUSES, TASK_OPEN_STATUSES, actively_enrolled, answers_problem, referral_ends,
                        close_followup_record, enrollment_for, judge_measurement, mark_intervention_done,
                        measure_program_for, measure_value_problem, move_task,
@@ -636,7 +636,7 @@ def self_screening(
         scale_code=body.scale_code, answers=body.answers, score=graded["score"],
         risk_level=risk,
         result="excluded" if excluded else "suspect" if is_suspect_risk(risk) else "normal",
-        advice=graded["advice"],
+        advice=str(graded["advice"])[:SCALE_ADVICE_MAX],   # 存量量表的长建议（P2-1048）
     )
     db.add(record)
     db.commit()

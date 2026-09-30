@@ -23,7 +23,7 @@ from ...models import (
     SpdTag,
 )
 from ...rules import scale_overlap_problem, scale_problem
-from ...service import MEDIA_TYPE_NAMES, package_items_ok, unknown_program
+from ...service import MEDIA_TYPE_NAMES, PACKAGE_ITEM_NAME_MAX, SCALE_ADVICE_MAX, package_items_ok, unknown_program
 from ._base import CONFIG_ROLES, SvgResponse, _qr_svg, router
 
 
@@ -129,9 +129,19 @@ def _check_item_keys(items: list[dict]) -> None:
 def _check_scale(items: list, scoring: dict) -> None:
     """建 / 改 / 发布量表同一句（P2-80）：会让作答 500、或题目计不进分的配置，写库前拦下；评分分段重叠的同样拦下（P2-887，
     压线的分落进哪一段取决于书写顺序）。"""
-    problem = scale_problem(items, scoring) or scale_overlap_problem(scoring)
+    problem = scale_problem(items, scoring) or scale_overlap_problem(scoring) or _scale_advice_problem(scoring)
     if problem:
         raise HTTPException(status_code=422, detail=f"量表配置非法：{problem}")
+
+
+def _scale_advice_problem(scoring: dict) -> str:
+    """评分分段的「建议」装得进评估 / 筛查记录的建议列（P2-1048）：原先不查长度，超长的量表照建、照发布，评估、筛查登记、
+    居民自查落到那一段在生产库上即 500。只在建 / 改 / 发布时拦；存量量表照常作答，写记录时按列宽截断。"""
+    for rng in (scoring or {}).get("ranges", []) or []:
+        advice = rng.get("advice", "") if isinstance(rng, dict) else ""
+        if isinstance(advice, str) and len(advice) > SCALE_ADVICE_MAX:
+            return f"评分分段的建议不超过 {SCALE_ADVICE_MAX} 字（这一段 {len(advice)} 字）"
+    return ""
 
 
 @router.post("/scales", response_model=ScaleOut, status_code=201,
@@ -382,6 +392,11 @@ def _check_package_items(items: list[dict]) -> None:
     if not package_items_ok(items):
         raise HTTPException(status_code=422, detail="服务包项目须有编码且次数大于0")
     codes = [str(item["code"]) for item in items]
+    # 项目名写进扣减流水（P2-1048）：原先不查长度，超长的服务包照建、照绑，扣减一次在生产库上即 500
+    too_long = [str(item["code"]) for item in items if len(str(item.get("name", ""))) > PACKAGE_ITEM_NAME_MAX]
+    if too_long:
+        raise HTTPException(status_code=422,
+                            detail=f"服务包项目名称不超过 {PACKAGE_ITEM_NAME_MAX} 字：{'、'.join(too_long)}")
     repeated = sorted({code for code in codes if codes.count(code) > 1})
     if repeated:
         raise HTTPException(status_code=422,

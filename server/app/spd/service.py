@@ -35,6 +35,7 @@ from .models import (
     SpdMeasurement,
     SpdPathInstance,
     SpdPathNode,
+    SpdPackageUsage,
     SpdPathTemplate,
     SpdPointAccount,
     SpdPointRecord,
@@ -44,6 +45,7 @@ from .models import (
     SpdReferralStep,
     SpdRevisit,
     SpdScale,
+    SpdScreening,
     SpdTarget,
     SpdTask,
     SpdVillageDoctor,
@@ -559,6 +561,10 @@ def referral_last_moved_at():
 #: 「干预执行：{干预目标}」「{路径名}·{节点名}」，各段各自在上限内、拼起来就超：开发库照存，生产库撞列宽即 500，重度异常的
 #: 随访执行、居民自助作答、批量下发干预整笔回滚。这里是「所有任务都从这里出」的汇合点，按列宽截断（P1-164 同一口径）
 SPD_TASK_TITLE_MAX = cast(String, SpdTask.__table__.c.title.type).length or 128
+#: 配置 JSON 里的自由文本派生写进窄列的两处（P2-1048）：量表分段的「建议」写进评估 / 筛查记录（512），服务包项目名写进
+#: 扣减流水（64）。建 / 改配置时按它们 422；存量配置里已经超长的，写入时按列宽截断，不让评估、筛查、居民自查、扣减在生产库上 500
+SCALE_ADVICE_MAX = cast(String, SpdScreening.__table__.c.advice.type).length or 512
+PACKAGE_ITEM_NAME_MAX = cast(String, SpdPackageUsage.__table__.c.item_name.type).length or 64
 
 
 def spawn_task(

@@ -48,7 +48,7 @@ from ..models import (
     SpdScale,
 )
 from ..rules import score_scale
-from ..service import (ENROLL_STATUS_LABELS, ENROLLMENT_ENDED_STATUSES, MEASUREMENT_SOURCE_NAMES, REVISIT_OPEN_STATUSES,
+from ..service import (SCALE_ADVICE_MAX, ENROLL_STATUS_LABELS, ENROLLMENT_ENDED_STATUSES, MEASUREMENT_SOURCE_NAMES, REVISIT_OPEN_STATUSES,
                        RISK_LEVEL_NAMES, award_points, enrollment_for, feedback_appended, judge_measurement,
                        measure_program_for,
                        measure_value_problem, scale_program_mismatch, scale_unusable, scale_version_problem, spawn_task,
@@ -687,7 +687,7 @@ def create_assessment(
         patient_id=body.patient_id, scale_id=scale.id, scale_code=scale.code,
         scale_version=scale.version, program_code=body.program_code or scale.program_code,
         answers=body.answers, score=graded["score"], risk_level=graded["risk_level"],
-        advice=graded["advice"], channel=body.channel, operator_id=user.id,
+        advice=graded["advice"][:SCALE_ADVICE_MAX], channel=body.channel, operator_id=user.id,   # 存量量表的长建议（P2-1048）
     )
     db.add(record)
     enrollment = _managed_enrollment_of(db, body.patient_id, record.program_code)
