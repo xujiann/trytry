@@ -7,7 +7,9 @@
 与平台既有任务同一约定：`def job(db) -> (处理对象数, 结果摘要)`，
 查询口径复用业务侧的实现，不在这里另写一套判定。
 """
-from sqlalchemy import func
+from typing import cast
+
+from sqlalchemy import String, func
 from sqlalchemy.orm import Session
 
 from .. import clock
@@ -66,6 +68,8 @@ def spd_report_push(db: Session) -> tuple[int, str]:
     from .models import SpdReportInstance, SpdReportTask, SpdReportTemplate
     from .platform import Organization, User, notify_user
     from .reporting import compose_section, default_period_label
+
+    REPORT_TITLE_MAX = cast(String, SpdReportInstance.__table__.c.title.type).length or 128
 
     now = now_naive()
     today = clock.today().isoformat()
@@ -136,7 +140,9 @@ def spd_report_push(db: Session) -> tuple[int, str]:
             scope = period_label if org_id is None else f"{period_label}·{org_names[org_id]}"
             instance = SpdReportInstance(
                 task_id=task.id, template_code=template.code,
-                title=f"{template.name}（{scope}）", period_label=label,
+                # 按列宽截断（P2-1046）：模板名 64 + 期间 + 机构名 128 能拼出 200 字，生产库上撞列宽即 500——调度统一回滚，
+                # 整轮所有推送任务的报告都停，每 5 分钟重试、重败
+                title=f"{template.name}（{scope}）"[:REPORT_TITLE_MAX], period_label=label,
                 scope_level=template.scope_level, org_id=org_id, content=content,
                 subscriber_ids=task.subscriber_ids or [],
             )

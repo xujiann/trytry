@@ -26,7 +26,7 @@ from secrets import randbelow
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, field_validator
-from sqlalchemy import func, update
+from sqlalchemy import String, func, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -1044,6 +1044,10 @@ def update_plan(plan_id: int, body: PlanPatch, db: Session = Depends(get_db)):
 # ============================================================ 计分
 
 
+#: 考核分的对象名是快照、列宽 64（P2-1046）：机构名本身收 128 字，全量展开时一家机构名过长，生产库上撞列宽即 500——
+#: 整轮跑分回滚、所有机构都没分（开发库照存）。对象号另存，名称按列宽截断
+SCORE_OBJECT_NAME_MAX = cast(String, SpdScore.__table__.c.object_name.type).length or 64
+
 class RunScoreIn(BaseModel):
     plan_id: int
     period: str = Field(min_length=4, max_length=16, pattern=NON_BLANK)
@@ -1179,7 +1183,7 @@ def run_scoring(body: RunScoreIn, db: Session = Depends(get_db)):
                 )
                 .first()
             ), "考核记录")
-        record.object_name = object_name
+        record.object_name = object_name[:SCORE_OBJECT_NAME_MAX]   # 名称是快照，对象号另存（P2-1046）
         record.program_code = body.program_code
         record.total_score = round(total_score, 2)
         record.detail = detail

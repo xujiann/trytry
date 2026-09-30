@@ -1099,3 +1099,43 @@ def test_慢专病任务标题拼出来超列宽_随访执行与批量干预照�
     assert ("随访异常处置：" + action)[:SPD_TASK_TITLE_MAX] in titles
     assert ("干预执行：" + goal)[:SPD_TASK_TITLE_MAX] in titles
 
+
+# 机构名收 128 字，抄进更窄的快照列：考核分的对象名（64），报告推送的标题「模板名（期间·机构名）」（128）——生产库上一家机构名
+# 过长，整轮跑分回滚、所有机构都没分；报告推送整轮回滚、每 5 分钟重试重败（P2-1046，第三十批 D1-6）。按列宽截断。
+def test_机构名很长_考核跑分与报告推送照常_快照名截断(client, admin):
+    from app.database import SessionLocal
+    from app.models import Organization
+    from app.spd.jobs import spd_report_push
+    from app.spd.models import SpdReportInstance, SpdReportTask, SpdReportTemplate, SpdScore
+    from app.spd.routers.assess import SCORE_OBJECT_NAME_MAX
+
+    assert SpdScore.__table__.c.object_name.type.length == SCORE_OBJECT_NAME_MAX
+    long_name = "P21046" + "长" * 110
+    org = client.post("/api/organizations", headers=admin, json={
+        "name": long_name, "org_type": "township", "level": "township"})
+    assert org.status_code == 201, org.text
+    org_id = org.json()["id"]
+    indicator = client.post("/api/spd/indicators", headers=admin, json={
+        "code": "p21046_ind", "name": "P21046 指标", "data_source": "task", "object_type": "org"})
+    assert indicator.status_code == 201, indicator.text
+    plan = client.post("/api/spd/assess-plans", headers=admin, json={
+        "code": "p21046_plan", "name": "P21046 方案", "level": "township", "object_type": "org",
+        "period_type": "month", "items": [{"indicator_code": "p21046_ind", "weight": 100}]})
+    assert plan.status_code == 201, plan.text
+    run = client.post("/api/spd/scores/run", headers=admin, json={
+        "plan_id": plan.json()["id"], "period": "2026-09", "object_ids": [org_id]})
+    assert run.status_code == 200, (run.status_code, run.text[:200])   # 修前生产库 500：整轮没分
+    with SessionLocal() as db:
+        (name,) = db.query(SpdScore.object_name).filter_by(plan_id=plan.json()["id"], object_id=org_id).one()
+        assert name == long_name[:SCORE_OBJECT_NAME_MAX]
+        template = SpdReportTemplate(code="p21046_tpl", name="模" * 64, period="month", sections=[])
+        db.add(template)
+        db.flush()
+        db.add(SpdReportTask(template_id=template.id, name="P21046 推送", push_time="00:00", org_ids=[org_id]))
+        db.commit()
+        spd_report_push(db)   # 修前生产库在这里 StringDataRightTruncation，整轮回滚
+        db.commit()
+        titles = [t for (t,) in db.query(SpdReportInstance.title).filter_by(template_code="p21046_tpl")]
+        width = SpdReportInstance.__table__.c.title.type.length
+        assert len(titles) == 1 and len(titles[0]) == width and titles[0].startswith("模" * 64 + "（")
+
