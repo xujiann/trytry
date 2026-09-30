@@ -1992,6 +1992,46 @@ def test_统一支付选得到网关支付_受理回执写待回调_不报支付
     page.unroute("**/api/billing/payments")
 
 
+def test_退款金额填了读不成数_框里报错不发请求_不当成全额退款(page, base_url):
+    """P1-233：退款金额是文本框，原先「50元」「５０」「1,000」经 Number() 得 NaN、JSON 里成了 null，后端按「没填」
+    整单全额退款。e2e 服务里造一张已支付的网关单要真网关回调，支付单清单与退款应答由 Playwright 截下来回（后端
+    「显式 null 按缺省全额」见 billing.RefundIn），这里看页面发不发、发什么。"""
+    paid = {"id": 991233, "settlement_id": 1, "channel": "cash", "channel_name": "现金", "amount": 300,
+            "refunded_amount": 0, "status": "paid", "status_name": "已支付", "trade_no": "E2E-1233", "fail_reason": "",
+            "paid_at": "2026-09-30T08:00:00", "refunded_at": None, "callback_at": None,
+            "created_at": "2026-09-30T08:00:00", "pay_url": "", "qr_code": ""}
+    sent = []
+
+    def payments(route):
+        if route.request.method != "GET":
+            return route.continue_()
+        route.fulfill(status=200, json=[paid])
+
+    def refund(route):
+        sent.append(route.request.post_data_json)
+        route.fulfill(status=200, json={"payment_id": paid["id"], "refund_amount": 50, "refund_no": "RF-E2E-1233",
+                                        "status": "paid", "refunded_amount": 50})
+
+    page.route("**/api/billing/payments", payments)
+    page.route("**/api/billing/payments/991233/refund", refund)
+    _login(page, base_url)
+    _open_page(page, "billing", "费用结算")
+    for typed in ("50元", "５０", "1,000"):
+        page.click('[data-refund="991233"]')
+        form = _spd_modal_rejected(page, {"amount": typed})
+        expect(form.locator("[data-modal-msg]")).to_contain_text("退款金额要填大于 0 的数字")
+        expect(form.locator('[name="amount"]')).to_have_value(typed)   # 框不关、填的还在
+        form.locator("button[data-cancel]").click()
+        expect(form).to_have_count(0)
+    assert sent == []   # 修前三次都发出 {"amount": null}，整单全额退
+    page.click('[data-refund="991233"]')
+    _spd_modal(page, {"amount": "50", "reason": "E2E部分退款"})
+    expect(page.locator("#pay-msg")).to_contain_text("退款成功 50 元，退款单号 RF-E2E-1233")
+    assert sent == [{"amount": 50, "reason": "E2E部分退款"}]
+    page.unroute("**/api/billing/payments/991233/refund")
+    page.unroute("**/api/billing/payments")
+
+
 def test_编辑专病中心只改名_已停用的状态不被悄悄改成筹建(page, base_url, admin_read, admin_call):
     """P2-421：编辑框的状态下拉原先写死筹建 / 运行中 / 暂停三项，已停用的中心一打开就落在第一项「筹建」，
     只改个名字保存，状态被悄悄改掉。修后选项取自后端的状态文案表（专家工作台下发的 `center_status_names`）。"""

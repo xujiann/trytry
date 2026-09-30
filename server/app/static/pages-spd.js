@@ -943,6 +943,10 @@ async function renderSpdExpert() {
       ] : []),
     ]);
     if (!form) return;
+    // 牵头机构填了就得是机构号（P1-233 同形）：原先「3号院」经 Number() 得 NaN、JSON 里成了 null，牵头机构被悄悄清掉
+    if (full.id && form.lead_org_id && !/^\d+$/.test(form.lead_org_id)) {
+      return setMsg("#spd-center-msg", "牵头机构ID要填数字（清空即不设）", false);
+    }
     const body = { name: form.name, lead_dept: form.lead_dept || "", version: form.version || "", status: form.status };
     if (full.id) {
       Object.assign(body, { lead_org_id: form.lead_org_id ? Number(form.lead_org_id) : null,

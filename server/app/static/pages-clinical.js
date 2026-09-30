@@ -3346,14 +3346,21 @@ async function renderBilling() {
               r.effective_date ? `（${r.effective_date}起）` : ""}${r.reason ? ` ${r.reason}` : ""}`).join("；")
           : "该项目尚无调价记录", true);
       } else if (refund) {
-        const form = await spdModal("支付退款（留空 = 全额退款，不得超可退余额）", [
+        // 填了金额就必须读得成数（P1-233）：金额框是文本框，原先「50元」「５０」「1,000」「¥50」经 Number() 得 NaN、
+        // JSON 里成了 null，后端按「没填」整单全额退——退出去的钱收不回来。报在框里、不发请求，留空才是全额；
+        // 框自己提交（P2-607），后端拒了（超可退余额等）同样留框
+        const res = await spdModal("支付退款（留空 = 全额退款，不得超可退余额）", [
           { name: "amount", label: "退款金额（元，留空为全额）" },
           { name: "reason", label: "退款原因（记进逐笔退款流水，可留空）" },
-        ]);
-        if (!form) return;
-        const body = form.amount ? { amount: Number(form.amount) } : {};
-        if (form.reason) body.reason = form.reason;
-        const res = await api(`/api/billing/payments/${refund}/refund`, { method: "POST", body: JSON.stringify(body) });
+        ], { submit: (form) => {
+          if (form.amount && !(/^\d+(\.\d+)?$/.test(form.amount) && Number(form.amount) > 0)) {
+            throw new Error("退款金额要填大于 0 的数字（如 50 或 12.5，不带单位），留空为全额退款");
+          }
+          const body = form.amount ? { amount: Number(form.amount) } : {};
+          if (form.reason) body.reason = form.reason;
+          return api(`/api/billing/payments/${refund}/refund`, { method: "POST", body: JSON.stringify(body) });
+        } });
+        if (!res) return;
         await route();   // 先重画再写回执（P2-1013）：原先写完即被重画冲掉，退款单号闪一下就没了
         setMsg("#pay-msg", `退款成功 ${res.refund_amount} 元，退款单号 ${res.refund_no}`);
       } else if (refunds) {
