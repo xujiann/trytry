@@ -1,4 +1,7 @@
 """㉓老年健康业务协同：自理能力评估（ADL自动分级）、认知筛查、体质辨识。"""
+from collections.abc import Iterable, Iterator
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -24,13 +27,14 @@ def grade_adl(score: int) -> str:
     return "重度失能"
 
 
-def _latest_by_patient(rows: list[ElderlyAssessment]) -> dict[int, ElderlyAssessment]:
+def _latest_by_patient(rows: Iterable[Any]) -> dict[int, Any]:
     """每位老人最近一次评估：按评估日期取最晚的（没填日期的按录入那天），同一天取后录的。
 
     原先按编号取最后录的那条（P2-125）：补录一张更早的纸质评估表，它就成了「最新一次」——失能清单、重度失能提醒、
     统计都按那张旧表算，年度复评提醒也按它的日期报「已超一年」。键的先后照 rows 里各人第一次出现的顺序（与原先一致）。
+    rows 是 `_scan_latest` 流式扫出来的、只带 `_LATEST_COLUMNS` 那几列的行（P2-1154），只过一遍。
     """
-    latest: dict[int, ElderlyAssessment] = {}
+    latest: dict[int, Any] = {}
     for row in rows:
         current = latest.get(row.patient_id)
         if current is None or _assessed_on(row) >= _assessed_on(current):
@@ -38,7 +42,38 @@ def _latest_by_patient(rows: list[ElderlyAssessment]) -> dict[int, ElderlyAssess
     return latest
 
 
-def _assessed_on(row: ElderlyAssessment) -> str:
+#: 取「最近一次评估」要读的列（P2-1154）：判定（`_assessed_on`）与三个接口的出参只读这几列。
+_LATEST_COLUMNS = (
+    ElderlyAssessment.patient_id, ElderlyAssessment.care_level, ElderlyAssessment.adl_score,
+    ElderlyAssessment.cognitive_score, ElderlyAssessment.tcm_constitution,
+    ElderlyAssessment.assessed_date, ElderlyAssessment.created_at,
+)
+
+
+def _scan_latest(query) -> tuple[dict[int, Any], int]:
+    """把评估查询流式扫一遍、只取 `_LATEST_COLUMNS`，得出每人最近一次评估与扫过的评估条数（P2-1154）。
+
+    原先失能清单、预警、统计三个接口（页面并发调）各自 `db.query(ElderlyAssessment)….all()` 把全部评估整行载入成 ORM
+    对象再挑每人最近一次：内存与耗时都随评估条数涨，评估从 1 万到 3 万条（老人 1 万）每个接口的峰值从 15 MB 涨到
+    46 MB（2026-09-30 在 bf2ced8 上实测，第三十三批扫描 A4-3）。照 P2-8 第四批 spd `assessment_stats` 的修法：
+    `yield_per` 流式扫、只取要读的列——留在内存里的只有每人一行（上界是老人数，由输出规模决定），不随评估条数涨。
+    `_latest_by_patient` 的判定一字未动；查询（含各接口原来的 `order_by`）由调用方照原样写好传进来，键序（= 响应里的
+    先后）原样保住，静态闸门按 `db.query(模型)` 认「这个接口读了患者维度的表」也照旧认得出。
+    流式只能过一遍，所以条数在同一圈里数（统计原来是事后 `len(rows)`）。
+    """
+    scanned = 0
+
+    def rows() -> Iterator[Any]:
+        nonlocal scanned
+        for row in query.with_entities(*_LATEST_COLUMNS).yield_per(1000):
+            scanned += 1
+            yield row
+
+    latest = _latest_by_patient(rows())
+    return latest, scanned
+
+
+def _assessed_on(row: Any) -> str:
     """评估日期；没填的按录入那天——录入时刻换成本地日期再取（第十五批 S2-6）：落库是 naive UTC，原先直接 `.date()`，
     东八区 0–8 点录的算成前一天，年度复评提醒提前一天报「已超一年」。
 
@@ -158,7 +193,7 @@ class EldercareStatsOut(BaseModel):
 @router.get("/disabled", response_model=list[DisabledElderOut])
 def disabled_elderly(db: Session = Depends(get_db)):
     """失能老人清单（每人取最新一次评估），供上门服务与家庭病床对接。"""
-    latest = _latest_by_patient(db.query(ElderlyAssessment).order_by(ElderlyAssessment.id).all())
+    latest, _ = _scan_latest(db.query(ElderlyAssessment).order_by(ElderlyAssessment.id))
     return [
         {"patient_id": a.patient_id, "care_level": a.care_level, "adl_score": a.adl_score}
         for a in latest.values()
@@ -177,7 +212,7 @@ def eldercare_alerts(today: str | None = None, db: Session = Depends(get_db)):
         reassess_before = current.replace(year=current.year - 1).isoformat()
     except ValueError:   # 今天是 2 月 29 日，去年没有这一天
         reassess_before = current.replace(year=current.year - 1, day=28).isoformat()
-    latest = _latest_by_patient(db.query(ElderlyAssessment).order_by(ElderlyAssessment.id).all())
+    latest, _ = _scan_latest(db.query(ElderlyAssessment).order_by(ElderlyAssessment.id))
     alerts = []
     for a in latest.values():
         if a.care_level == "重度失能":
@@ -213,12 +248,9 @@ def eldercare_stats(db: Session = Depends(get_db)):
     体质辨识与认知筛查未做的单列：这两项本就不是每次评估必做，
     按 0 分并入统计会把"没做"读成"分数为 0"。
     """
-    rows = (
-        db.query(ElderlyAssessment)
-        .order_by(ElderlyAssessment.patient_id, ElderlyAssessment.id)
-        .all()
+    latest, records = _scan_latest(
+        db.query(ElderlyAssessment).order_by(ElderlyAssessment.patient_id, ElderlyAssessment.id)
     )
-    latest = _latest_by_patient(rows)
 
     by_level: dict[str, int] = {}
     cognitive_scores, tcm_done = [], 0
@@ -232,7 +264,7 @@ def eldercare_stats(db: Session = Depends(get_db)):
     disabled = people - by_level.get("能力完好", 0)
     return {
         "assessed_people": people,
-        "assessment_records": len(rows),
+        "assessment_records": records,
         "by_care_level": by_level,
         "disabled_count": disabled,
         "disabled_rate_pct": round(disabled * 100 / people, 2) if people else None,
