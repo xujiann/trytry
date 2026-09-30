@@ -10,9 +10,11 @@
 协议（`Storage`）
 ----------------
 键（key）就是附件内容的 sha256 十六进制串——attachments 一直按内容寻址去重，
-协议沿用这一语义，键由调用方给出，存储层不关心其含义。
+协议沿用这一语义，键由调用方给出（存储层不计算键）。
 
-- ``save(key, data)``   —— 幂等写入：键已存在时不重写（内容寻址，同键必同内容）
+- ``save(key, data)``   —— 幂等写入：键已存在且完整时不重写（内容寻址，同键必同内容）；
+                            写入须原子——键下要么没有、要么是完整内容，写到一半失败不得
+                            留下半截（P2-1112，本地后端的做法见 ``LocalStorage.save``）
 - ``exists(key)``       —— 键下是否有内容
 - ``open(key)``         —— 以二进制只读方式打开，返回 file-like（调用方负责 close）
 - ``delete(key)``       —— 删除；键不存在时静默返回（幂等）
@@ -35,6 +37,9 @@
 LocalStorage 与原 attachments 内联实现**逐字节一致**：目录仍是
 ``{upload_dir}/{sha256前2位}/{sha256}`` 两级分桶，磁盘上已有的附件无需迁移。
 """
+import hashlib
+import os
+import secrets
 from pathlib import Path
 from typing import BinaryIO, Protocol
 
@@ -71,9 +76,38 @@ class LocalStorage:
         return bucket / key
 
     def save(self, key: str, data: bytes) -> None:
+        """内容寻址的幂等写入：最终路径上要么没有、要么完整（P2-1112）。
+
+        原先是 `if not path.exists(): path.write_bytes(data)`——直接写最终路径、不 fsync、不比大小。磁盘写满、NFS
+        抖动、Pod 被杀让 write 半途失败，这次上传 500，内容寻址路径上却留下半截文件；之后重传同一份文件见「已存在」
+        就跳过，新行 201、下载到的永远是半截，谁再传这份内容都挂到这个坏文件上。
+
+        - 写：同目录临时文件**独占创建**（随机后缀，绝不写进别人的临时文件）→ 写入 → fsync → `os.replace` 原子换名，
+          与归档任务 `jobs._open_new_archive` / `jobs._fsync` 同一口径（只 flush 不 fsync 等于没落盘）。失败时删掉
+          临时文件、照实抛出，最终路径不受影响。
+        - 已有：尺寸与来件相同即跳过（原幂等语义）。尺寸对不上，说明盘上那份是写到一半留下的：来件确是这个键的内容
+          （sha256 相符）就原子重写、把它修好；来件与键不符则不动盘上那份——不让对不上键的字节覆盖已有内容。
+        """
         path = self._path(key)
-        if not path.exists():  # 内容寻址：同键必同内容，已有即跳过（保持原幂等语义）
-            path.write_bytes(data)
+        try:
+            size: int | None = path.stat().st_size
+        except FileNotFoundError:
+            size = None
+        if size == len(data):
+            return  # 内容寻址：同键必同内容，已有且完整即跳过（保持原幂等语义）
+        if size is not None and hashlib.sha256(data).hexdigest() != key:
+            return
+        tmp = path.with_name(f".{key}.{secrets.token_hex(8)}.tmp")
+        fh = tmp.open("xb")
+        try:
+            with fh:
+                fh.write(data)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp, path)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
 
     def exists(self, key: str) -> bool:
         return self._path(key).exists()
