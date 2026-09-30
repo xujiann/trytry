@@ -18,10 +18,10 @@ from typing import cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field, FiniteFloat
-from sqlalchemy import func, update
+from sqlalchemy import case, func, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from ..clock import now_naive
 from ..numtypes import INT4_MAX
@@ -641,13 +641,23 @@ def vaccination_stats(
         return query
 
     dose_q = scoped(db.query(func.count(VaccinationRecord.id)), VaccinationRecord.org_id)
-    aefi_q = scoped(db.query(AefiReport.reaction_type, func.count(AefiReport.id)), AefiReport.org_id)
+    # 关联了剂次的 AEFI 按那一针的接种机构、接种日期归（P2-942），与分母同一个口径：原先按上报机构、发病日期归——
+    # 东镇 8-31 接种的一针、受种者 9-01 到县医院急诊，县医院关联这一针上报，东片区 8 月、9 月发生率都是 0，县直 9 月
+    # 「AEFI 1 / 剂次 0」、页面写「无接种」。没关联剂次的照旧按上报机构、发病日期
+    dose = aliased(VaccinationRecord)
+    aefi_org = case((dose.id.is_(None), AefiReport.org_id), else_=dose.org_id)
+    aefi_day = case((dose.id.is_(None), AefiReport.onset_date), else_=dose.vaccinated_date)
+    aefi_q = scoped(
+        db.query(AefiReport.reaction_type, func.count(AefiReport.id))
+        .outerjoin(dose, dose.id == AefiReport.record_id),
+        aefi_org,
+    )
     if start_date:
         dose_q = dose_q.filter(VaccinationRecord.vaccinated_date >= start_date)
-        aefi_q = aefi_q.filter(AefiReport.onset_date >= start_date)
+        aefi_q = aefi_q.filter(aefi_day >= start_date)
     if end_date:
         dose_q = dose_q.filter(VaccinationRecord.vaccinated_date <= end_date)
-        aefi_q = aefi_q.filter(AefiReport.onset_date <= end_date)
+        aefi_q = aefi_q.filter(aefi_day <= end_date)
 
     doses = dose_q.scalar() or 0
     by_reaction = dict(aefi_q.group_by(AefiReport.reaction_type).order_by(AefiReport.reaction_type).all())
