@@ -42,6 +42,7 @@ from ...deps import get_current_user, paginate, require_roles, through_day
 from ...formula import FormulaError, evaluate as eval_formula, validate as validate_formula
 from ...numtypes import non_finite_path
 from ..platform import Organization, User
+from ..rules import scale_overlap_problem
 from ..service import INDICATOR_SOURCES, point_account_for, task_overdue, unknown_program, unknown_programs
 from ..models import (
     SpdAssessPlan,
@@ -380,7 +381,8 @@ def create_indicator(body: IndicatorIn, db: Session = Depends(get_db)):
     formula_problem = indicator_formula_problem(body.formula, body.data_source)   # 留空的公式同样查（P2-1119）
     if formula_problem:
         raise HTTPException(status_code=422, detail=f"公式非法：{formula_problem}")
-    rule_problem = score_rule_problem(body.score_rule)   # 评分规则写坏了计分时 500（P2-79）
+    # 评分规则写坏了计分时 500（P2-79）；分档重叠只在写入口查（P2-1120）
+    rule_problem = score_rule_problem(body.score_rule) or step_overlap_problem(body.score_rule)
     if rule_problem:
         raise HTTPException(status_code=422, detail=f"评分规则非法：{rule_problem}")
     target_problem = ratio_target_problem(body.score_rule, body.target_value)   # P2-718
@@ -460,8 +462,8 @@ def update_indicator(indicator_id: int, body: IndicatorPatch, db: Session = Depe
             changes["formula"], changes.get("data_source", indicator.data_source))
         if formula_problem:
             raise HTTPException(status_code=422, detail=f"公式非法：{formula_problem}")
-    if "score_rule" in changes:   # 与建指标同一句（P2-79）
-        rule_problem = score_rule_problem(changes["score_rule"])
+    if "score_rule" in changes:   # 与建指标同一句（P2-79 / P2-1120）
+        rule_problem = score_rule_problem(changes["score_rule"]) or step_overlap_problem(changes["score_rule"])
         if rule_problem:
             raise HTTPException(status_code=422, detail=f"评分规则非法：{rule_problem}")
     if "score_rule" in changes or "target_value" in changes:   # 改完之后的组合与建指标同一句（P2-718）
@@ -882,6 +884,19 @@ def score_rule_problem(rule: dict, *, known_type_only: bool = True) -> str:
         if "score" in step and not _is_number(step["score"]):
             return "分档的分值（score）必须是数"
     return ""
+
+
+def step_overlap_problem(rule: dict) -> str:
+    """分档计分的档与档两两不重叠（P2-1120），没问题返回空串。先过 `score_rule_problem`（分档是列表、上下限是数）再调。
+
+    `score_of` 上下限都含、取第一个命中的档：两档 60–80 / 80–100，指标值 80 落进先写的那档得 60 分，倒过来写得 100 分——
+    分数取决于书写顺序。与量表评分分段同一个口径（P2-887，复用 `rules.scale_overlap_problem`），也同样只在建 / 改指标时
+    拦，不进 `score_rule_problem`：那一句计分时也查，存量里重叠的分档会整项记错；存量的照旧按书写顺序计分，改档时改。
+    档与档之间的缺口（79.5 落在 0–79 与 80–100 之间，「未落入任何评分档」给 0 分）另待裁定，不在这里拦。
+    """
+    if (rule or {}).get("type") != "step":
+        return ""
+    return scale_overlap_problem({"ranges": rule.get("steps", [])})
 
 
 #: 按比例计分的目标值不是正数时的后果（P2-718）：负数目标谁都达标、一件事没做也满分；0 原先被悄悄换成 100
