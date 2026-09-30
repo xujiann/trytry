@@ -48,9 +48,11 @@ from ..models import (
     RecordQcRule,
     SurgeryRecord,
     SurgeryRequest,
+    SurgerySchedule,
     User,
     utcnow,
 )
+from .surgery import operation_day
 
 router = APIRouter(prefix="/api/quality", tags=["质量安全"], dependencies=[Depends(get_current_user)])
 
@@ -1148,17 +1150,28 @@ def clinical_indicators(
     died = sum(1 for cs, _ in rows if cs.outcome in DEATH_OUTCOMES)
 
     # ---- 术前术后诊断符合率（数据源：手术记录）----
-    surgeries = db.query(SurgeryRecord).join(
-        SurgeryRequest, SurgeryRecord.request_id == SurgeryRequest.id
+    # 按做手术的那天归月（P2-1075）：开始时刻 → 排班日 → 录入时刻，与术后随访起算同一条（`surgery.operation_day`）。
+    # 原先按术中记录的录入时刻归月——8-31 夜里做的手术 9-30 补录，术后随访按 8-31 起算，质量指标却记在 9 月。
+    # 排班每张申请至多一条（request_id 唯一），外连不放大行数
+    surgeries = (
+        db.query(SurgeryRecord, SurgeryRequest.unplanned_return, SurgeryRequest.status, SurgerySchedule.scheduled_date)
+        .join(SurgeryRequest, SurgeryRecord.request_id == SurgeryRequest.id)
+        .outerjoin(SurgerySchedule, SurgerySchedule.request_id == SurgeryRecord.request_id)
     )
     if scope is not None:
         surgeries = surgeries.filter(SurgeryRequest.org_id.in_(scope))
-    if start_dt is not None:
-        surgeries = surgeries.filter(
-            SurgeryRecord.created_at >= start_dt, SurgeryRecord.created_at < end_dt
-        )
     # 一次取回，下面的诊断符合率与手术质量两组指标共用，不重复打库
-    all_surgeries = surgeries.all()
+    surgery_facts = surgeries.all()
+    if start_dt is not None and end_dt is not None:
+        low, high = start_dt.date().isoformat(), end_dt.date().isoformat()
+
+        def performed_in_period(record: SurgeryRecord, scheduled_date: str | None) -> bool:
+            day = operation_day(record.start_at, scheduled_date)
+            # 开始时刻、排班日都读不成的，按录入时刻归月（与原口径同一个比较）
+            return low <= day < high if day else start_dt <= record.created_at < end_dt
+
+        surgery_facts = [f for f in surgery_facts if performed_in_period(f[0], f[3])]
+    all_surgeries = [record for record, *_ in surgery_facts]
     surgery_total = len(all_surgeries)
     # 两项诊断都填了才纳入分母——没填的是"未采集"，不是"不符合"
     surgery_rows = [
@@ -1186,12 +1199,7 @@ def clinical_indicators(
     # 分子与分母同一批术中记录、按术中记录的时间归月（P2-201）：原先分子按申请建单时间、分母按术中记录时间——
     # 8 月 30 日提的重返申请 9 月 1 日做，8 月「1 / 0」、9 月「0 / 1」，这一台从它自己的月份里消失；
     # 8 月提了 3 台、只做了 2 台记录时算出 150%
-    unplanned_count = (
-        surgeries.filter(SurgeryRequest.unplanned_return.is_(True), SurgeryRequest.status == "completed")
-        .with_entities(func.count(SurgeryRecord.id))
-        .scalar()
-        or 0
-    )
+    unplanned_count = sum(1 for _, unplanned, status, _ in surgery_facts if unplanned and status == "completed")
 
     return {
         "period": period or "全期",

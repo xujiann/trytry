@@ -488,17 +488,28 @@ class SurgeryRecordIn(BaseModel):
     postop_diagnosis: str = Field(default="", max_length=256)
 
 
+def operation_day(start_at: str | None, scheduled_date: str | None) -> str | None:
+    """做手术的那天（`YYYY-MM-DD`）：手术开始时刻的日期，没填取排班日；都读不成返回 None，由调用方按录入时刻兜底。
+
+    术后随访起算（`_operation_day`，P2-896）与手术质量指标归月（`quality.clinical_indicators`，P2-1075）共用这一条。
+    新录的开始时刻已按 `check_datetime` 校验过（`YYYY-MM-DD` 开头），存量的开始时刻与排班日可能是 P1-61 之前的写法，
+    一律按日历读（`legacy_date`）。
+    """
+    for raw in ((start_at or "").replace("T", " ").split(" ")[0], scheduled_date or ""):
+        day = legacy_date(raw)
+        if day:
+            return day
+    return None
+
+
 def _operation_day(db: Session, request_id: int, start_at: str) -> date:
-    """术后随访从手术那天起算（P2-896）：取手术开始时刻的日期，没填取排班日，再没有才取今天。
+    """术后随访从手术那天起算（P2-896）：取手术开始时刻的日期，没填取排班日，再没有才取今天（取法见 `operation_day`）。
 
     原先按术中记录的录入日（今天）起算——9-20 夜里做的手术 9-24 补录（开始时刻写的是 9-20），随访到期 10-08，应为
-    10-04。与出院随访按实际出院日起算（P2-545）、生命周期补登按发生日期（P2-864）同一句。开始时刻已按
-    `check_datetime` 校验过（`YYYY-MM-DD` 开头）；排班日可能是 P1-61 之前的写法，按日历读（`legacy_date`）。
+    10-04。与出院随访按实际出院日起算（P2-545）、生命周期补登按发生日期（P2-864）同一句。
     """
-    if start_at:
-        return date.fromisoformat(start_at[:10])
     scheduled = db.query(SurgerySchedule.scheduled_date).filter(SurgerySchedule.request_id == request_id).first()
-    day = legacy_date(scheduled[0]) if scheduled else None
+    day = operation_day(start_at, scheduled[0] if scheduled else None)
     return date.fromisoformat(day) if day else clock.today()
 
 
