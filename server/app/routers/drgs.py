@@ -8,6 +8,8 @@
 - GET /api/drgs/stats：各机构 CMI（Σ权重/正式入组例数，兜底组不计入）、
   各组例数/均费、按 MDC 汇总。
 """
+from decimal import Decimal
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, FiniteFloat
 from sqlalchemy import case, func
@@ -531,7 +533,10 @@ def in_stay_alerts(
             })
             continue
         avg = sum(samples) / len(samples)
-        if avg > 0 and stayed > avg * los_multiplier:
+        # 门槛按整数与十进制精确比（P2-989）：原先拿浮点「均值 × 倍数」比，住院日 5、6、6、6、6、6、倍数 1.2 时门槛恰为 7 天，
+        # 浮点算出 6.999999999999999，在院恰好 7 天的也报「已明显超出」、页面同时显示超出倍数 1.2×（与 P2-156 同形）。
+        # 在院天数与样本住院日都是整数：stayed > Σ样本 × 倍数 ÷ n  ⇔  stayed × n > Σ样本 × 倍数
+        if avg > 0 and stayed * len(samples) > sum(samples) * Decimal(str(los_multiplier)):
             alerts.append({
                 "admission_id": adm.id,
                 "patient_id": adm.patient_id,
