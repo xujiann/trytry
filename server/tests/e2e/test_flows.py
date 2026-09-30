@@ -3922,7 +3922,7 @@ def test_时间戳两端都用日期时间控件填_落库是空格写法(page, 
     page.locator("#rv-at").fill("2026-08-12T09:30")
     page.locator("#rv-temp").fill("37.2")
     page.click("#round-vital button[type=submit]")
-    expect(page.locator("#round-msg")).to_contain_text("体征已录入")
+    expect(page.locator("#round-vital-msg")).to_contain_text("体征已录入")   # 体征表单自己的消息行（P2-1093）
     vitals = admin_read(f"/api/inpatient/admissions/{adm}/vitals")
     assert ("2026-08-12 09:30", 37.2) in [(v["measured_at"], v["temperature"]) for v in vitals], vitals
 
@@ -3985,7 +3985,9 @@ def test_医生移动端术中记录在卡片内表单里填_转归可选(page, 
     form.locator("input[name=postop_diagnosis]").fill("腹股沟斜疝")
     form.locator("input[name=blood_loss_ml]").fill("五十")
     form.locator("button[type=submit]").click()
-    expect(page.locator("#surgery-msg")).to_contain_text("blood_loss_ml")
+    # 报错写在这张卡的表单里（P2-1093），不写到两张列表下方的整页消息行
+    expect(form.locator("[data-card-msg]")).to_contain_text("blood_loss_ml")
+    expect(page.locator("#surgery-msg")).not_to_contain_text("blood_loss_ml")
     form.locator("input[name=blood_loss_ml]").fill("50")
     form.locator("button[type=submit]").click()
     expect(page.locator("#surgery-msg")).to_contain_text("术中记录已提交")
@@ -4065,6 +4067,29 @@ def test_医生移动端出报告与危急值处置都在卡片内表单里填_�
     expect(page.locator("#critical-msg")).to_contain_text("危急值闭环完成")
     actions = [a["action"] for a in read(f"/api/exams/reports/{report['id']}/critical-actions")]
     assert "处置反馈：已电话通知患者返院复查" in actions, actions
+
+
+def test_医生移动端卡片内表单提交失败_报错写在这张卡的表单里(page, base_url, seed, admin_call):
+    """P2-1093（第三十一批 C3-4）：医生移动端的卡片内表单（出报告、危急值处置、转诊审核 / 撤回 / 发起）失败时，报错原先写到
+    整页消息行——手机上列表 30～40 张卡片，消息行在屏幕外，卡片上什么变化都没有。修后写进这张卡的表单里，填的都在。"""
+    req = admin_call("POST", "/api/exams", {"patient_id": seed["patient"]["id"], "from_org_id": seed["org"]["id"],
+                                            "center_type": "lab", "item_code": "E2E-P21093", "item_name": "E2E卡片内报错"})
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.goto(f"{base_url}/m/doctor")
+    page.fill("#lg-user", "admin")
+    page.fill("#lg-pass", "admin123")
+    page.click("#login-form button[type=submit]")
+    expect(page.locator("#workbench")).to_be_visible()
+    page.click('a.tab-btn[data-tab="exam"]')
+    card = page.locator(".m-card", has_text="E2E卡片内报错")
+    card.locator("button[data-report]").first.click()
+    form = card.locator("form.exam-report-form")
+    admin_call("POST", f"/api/exams/{req['id']}/report", {   # 表单开着的时候别人先出了报告
+        "finding": "", "conclusion": "E2E 别人先出的", "critical": False, "reported_by": "检验科"})
+    form.locator("textarea[name=conclusion]").fill("E2E 我写的结论")
+    form.locator("button[type=submit]").click()
+    expect(form.locator("[data-card-msg]")).not_to_have_text("")   # 修前报错落到整页消息行，这里没有
+    expect(form.locator("textarea[name=conclusion]")).to_have_value("E2E 我写的结论")
 
 
 def test_校验失败的报错是人话而不是object_Object(page, base_url):
@@ -5574,7 +5599,9 @@ def test_医生移动端要佐证的任务_传了佐证才办得结(page, base_u
 
     card.locator("[data-spd-done]").click()   # 没传佐证先办结：后端拒，卡片不动
     card.locator("form.spd-done-form button[type=submit]").click()
-    expect(page.locator("#spd-msg")).to_contain_text("该任务要求上传佐证材料后才能办结")
+    # 拒绝写在这张卡的表单里（P2-1093），不写到屏幕外的整页消息行
+    expect(card.locator("form.spd-done-form [data-card-msg]")).to_contain_text("该任务要求上传佐证材料后才能办结")
+    expect(page.locator("#spd-msg")).not_to_contain_text("该任务要求上传佐证材料后才能办结")
     assert admin_read(f"/api/spd/tasks/{task['id']}")["status"] == "pending"
 
     photo = tmp_path / "bp.jpg"

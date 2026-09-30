@@ -14,11 +14,16 @@ def _read(*parts):
         return fh.read()
 
 
+def _mobile_record_form(source):
+    """移动端术中记录那一段。P2-1093 起经 cardForm 插表单（报错写进这张卡），从 cardForm 的调用切到提交成功后重载列表为止"""
+    start = source.index('cardForm(e.target.closest(".m-card"), "surg-record-form"')
+    return source[start:source.index("await loadSurgery();", start)]
+
+
 def test_移动端术中记录表单录两项并送出_缺省取申请的():
     source = _read("m", "doctor.js")
     assert 'data-anesthesia="${esc(r.anesthesia_type)}" data-incision="${esc(r.incision_level)}"' in source
-    start = source.index('form.className = "surg-record-form"')
-    form = source[start:source.index('form.querySelector("[data-cancel]")', start)]
+    form = _mobile_record_form(source)
     for field in ("anesthesia_type", "incision_level"):
         assert f'<select name="{field}">' in form, field
         assert f"{field}: f.{field}.value" in form, field
@@ -28,8 +33,7 @@ def test_移动端术中记录录并发症并送出():
     """P2-861（第二十三批「页面表单提交的字段与取值 vs 后端请求模型」扫描 Y1-10）：移动端原先不录并发症，手机上记的每一台
     都进「手术并发症发生率」的分母、进不了分子（术中所见写了「术后切口感染」也一样）；管理端同一张记录早有这一项。"""
     source = _read("m", "doctor.js")
-    start = source.index('form.className = "surg-record-form"')
-    form = source[start:source.index('form.querySelector("[data-cancel]")', start)]
+    form = _mobile_record_form(source)
     assert '<input name="complications"' in form and "complications: f.complications.value.trim()," in form
 
 

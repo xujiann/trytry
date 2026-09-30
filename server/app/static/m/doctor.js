@@ -65,8 +65,18 @@ function cardForm(card, className, fieldsHtml, submitLabel, onSubmit) {
   form.dataset.submitLabel = submitLabel;
   form.innerHTML = `${fieldsHtml}
     <button type="submit" class="ghost-btn">${esc(submitLabel)}</button>
-    <button type="button" class="ghost-btn" data-cancel>取消</button>`;
-  form.onsubmit = (e) => { e.preventDefault(); onSubmit(form.elements); };
+    <button type="button" class="ghost-btn" data-cancel>取消</button>
+    <p class="msg" data-card-msg></p>`;
+  // 报错写在表单里（P2-1093，居民端 P2-1014 同一个写法）：onSubmit 抛错就写进这一行。原先各处把报错写到整页消息行——
+  // 手机上列表 30～40 张卡片，消息行在屏幕外，提交失败时卡片上什么变化都没有
+  const msg = form.querySelector("[data-card-msg]");
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    msg.textContent = "";
+    msg.className = "msg";
+    try { await onSubmit(form.elements); }
+    catch (err) { msg.textContent = err.message || String(err); msg.className = "msg err"; }
+  };
   form.querySelector("[data-cancel]").onclick = () => form.remove();
   card.appendChild(form);
   const first = form.querySelector("textarea, input, select");
@@ -265,24 +275,14 @@ async function loadSpdTodo(box) {
     };
     input.click();
   }));
-  box.querySelectorAll("[data-spd-done]").forEach((b) => b.addEventListener("click", () => {
-    // 办理结果在卡片里用文本域收，不再弹系统输入框：弹窗录不了多行、没有校验提示、
-    // 粘不了长文本（功能完善规则 §1 第 7 项；存量登记 P2-38）。再点一次不重复插表单。
-    const card = b.closest(".m-card");
-    if (!card || card.querySelector(".spd-done-form")) return;
-    const form = document.createElement("form");
-    form.className = "spd-done-form";
-    form.innerHTML = `<textarea name="note" rows="2" placeholder="办理结果（可留空）"></textarea>
-      <button type="submit" class="ghost-btn">确认办结</button>
-      <button type="button" class="ghost-btn" data-cancel>取消</button>`;
-    form.onsubmit = async (e) => {
-      e.preventDefault();
-      await spdPost(`/api/spd/tasks/${b.dataset.spdDone}/complete`,
-        { result: { note: form.note.value.trim() } });
-    };
-    form.querySelector("[data-cancel]").onclick = () => form.remove();
-    card.appendChild(form);
-  }));
+  // 办理结果在卡片里用文本域收，不再弹系统输入框：弹窗录不了多行、没有校验提示、
+  // 粘不了长文本（功能完善规则 §1 第 7 项；存量登记 P2-38）。再点一次不重复插表单。
+  // 走 cardForm（P2-1093）：「要求上传佐证」这类拒绝写在这张卡的表单里，不再写到屏幕外的整页消息行
+  box.querySelectorAll("[data-spd-done]").forEach((b) => b.addEventListener("click", () =>
+    cardForm(b.closest(".m-card"), "spd-done-form",
+      '<textarea name="note" rows="2" placeholder="办理结果（可留空）"></textarea>', "确认办结",
+      (f) => spdPost(`/api/spd/tasks/${b.dataset.spdDone}/complete`,
+        { result: { note: f.note.value.trim() } }, true))));
 }
 
 /** 转诊卡片按后端出参 `actions` 给按钮（P2-794）：原先按状态给（P2-101，免得点错一个就 409），可推进权还看机构——
@@ -330,13 +330,10 @@ async function openSpdReferralForm(card, patients, prefill = {}, mineQuery = "")
     <textarea name="reason" rows="2" placeholder="转诊理由（血压 / 血糖控制情况、预警症状）" required>${esc(prefill.reason || "")}</textarea>`,
     "提交上转", (f) => {
       const [patientId, programCode] = f.enrollment.value.split("|");
-      if (!patientId || !f.reason.value.trim()) {
-        $("#spd-msg").textContent = "请选择患者并写清转诊理由";
-        return;
-      }
+      if (!patientId || !f.reason.value.trim()) throw new Error("请选择患者并写清转诊理由");
       return spdPost("/api/spd/referrals", { patient_id: Number(patientId), program_code: programCode,
         direction: "up", target_org_id: f.target_org_id.value ? Number(f.target_org_id.value) : null,
-        reason: f.reason.value.trim() });
+        reason: f.reason.value.trim() }, true);
     });
   // 按姓名 / 证件号在本人名下在管的档案里找（P2-824）：下拉只装得下前 100 份，接口早就收 keyword
   const form = card.querySelector(".spd-ref-new-form");
@@ -405,7 +402,7 @@ async function loadSpdReferral(box) {
       cardForm(b.closest(".m-card"), "spd-review-form",
         `<textarea name="opinion" rows="2" placeholder="${placeholder}"></textarea>`, submitLabel,
         (f) => spdPost(`/api/spd/referrals/${b.getAttribute(attr)}/review`,
-          { action, opinion: f.opinion.value.trim() }))));
+          { action, opinion: f.opinion.value.trim() }, true))));
   review("data-spd-pass", "pass", "审核意见（可空）", "确认通过");
   review("data-spd-reject", "reject", "退回理由", "确认退回");
   bind("data-spd-arrive", (b) => `/api/spd/referrals/${b.dataset.spdArrive}/arrive`,
@@ -415,7 +412,7 @@ async function loadSpdReferral(box) {
   // 撤回（P2-794）：发起人本人、上级审核之前。撤回不可逆（后端没有反向动作），先在卡片里确认一下
   box.querySelectorAll("[data-spd-withdraw]").forEach((b) => b.addEventListener("click", () =>
     cardForm(b.closest(".m-card"), "spd-withdraw-form", '<p class="hint">撤回后这张转诊单结束，要转诊需重新发起。</p>',
-      "确认撤回", () => spdPost(`/api/spd/referrals/${b.dataset.spdWithdraw}/withdraw`, null))));
+      "确认撤回", () => spdPost(`/api/spd/referrals/${b.dataset.spdWithdraw}/withdraw`, null, true))));
 }
 
 async function loadSpdPatients(box) {
@@ -487,12 +484,14 @@ async function loadSpdPerf(box) {
       (r) => `兑换成功，核销码 ${r.verify_code}（到点位出示），余额 ${r.balance}`)));
 }
 
-async function spdPost(path, body) {
+/* inline=true：卡片内表单提交用，失败时把错抛给 cardForm、写进那张卡的表单里（P2-1093），不写整页消息行 */
+async function spdPost(path, body, inline = false) {
   try {
     await api(path, { method: "POST", body: body ? JSON.stringify(body) : undefined });
     $("#spd-msg").textContent = "操作成功";
     await loadSpdTab();
   } catch (err) {
+    if (inline) throw err;
     $("#spd-msg").textContent = err.message;
   }
 }
@@ -641,13 +640,11 @@ $("#critical-list").addEventListener("click", async (e) => {
       // 原先 prompt 点"取消"照样提交：危急值就此"闭环完成"，处置措施一个字没有。
       return cardForm(e.target.closest(".m-card"), "crit-resolve-form",
         '<textarea name="note" rows="2" placeholder="处置措施（如：已联系患者并调整治疗方案）"></textarea>',
-        "提交处置反馈", async (f) => {
-          try {
-            await api(`/api/exams/reports/${resolve}/resolve`, { method: "POST",
-              body: JSON.stringify({ note: f.note.value.trim() }) });
-            setMsg("#critical-msg", "处置已反馈，危急值闭环完成", true);
-            await loadCritical();
-          } catch (err) { setMsg("#critical-msg", err.message, false); }
+        "提交处置反馈", async (f) => {   // 失败时 cardForm 把报错写在这张卡的表单里（P2-1093）
+          await api(`/api/exams/reports/${resolve}/resolve`, { method: "POST",
+            body: JSON.stringify({ note: f.note.value.trim() }) });
+          setMsg("#critical-msg", "处置已反馈，危急值闭环完成", true);
+          await loadCritical();
         });
     }
     if (trace) {
@@ -708,14 +705,12 @@ $("#exam-list").addEventListener("click", async (e) => {
          <textarea name="finding" rows="2" placeholder="影像所见 / 检查所见（可空）"></textarea>
          <select name="critical"><option value="0">非危急值</option>
            <option value="1">危急值（进危急值闭环，通知申请机构）</option></select>`,
-        "出具报告", async (f) => {
+        "出具报告", async (f) => {   // 失败时 cardForm 把报错写在这张卡的表单里（P2-1093）
           const critical = f.critical.value === "1";
-          try {
-            await api(`/api/exams/${report}/report`, { method: "POST", body: JSON.stringify({
-              conclusion: f.conclusion.value.trim(), finding: f.finding.value.trim(), critical }) });
-            setMsg("#exam-msg", critical ? "报告已出具，危急值已通知申请机构" : "报告已出具", true);
-            await loadExams();
-          } catch (err) { setMsg("#exam-msg", err.message, false); }
+          await api(`/api/exams/${report}/report`, { method: "POST", body: JSON.stringify({
+            conclusion: f.conclusion.value.trim(), finding: f.finding.value.trim(), critical }) });
+          setMsg("#exam-msg", critical ? "报告已出具，危急值已通知申请机构" : "报告已出具", true);
+          await loadExams();
         });
     }
   } catch (err) {
@@ -993,9 +988,9 @@ $("#round-vital").addEventListener("submit", async (e) => {
     // 测量时刻一并清空（P1-231）：原先只清数值，换人后下一位带着上一位的测量时刻
     ["#rv-at", "#rv-temp", "#rv-pulse", "#rv-resp", "#rv-sbp", "#rv-dbp", "#rv-in", "#rv-out", "#rv-weight"]
       .forEach((s) => { $(s).value = ""; });
-    setMsg("#round-msg", "体征已录入", true);
+    setMsg("#round-vital-msg", "体征已录入", true);
     await refreshRoundDetail();
-  } catch (err) { setMsg("#round-msg", err.message, false); }
+  } catch (err) { setMsg("#round-vital-msg", err.message, false); }   // 体征表单自己的消息行（P2-1093）
 });
 
 /* ---------------- 手术：排班与术中记录 ---------------- */
@@ -1038,11 +1033,8 @@ $("#tab-surgery").addEventListener("click", (e) => {
   if (!id) return;
   // P2-38 / P1-66：原先四连问、转归写死"好转"（质量指标的治愈率与死亡数取的正是它）。
   // 改成卡片内表单：转归可选，术前/术后诊断（诊断符合率的数据源）也能填。再点一次不重复插表单。
-  const card = e.target.closest(".m-card");
-  if (!card || card.querySelector(".surg-record-form")) return;
-  const form = document.createElement("form");
-  form.className = "surg-record-form";
-  form.innerHTML = `<input name="actual_surgery_name" placeholder="实际术式" required
+  // 走 cardForm（P2-1093）：出血量写错这类报错写在这张卡的表单里，不再写到两张列表下方的整页消息行
+  cardForm(e.target.closest(".m-card"), "surg-record-form", `<input name="actual_surgery_name" placeholder="实际术式" required
       value="${esc(e.target.dataset.name || "")}">
     <input name="anesthetist_name" placeholder="麻醉医师">
     <select name="anesthesia_type">${Object.entries(ANESTHESIA_NAMES).map(([k, v]) =>
@@ -1055,42 +1047,33 @@ $("#tab-surgery").addEventListener("click", (e) => {
     <select name="outcome">${["治愈", "好转", "未愈", "死亡"].map((x) =>
       `<option${x === "好转" ? " selected" : ""}>${x}</option>`).join("")}</select>
     <input name="preop_diagnosis" placeholder="术前诊断（可空）">
-    <input name="postop_diagnosis" placeholder="术后诊断（可空）">
-    <button type="submit" class="ghost-btn">提交术中记录</button>
-    <button type="button" class="ghost-btn" data-cancel>取消</button>`;
-  form.onsubmit = async (ev) => {
-    ev.preventDefault();
-    const f = form.elements;
+    <input name="postop_diagnosis" placeholder="术后诊断（可空）">`, "提交术中记录", async (f) => {
     const blood = f.blood_loss_ml.value.trim();
     const died = f.outcome.value === "死亡";
-    try {
-      await api(`/api/surgery/requests/${id}/record`, {
-        method: "POST",
-        body: JSON.stringify({
-          actual_surgery_name: f.actual_surgery_name.value.trim(),
-          anesthetist_name: f.anesthetist_name.value.trim(),
-          // 麻醉方式与切口等级原先不送（P2-179），后端缺省全麻、II 类——移动端记的每一台都记成全麻 II 类切口，
-          // 手术量统计的切口 / 麻醉构成跟着失真。现在缺省带出申请时填的，可改
-          anesthesia_type: f.anesthesia_type.value,
-          incision_level: f.incision_level.value,
-          findings: f.findings.value.trim(),
-          // 并发症原先不录（P2-861）：手机上记的每一台都进「手术并发症发生率」的分母、进不了分子——管理端表单早有这一项
-          complications: f.complications.value.trim(),
-          // 留空记 0；写错的原样交给后端报人话，别让 Number() 把它悄悄变成 NaN → null
-          blood_loss_ml: blood === "" ? 0 : (Number.isNaN(Number(blood)) ? blood : Number(blood)),
-          outcome: f.outcome.value,
-          preop_diagnosis: f.preop_diagnosis.value.trim(),
-          postop_diagnosis: f.postop_diagnosis.value.trim(),
-        }),
-      });
-      // 转归「死亡」后端不派术后随访（P2-499）：回执原先一律写「已自动派生」（P2-779）
-      setMsg("#surgery-msg", died ? "术中记录已提交（转归死亡，不派生术后随访）"
-        : "术中记录已提交，术后随访任务已自动派生", true);
-      await loadSurgery();
-    } catch (err) { setMsg("#surgery-msg", err.message, false); }
-  };
-  form.querySelector("[data-cancel]").onclick = () => form.remove();
-  card.appendChild(form);
+    await api(`/api/surgery/requests/${id}/record`, {
+      method: "POST",
+      body: JSON.stringify({
+        actual_surgery_name: f.actual_surgery_name.value.trim(),
+        anesthetist_name: f.anesthetist_name.value.trim(),
+        // 麻醉方式与切口等级原先不送（P2-179），后端缺省全麻、II 类——移动端记的每一台都记成全麻 II 类切口，
+        // 手术量统计的切口 / 麻醉构成跟着失真。现在缺省带出申请时填的，可改
+        anesthesia_type: f.anesthesia_type.value,
+        incision_level: f.incision_level.value,
+        findings: f.findings.value.trim(),
+        // 并发症原先不录（P2-861）：手机上记的每一台都进「手术并发症发生率」的分母、进不了分子——管理端表单早有这一项
+        complications: f.complications.value.trim(),
+        // 留空记 0；写错的原样交给后端报人话，别让 Number() 把它悄悄变成 NaN → null
+        blood_loss_ml: blood === "" ? 0 : (Number.isNaN(Number(blood)) ? blood : Number(blood)),
+        outcome: f.outcome.value,
+        preop_diagnosis: f.preop_diagnosis.value.trim(),
+        postop_diagnosis: f.postop_diagnosis.value.trim(),
+      }),
+    });
+    // 转归「死亡」后端不派术后随访（P2-499）：回执原先一律写「已自动派生」（P2-779）
+    setMsg("#surgery-msg", died ? "术中记录已提交（转归死亡，不派生术后随访）"
+      : "术中记录已提交，术后随访任务已自动派生", true);
+    await loadSurgery();
+  });
 });
 
 /* ---------------- 启动 ----------------
