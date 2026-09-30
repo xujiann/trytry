@@ -675,17 +675,26 @@ def recognition_stats(db: Session = Depends(get_db)):
         or 0
     )
     total = reported + recognized
+    # 按项目编码分组、名称取互认目录名（P2-1081，与传染病统计 P2-943 同一口径）：原先按（编码, 手填名称）分组，同一个
+    # DR-CHEST 写成「胸部DR」「胸片」「DR胸部正位」就拆成三行各计 1 次，页面取前 10 画图时同一项目占了三格。
+    # 目录外的编码取手填名称里的一个（min，结果确定）
     by_item = (
         db.query(
             ExamRequest.item_code,
-            ExamRequest.item_name,
+            func.min(ExamRequest.item_name).label("item_name"),
             func.count(ExamRequest.id).label("recognized_count"),
         )
         .filter(ExamRequest.status == "recognized")
-        .group_by(ExamRequest.item_code, ExamRequest.item_name)
-        .order_by(func.count(ExamRequest.id).desc(), ExamRequest.item_code, ExamRequest.item_name)
+        .group_by(ExamRequest.item_code)
+        .order_by(func.count(ExamRequest.id).desc(), ExamRequest.item_code)
         .all()
     )
+    catalog_names: dict[str, str] = {
+        code: name
+        for code, name in db.query(RecognitionItem.item_code, RecognitionItem.item_name)
+        .filter(RecognitionItem.item_code.in_([r.item_code for r in by_item] or [""]))
+        .all()
+    }
     return {
         "recognized_total": recognized,
         "reported_total": reported,
@@ -697,7 +706,7 @@ def recognition_stats(db: Session = Depends(get_db)):
         "by_item": [
             {
                 "item_code": r.item_code,
-                "item_name": r.item_name,
+                "item_name": catalog_names.get(r.item_code, r.item_name),
                 "recognized_count": r.recognized_count,
             }
             for r in by_item
