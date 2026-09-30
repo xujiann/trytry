@@ -35,6 +35,7 @@ import math
 from typing import Any
 
 from ..numtypes import non_finite_path
+from ..texttypes import text_key
 
 #: 规则可引用的字段及其中文名，供管理端下拉与文档生成使用。
 FIELD_SOURCES: dict[str, str] = {
@@ -239,7 +240,14 @@ def _match_one(cond: dict, facts: dict) -> bool:
 
     if op == "contains":
         haystack = actual if isinstance(actual, (list, tuple, set)) else [actual]
-        return any(str(expected) in str(v) for v in haystack)
+        # 两侧都过 `texttypes.text_key` 再找子串（P2-1147，与平台 DRG / 审方禁忌诊断 P2-792、随访方案关键词 P2-917 同一个
+        # 比对键）：原先按原样 `str(expected) in str(v)`，诊断名称里的「高」「血」是康熙部首（U+2FBC / U+2F8E，从 PDF 复制）、
+        # 夹零宽字符，或写成 `copd` / `ＣＯＰＤ`，都命中不了「高血压」「COPD」，自动识别漏进目标池，也没有任何提示。
+        # 比较值归一后为空的（存量里的空串，只有空白或格式字符的）照旧按原样比：空值怎么判是 P2-1117 的事，不在这里改
+        needle = text_key(str(expected))
+        if not needle:
+            return any(str(expected) in str(v) for v in haystack)
+        return any(needle in text_key(str(v)) for v in haystack)
 
     return False
 
