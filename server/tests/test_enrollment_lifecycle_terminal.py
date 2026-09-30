@@ -129,10 +129,14 @@ def test_召回期间另建了在管档案_召回成功时409而不是500(client
     with SessionLocal() as db:
         patient_id = db.get(SpdEnrollment, eid).patient_id
         recall_id = db.query(SpdRecall).filter(SpdRecall.enrollment_id == eid).one().id
-    # 召回中的档案不占在管名额，别处照常给他建了档
+    # 召回中的档案不占在管名额，别处给他另建了一份在管的。P2-1050 起建档接口遇召回中的同病种档案 409，
+    # 这种状态只剩存量（P2-1050 之前建的）——直接落库造出来，召回成功那一步照样得 409 而不是 500
     again = client.post("/api/spd/enrollments", headers=admin,
                         json={"patient_id": patient_id, "program_code": "p1111_prog", "org_id": world["target"]})
-    assert again.status_code == 201, again.text
+    assert again.status_code == 409, again.text
+    with SessionLocal() as db:
+        db.add(SpdEnrollment(patient_id=patient_id, program_code="p1111_prog", org_id=world["target"], status="active"))
+        db.commit()
 
     resp = client.post(f"/api/spd/recalls/{recall_id}/progress", headers=admin, json={"status": "returned"})
     assert resp.status_code == 409, resp.text   # 修前 500

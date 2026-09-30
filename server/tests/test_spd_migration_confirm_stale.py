@@ -107,7 +107,18 @@ def test_兜底只接目标机构的在管档案_第三家的不接(client, admi
     eid = world["enroll"](pid, "a")
     to_c = _event(client, admin, eid, "migrate", target_org_id=world["orgs"]["c"])["event_id"]
     _event(client, admin, eid, "recall")               # 召回中不是终态，确认仍可走到建档那一步
-    at_b = world["enroll"](pid, "b")
+    # 召回期间乙家另建了一份在管的：P2-1050 起建档接口遇召回中的同病种档案 409，这种状态只剩存量——直接落库造出来
+    refused = client.post("/api/spd/enrollments", headers=admin,
+                          json={"patient_id": pid, "program_code": "p2527_prog", "org_id": world["orgs"]["b"]})
+    assert refused.status_code == 409, refused.text
+    from app.database import SessionLocal
+    from app.spd.models import SpdEnrollment
+
+    with SessionLocal() as db:
+        legacy = SpdEnrollment(patient_id=pid, program_code="p2527_prog", org_id=world["orgs"]["b"], status="active")
+        db.add(legacy)
+        db.commit()
+        at_b = legacy.id
 
     late = _confirm(client, admin, to_c)
     assert late.status_code == 409, late.text   # 修前 200，把乙家那份当成迁入档案回给丙
