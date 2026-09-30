@@ -165,7 +165,7 @@ def diagnosis_codes(db: Session, patient_id: int) -> list[str]:
             code = str(code)
             head, _, tail = code.partition(".")
             codes.append(code)
-            if tail[:1].isdigit():
+            if tail[:1].isascii() and tail[:1].isdigit():   # 只认 ASCII 数字（P1-97 的口径）
                 codes.append(f"{head}.{tail[0]}")
             codes.append(head)
     return list(dict.fromkeys(codes))
