@@ -35,8 +35,8 @@ from ...deps import (
     through_day,
     keyword_like,
 )
-from ..platform import (ENCOUNTER_TYPE_NAMES, Admission, Encounter, Organization, Patient, User, role_unfit,
-                        unusable_user)
+from ..platform import (ENCOUNTER_TYPE_NAMES, Admission, Encounter, Organization, Patient, User, assignee_outside_org,
+                        role_unfit, unusable_user)
 from ..models import (
     SpdCallTask,
     SpdFollowupRecord,
@@ -720,6 +720,11 @@ def generate_followup_plan(
         role = role_unfit(db, body.executor_id, FOLLOWUP_ROLES)
         if role:
             raise HTTPException(status_code=422, detail=f"随访执行人是{role}，办不了随访（executor_id={body.executor_id}）")
+        # 执行人要在随访所属机构（P2-1017，与任务 P1-210 同一判据）：原先只查停用与角色，派给别家机构的人——他的工作台
+        # 「今日随访」数着这条，「我的随访」清单按机构收口看不见，执行 403；本机构的人又不是执行人，这一整条计划没人做
+        if assignee_outside_org(db, body.executor_id, org_id):
+            raise HTTPException(status_code=422,
+                                detail=f"随访执行人不在随访所属机构，派过去办不了（executor_id={body.executor_id}）")
     base = date.fromisoformat(body.base_date) if body.base_date else clock.today()
     created = []
     for offset in plan_offsets(rule):
@@ -1097,6 +1102,9 @@ def update_followup_record(
         if role:
             raise HTTPException(status_code=422,
                                 detail=f"随访执行人是{role}，办不了随访（executor_id={changes['executor_id']}）")
+        if assignee_outside_org(db, changes["executor_id"], record.org_id):   # 与派随访同一句（P2-1017）
+            raise HTTPException(status_code=422,
+                                detail=f"随访执行人不在随访所属机构，派过去办不了（executor_id={changes['executor_id']}）")
     # 改的列与「还没完成」同一条条件 UPDATE（P2-287）：上面那道预检是锁外读的，这期间别人刚执行完的随访不能被改回去
     if changes and not adjust_followup_record(db, record_id, **changes):
         db.rollback()
