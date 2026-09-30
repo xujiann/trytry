@@ -40,6 +40,22 @@ def _split(value: str) -> list[str]:
     return split_list(value)
 
 
+def _never_matches(keywords: str, procedure_keywords: str, require_procedure: bool) -> str:
+    """这组配置永远入不了组：返回原因，入得了返回空串（P2-1019，与 P2-466 / P2-712「永不命中、也不报错的配置在建的时候拦」
+    同一条规矩）。
+
+    `_match_score`：勾了「必须命中主手术」、主手术关键词却一个有效词都没有，恒不命中；两类关键词都没有有效词（空、只有空白
+    与分隔符），同样恒不命中。原先照建 201，出院入组一例都进不来、全落进 QY 兜底组，建组的人看不出来。
+    """
+    dx = [kw for kw in _split(keywords) if text_key(kw)]
+    op = [kw for kw in _split(procedure_keywords) if text_key(kw)]
+    if require_procedure and not op:
+        return "勾了「必须命中主手术」却没有主手术关键词：这个组永远入不了，请填主手术关键词或取消勾选"
+    if not dx and not op:
+        return "主诊断关键词与主手术关键词都为空：这个组永远入不了，至少填一类"
+    return ""
+
+
 def _contains(text: str, keyword: str) -> bool:
     """`text` 是已过 `text_key` 的病例文字；关键词归一后为空的（只有空白）不算命中。"""
     key = text_key(keyword)
@@ -278,6 +294,9 @@ def list_groups(mdc: str | None = None, db: Session = Depends(get_db)):
 def create_group(body: DrgGroupCreate, db: Session = Depends(get_db)):
     if db.query(DrgGroup).filter(DrgGroup.code == body.code).first():
         raise HTTPException(status_code=409, detail="分组编码已存在")
+    problem = _never_matches(body.keywords, body.procedure_keywords, body.require_procedure)   # 编码重复先报（契约钉着 409）
+    if problem:
+        raise HTTPException(status_code=422, detail=problem)
     group = insert_or_conflict(db, DrgGroup(**body.model_dump()), "分组编码已存在")
     return _group_out(group)
 
@@ -289,9 +308,15 @@ def update_group(group_id: int, body: DrgGroupUpdate, db: Session = Depends(get_
     group = db.get(DrgGroup, group_id)
     if group is None:
         raise HTTPException(status_code=404, detail="分组不存在")
-    for field, value in body.model_dump(exclude_unset=True).items():
-        if value is not None:
-            setattr(group, field, value)
+    changes = {field: value for field, value in body.model_dump(exclude_unset=True).items() if value is not None}
+    # 动了匹配配置才判、与存量合并后判（P2-1019）：只改名、改权重、停用的照旧放行——存量里已经写坏的组也改得了名、停得了
+    if not group.is_fallback and changes.keys() & {"keywords", "procedure_keywords", "require_procedure"}:
+        merged = {f: changes.get(f, getattr(group, f)) for f in ("keywords", "procedure_keywords", "require_procedure")}
+        problem = _never_matches(**merged)
+        if problem:
+            raise HTTPException(status_code=422, detail=problem)
+    for field, value in changes.items():
+        setattr(group, field, value)
     db.commit()
     return _group_out(group)
 
