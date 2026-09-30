@@ -256,9 +256,17 @@ async function renderSurgery() {
           body: JSON.stringify({ ...v, room_id: Number(v.room_id) }) });
       } else if (d.record) {
         const req = requests.find((r) => r.id === Number(d.record));
+        // 手术起止时刻（P2-1116）：原先不录，做手术那天（术后随访起算、手术质量指标归月，`surgery.operation_day`）恒取
+        // 排班日——顺延、提前的手术都跟着原排班日走，「查看记录」的「起止」一行恒空。缺省带出这台的排班日期与时段、按实际
+        // 改；排班表只列今天及以后，更早的排班带不出来就留空（后端按排班日）
+        const slot = schedules.find((s) => s.request_id === Number(d.record));
         // 框自己提交（P2-607）：术中所见写超了、单子状态已变时报错写在框里、框不关，填了一整张的术中记录不用重填
         const ok = await spdModal("术中记录", [
           { name: "actual_surgery_name", label: "实际术式", value: req ? req.surgery_name : "", required: true },
+          { name: "start_at", label: "手术开始时刻（留空按排班日）", placeholder: "YYYY-MM-DD HH:MM",
+            value: slot ? `${slot.scheduled_date} ${slot.start_time}` : "" },
+          { name: "end_at", label: "手术结束时刻", placeholder: "YYYY-MM-DD HH:MM",
+            value: slot ? `${slot.scheduled_date} ${slot.end_time}` : "" },
           { name: "anesthetist_name", label: "麻醉医师" },
           // 麻醉方式与切口等级缺省带出申请时填的（P2-179）：原先麻醉恒缺省第一项、切口恒 II 类
           { name: "anesthesia_type", label: "麻醉方式", type: "select", value: req ? req.anesthesia_type : "general",

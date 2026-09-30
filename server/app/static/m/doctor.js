@@ -1016,14 +1016,21 @@ async function loadSurgery() {
 
   // 只列还没写术中记录的，写完就从这里消失——这是医生真正要处理的部分
   const pending = requests.filter((r) => r.status === "scheduled");
+  // 这台的排班日期与时段跟着「填写术中记录」按钮走（P2-1116）：表单的手术起止时刻缺省取它。排班表只列今天及以后，
+  // 更早的排班这里找不到，起止就留空（后端按排班日）
+  const slots = Object.fromEntries(schedules.map((s) => [s.request_id, s]));
   $("#surgery-requests").innerHTML = `<div class="sec-title">待填术中记录（${pending.length}）</div>` + (
     pending.length
       ? pending.map((r) => {
+          const slot = slots[r.id];
+          const start = slot ? `${slot.scheduled_date} ${slot.start_time}` : "";
+          const end = slot ? `${slot.scheduled_date} ${slot.end_time}` : "";
           return card(
             `${kv("术式", esc(r.surgery_name))}${kv("住院号", String(r.admission_id))}
              ${kv("状态", statusTag(SURGERY_STATUS_NAMES, r.status))}`,
             `<button class="op" data-record="${r.id}" data-name="${esc(r.surgery_name)}"
-              data-anesthesia="${esc(r.anesthesia_type)}" data-incision="${esc(r.incision_level)}">填写术中记录</button>`);
+              data-anesthesia="${esc(r.anesthesia_type)}" data-incision="${esc(r.incision_level)}"
+              data-start="${esc(start)}" data-end="${esc(end)}">填写术中记录</button>`);
         }).join("")
       : '<p class="empty">没有待填写的术中记录</p>');
 }
@@ -1036,6 +1043,9 @@ $("#tab-surgery").addEventListener("click", (e) => {
   // 走 cardForm（P2-1093）：出血量写错这类报错写在这张卡的表单里，不再写到两张列表下方的整页消息行
   cardForm(e.target.closest(".m-card"), "surg-record-form", `<input name="actual_surgery_name" placeholder="实际术式" required
       value="${esc(e.target.dataset.name || "")}">
+    <p class="hint">手术起止：缺省带出排班日期与时段，按实际改；留空按排班日</p>
+    <input name="start_at" placeholder="开始时刻 YYYY-MM-DD HH:MM" value="${esc(e.target.dataset.start || "")}">
+    <input name="end_at" placeholder="结束时刻 YYYY-MM-DD HH:MM" value="${esc(e.target.dataset.end || "")}">
     <input name="anesthetist_name" placeholder="麻醉医师">
     <select name="anesthesia_type">${Object.entries(ANESTHESIA_NAMES).map(([k, v]) =>
       `<option value="${k}"${k === e.target.dataset.anesthesia ? " selected" : ""}>${v}</option>`).join("")}</select>
@@ -1054,6 +1064,10 @@ $("#tab-surgery").addEventListener("click", (e) => {
       method: "POST",
       body: JSON.stringify({
         actual_surgery_name: f.actual_surgery_name.value.trim(),
+        // 手术起止时刻原先不送（P2-1116）：做手术那天（术后随访起算、手术质量指标归月）恒取排班日，顺延、提前的手术都
+        // 跟着原排班日走。缺省带出排班的，按实际改；格式不对由后端报人话
+        start_at: f.start_at.value.trim(),
+        end_at: f.end_at.value.trim(),
         anesthetist_name: f.anesthetist_name.value.trim(),
         // 麻醉方式与切口等级原先不送（P2-179），后端缺省全麻、II 类——移动端记的每一台都记成全麻 II 类切口，
         // 手术量统计的切口 / 麻醉构成跟着失真。现在缺省带出申请时填的，可改

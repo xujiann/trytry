@@ -3700,13 +3700,17 @@ def test_医嘱单面板只画最后点的那一次住院_标题写住院号(pag
     expect(page.locator("#inp-orders-title")).to_have_text(f"医嘱单 · 住院 #{b['id']}")
 
 
-def test_surgery_full_flow(page, base_url, seed):
+def test_surgery_full_flow(page, base_url, seed, admin_read):
     """手术麻醉（T2.3）：申请 → 审批 → 排班 → 术中记录，状态逐级推进。
 
     **申请与审批必须是两个人**：`approve_request` 明确拒绝"审批本人提出的
     手术申请"（职责分离）。用例此前用 admin 一个人从头做到尾，那条规则加进来
     之后就一直红着——这不是应用的问题，是用例没跟上业务规则。
     申请改由医师经接口提出（见 seed），页面只驱动审批→排班→术中记录。
+
+    P2-1116：术中记录原先不录手术起止时刻，做手术那天（术后随访起算、手术质量指标归月）恒取排班日。现在起止时刻缺省带出
+    这台的排班日期与时段、按实际改——这台顺延一天做，术后随访按实际那天起算。缺省取自「今天及以后」的排班表，所以排班日
+    写远期：写死的过去日子不在表里，带不出来。
     """
     _login(page, base_url)
     _open_page(page, "surgery", "手术麻醉")
@@ -3719,7 +3723,8 @@ def test_surgery_full_flow(page, base_url, seed):
     # 2026-09-24 前排班与术中记录都是连续多个原生弹窗、用 `_answers` 按序喂值；
     # 换成 `spdModal` 之后改用 `_spd_modal`（两者互斥，见 CLAUDE.md §7）。
     page.click("button[data-schedule]")
-    _spd_modal(page, {"room_id": str(seed["room"]["id"]), "scheduled_date": "2026-09-01",
+    # 排班日写远期：术中记录的起止缺省取自「今天及以后」的排班表（P2-1116），写死的过去日子带不出来
+    _spd_modal(page, {"room_id": str(seed["room"]["id"]), "scheduled_date": "2099-09-01",
                       "start_time": "09:00", "end_time": "11:00"})
     expect(page.locator("#page-body")).to_contain_text("已排班")
     expect(page.locator("#page-body")).to_contain_text("E2E一号手术间")
@@ -3727,15 +3732,26 @@ def test_surgery_full_flow(page, base_url, seed):
     # 术中记录：转归此前被写死成"好转"（P1-66），这里选"治愈"并填术前/术后诊断，
     # 然后在记录详情里读回来——证明选的值真的落了库
     page.click("button[data-record]")
+    # 手术起止时刻缺省带出这台的排班日期与时段（P2-1116），按实际改：这台顺延一天做
+    modal = _modal(page)
+    expect(modal.locator('[name="start_at"]')).to_have_value("2099-09-01 09:00")
+    expect(modal.locator('[name="end_at"]')).to_have_value("2099-09-01 11:00")
     # 术中所见写超了（后端 2048 字）：框自己提交，报错写在框里、框不关、填了一整张的记录都在（P2-607 第八批）
     form = _spd_modal_rejected(page, {"actual_surgery_name": "腹腔镜阑尾切除术", "anesthetist_name": "麻醉科周医生",
+                                      "start_at": "2099-09-02 09:30", "end_at": "2099-09-02 10:40",
                                       "findings": "所" * 2049, "blood_loss_ml": "20", "outcome": "治愈",
                                       "preop_diagnosis": "急性阑尾炎", "postop_diagnosis": "急性化脓性阑尾炎"})
     expect(form.locator('[name="postop_diagnosis"]')).to_have_value("急性化脓性阑尾炎")
+    expect(form.locator('[name="start_at"]')).to_have_value("2099-09-02 09:30")
     _spd_modal(page, {"findings": "阑尾化脓"})
     expect(page.locator("#page-body")).to_contain_text("已完成")
     page.click("button[data-view]")
     expect(page.locator("#surg-detail-body")).to_contain_text("治愈")
+    expect(page.locator("#surg-detail-body")).to_contain_text("2099-09-02 09:30 ~ 2099-09-02 10:40")   # 修前「起止」恒空
+    # 术后随访按实际开始那天起算（修前按排班日 9-01 起算，到期 9-15）
+    rid = seed["surgery_request"]["id"]
+    (task,) = [t for t in admin_read("/api/followups?category=surgery&limit=500") if t["source_id"] == rid]
+    assert task["due_date"] == "2099-09-16", task
 
 
 def test_提手术申请时勾得上非计划重返手术室(page, base_url, admin_call, admin_read):
@@ -3962,15 +3978,17 @@ def surgery_mobile_seed(base_url, seed):
                {"admission_id": seed["admission"]["id"], "surgery_name": "E2E移动端疝修补术",
                 "incision_level": "I", "anesthesia_type": "spinal"}, doctor)
     call(f"/api/surgery/requests/{req['id']}/approve", {"approved": True}, admin)
+    # 排班日写远期：术中记录的起止缺省取自「今天及以后」的排班表（P2-1116），写死的过去日子带不出来
     call(f"/api/surgery/requests/{req['id']}/schedule",
-         {"room_id": seed["room"]["id"], "scheduled_date": "2026-09-02",
+         {"room_id": seed["room"]["id"], "scheduled_date": "2099-09-02",
           "start_time": "13:00", "end_time": "14:00"}, admin)
     return {"request": req, "read": lambda path: call(path, None, admin)}
 
 
 def test_医生移动端术中记录在卡片内表单里填_转归可选(page, base_url, surgery_mobile_seed):
     """P2-38 / P1-66：移动端"填写术中记录"原先四连问、**转归写死"好转"**。换成卡片内表单后
-    转归可选、术式预填；出血量写错由后端报人话。最后经接口读回，证明选的转归真的落了库。"""
+    转归可选、术式预填；出血量写错由后端报人话。最后经接口读回，证明选的转归真的落了库。
+    P2-1116：手术起止时刻原先不送（做手术那天恒取排班日），现在缺省带出这台的排班日期与时段、照送。"""
     page.set_viewport_size({"width": 390, "height": 844})
     page.goto(f"{base_url}/m/doctor")
     page.fill("#lg-user", "admin")
@@ -3983,6 +4001,9 @@ def test_医生移动端术中记录在卡片内表单里填_转归可选(page, 
     card.locator("button[data-record]").click()
     form = card.locator("form.surg-record-form")
     expect(form.locator("input[name=actual_surgery_name]")).to_have_value("E2E移动端疝修补术")
+    # 起止时刻缺省带出这台的排班日期与时段（P2-1116）；这台按排班做完，不改
+    expect(form.locator("input[name=start_at]")).to_have_value("2099-09-02 13:00")
+    expect(form.locator("input[name=end_at]")).to_have_value("2099-09-02 14:00")
     form.locator("select[name=outcome]").select_option("未愈")
     form.locator("input[name=postop_diagnosis]").fill("腹股沟斜疝")
     form.locator("input[name=blood_loss_ml]").fill("五十")
@@ -3999,6 +4020,7 @@ def test_医生移动端术中记录在卡片内表单里填_转归可选(page, 
     assert record["outcome"] == "未愈" and record["postop_diagnosis"] == "腹股沟斜疝", record
     # P2-179：麻醉方式与切口等级原先不送、恒记成全麻 II 类；现在缺省带出申请时填的（椎管内、I 类）
     assert (record["anesthesia_type"], record["incision_level"]) == ("spinal", "I"), record
+    assert (record["start_at"], record["end_at"]) == ("2099-09-02 13:00", "2099-09-02 14:00"), record   # 修前两项都是空串
 
 
 @pytest.fixture(scope="session")
