@@ -57,7 +57,7 @@ from ..models import (
 )
 from ..rules import RuleError, as_validated, evaluate, is_suspect_risk, score_scale
 from ..service import (MEASUREMENT_SOURCE_NAMES, TASK_OPEN_STATUSES, actively_enrolled, award_points, build_facts,
-                       candidate_undistributed, close_open_work, exclusion_problem, match_program, migration_void_reason,
+                       candidate_reason, candidate_undistributed, close_open_work, exclusion_problem, match_program, migration_void_reason,
                        package_items_ok,
                        scale_program_mismatch, scale_unusable, scale_version_problem, unknown_program)
 
@@ -576,6 +576,11 @@ def _upsert_candidate(
     )
     if existing is not None:
         if existing.status != "enrolled":
+            # 纳入依据跟着这次的命中规则换（P2-974）：原先只在建行时算一次，复筛换了状态和命中规则、依据还是上一次的——「疑似」
+            # 行写着「未成年人不纳入…」、「排除」行写着「确诊高血压」。只换仍是按上次命中规则自动算出来的依据；手写的（手工改状态、
+            # 居民申请受理）不动。「纳入依据」该不该放复核说明随 P2-382 定
+            if existing.reason == candidate_reason(existing.matched_rules):
+                existing.reason = candidate_reason(matched)
             existing.status = status
             existing.risk_level = risk
             existing.matched_rules = matched
@@ -587,8 +592,7 @@ def _upsert_candidate(
     candidate = SpdCandidate(
         patient_id=screening.patient_id, program_code=screening.program_code,
         status=status, source=source, screening_id=screening.id, org_id=org_id,
-        risk_level=risk, matched_rules=matched,
-        reason="；".join(str(m.get("label") or m.get("field")) for m in matched)[:256],
+        risk_level=risk, matched_rules=matched, reason=candidate_reason(matched),
     )
     # 两次筛查并发落到同一人同一病种时会撞唯一键；SAVEPOINT 把冲突圈在这一行，
     # 冲突了就取回既有那条，整次筛查不因此回滚。

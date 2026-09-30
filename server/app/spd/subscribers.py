@@ -32,7 +32,7 @@ from ..concurrency import insert_if_absent
 from ..config import settings
 from ..texttypes import has_keyword
 from .models import SpdCandidate, SpdFollowupRecord, SpdFollowupRule, SpdProgram, SpdScreening
-from .service import actively_enrolled, match_program, plan_offsets
+from .service import actively_enrolled, candidate_reason, match_program, plan_offsets
 
 logger = logging.getLogger("medplat.spd.subscribers")
 
@@ -156,9 +156,7 @@ def on_encounter_created(db: Session, payload: dict) -> None:
                 patient_id=patient_id, program_code=program.code, status="suspect",
                 source="event", screening_id=screening.id, org_id=payload.get("org_id"),
                 risk_level="mid", matched_rules=matched["matched"],
-                reason="；".join(
-                    str(m.get("label") or m.get("field")) for m in matched["matched"]
-                )[:256],
+                reason=candidate_reason(matched["matched"]),
             ),
         ):
             continue

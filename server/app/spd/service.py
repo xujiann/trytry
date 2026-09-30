@@ -1412,6 +1412,11 @@ PACKAGE_BINDING_STATUS_NAMES = {"bound": "绑定中", "unbound": "已解绑"}
 RISK_LEVEL_NAMES = {"low": "低危", "mid": "中危", "high": "高危", "very_high": "极高危"}
 
 
+def candidate_reason(matched: list | None) -> str:
+    """目标池「纳入依据」：命中规则的名称用「；」连起来（P2-974）。建行（筛查 / 批量识别、就诊识别）与复筛共用这一处算法。"""
+    return "；".join(str(m.get("label") or m.get("field")) for m in matched or [])[:256]
+
+
 def enrollment_feed(db: Session, patient_id: int) -> list[dict]:
     """把本子系统的入组档案产出成聚合列表的统一形状。只读、不改任何状态。"""
     from .platform import ENROLLMENT_FEED_LIMIT, enrollment_feed_item, org_names
