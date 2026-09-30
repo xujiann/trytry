@@ -26,6 +26,7 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from ..clock import now_local
 from ..datetypes import OptionalDateStr, PeriodStr
 from ..concurrency import insert_or_conflict, upsert_unique
 from ..database import get_db
@@ -41,7 +42,6 @@ from ..models import (
     Organization,
     Settlement,
     User,
-    utcnow,
 )
 from ..numtypes import MONEY_MAX, MoneyFloat, split_fen
 from .performance import DEFAULT_VOLUME_CAP, org_scorecards
@@ -620,7 +620,9 @@ def distribute(pool_id: int, body: DistributeIn, db: Session = Depends(get_db)):
     settlement.formula_expr = body.formula_expr
     settlement.score_basis = (
         f"volume_cap={body.volume_cap},include_auto_passed={body.include_auto_passed},"
-        f"at={utcnow().strftime('%Y-%m-%d %H:%M')}"
+        # 给人看的时刻按本地写（P2-970，`clock.now_local` 的规矩）：原先写 UTC 钟点，东八区本地 10:15 的分配写成 02:15，
+        # 而且是落库的文字，前端换算不到它；修前写进去的存量不动
+        f"at={now_local().strftime('%Y-%m-%d %H:%M')}"
         # 只写家数：列宽 128，逐家列出会在生产库上超长报错；是哪几家看明细里份额为 0 的
         + (f"；公式算出负权重、按 0 计 {clamped} 家" if clamped else "")
     )
