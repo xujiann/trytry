@@ -1238,6 +1238,48 @@ def fhir_diagnostic_report(
     )
 
 
+def _presented_finding(forms) -> str:
+    """presentedForm → 所见：挑第一份带数据的文本件（contentType 为 text/*，没写按 text/plain），按它声明的 charset 解码，
+    没写按 UTF-8（P2-1111）。原先只取第 [0] 份、一律按 UTF-8 解：声明 GB18030 / GBK 的、先放一份 PDF 再放文本的，整单
+    422，报错还说成「不是合法的 base64」，结论与危急值标记跟着一起被拒。一份文本件都没有、只有 PDF 这类的，照旧拒收，
+    但把原因说对（只收文本所见、PDF 这类要不要单收结论，见待裁定）。"""
+    if forms is None:
+        return ""
+    if not isinstance(forms, list):
+        raise HTTPException(status_code=422, detail="presentedForm 必须是数组")
+    others: list[str] = []
+    for index, form in enumerate(forms):
+        if not isinstance(form, dict) or not form.get("data"):
+            continue
+        mime, _, params = str(form.get("contentType") or "text/plain").partition(";")
+        if not mime.strip().lower().startswith("text/"):
+            others.append(mime.strip())
+            continue
+        charset = "utf-8"
+        for param in params.split(";"):
+            key, _, value = param.partition("=")
+            if key.strip().lower() == "charset" and value.strip():
+                charset = value.strip().strip('"')
+        try:
+            raw = base64.b64decode(form["data"])
+        except Exception:
+            raise HTTPException(status_code=422, detail=f"presentedForm[{index}].data 不是合法的 base64") from None
+        try:
+            return raw.decode(charset)
+        except LookupError:
+            raise HTTPException(status_code=422, detail=f"presentedForm[{index}] 的字符集 {charset} 不认识") from None
+        except UnicodeDecodeError:
+            raise HTTPException(
+                status_code=422, detail=f"presentedForm[{index}].data 按 {charset} 解不开（contentType 的 charset 与内容不符）"
+            ) from None
+    if others:
+        raise HTTPException(
+            status_code=422,
+            detail=f"presentedForm 里没有文本件（{'、'.join(others)}）：所见请以 text/plain 送",
+        )
+    return ""
+
+
 def _do_fhir_diagnostic_report(resource: dict, db: Session, source_system: str):
     if resource.get("resourceType") != "DiagnosticReport":
         raise HTTPException(status_code=422, detail="resourceType 必须为 DiagnosticReport")
@@ -1272,15 +1314,7 @@ def _do_fhir_diagnostic_report(resource: dict, db: Session, source_system: str):
     conclusion = str(resource.get("conclusion") or "").strip()
     if not conclusion:
         raise HTTPException(status_code=422, detail="conclusion 缺失")
-    finding = ""
-    forms = resource.get("presentedForm") or []
-    if forms and forms[0].get("data"):
-        try:
-            finding = base64.b64decode(forms[0]["data"]).decode("utf-8")
-        except Exception:
-            raise HTTPException(
-                status_code=422, detail="presentedForm[0].data 不是合法的 base64 文本"
-            ) from None
+    finding = _presented_finding(resource.get("presentedForm"))
     critical = any(
         ext.get("url") == CRITICAL_EXTENSION_URL and ext.get("valueBoolean") is True
         for ext in resource.get("extension") or []
