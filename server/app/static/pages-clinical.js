@@ -2787,7 +2787,8 @@ async function renderOaQc() {
 
 /* ---------------- 第四阶段新增页面 ---------------- */
 
-const CRIT_STATUS = { notified: ["已通知", "orange"], acknowledged: ["已确认", ""], resolved: ["已处置", "green"], "": ["待回填", "orange"] };
+// 存量空串等同已通知（M-1 整改：确认接收两态都收，下面「确认接收」按钮也两态都给），原先写「待回填」，像是要补录数据（P2-1026）
+const CRIT_STATUS = { notified: ["已通知", "orange"], acknowledged: ["已确认", ""], resolved: ["已处置", "green"], "": ["已通知", "orange"] };
 
 async function renderCritical() {
   $("#page-desc").textContent = "危急值闭环：通知 → 医师确认接收 → 处置反馈；超时未确认催办";

@@ -83,7 +83,7 @@ def test_上表的字段里没有编码列(client, admin, ids):
 
 def test_各指标的编码列印中文(client, admin, ids):
     body, rows = _drill(client, admin, "critical_values")
-    assert _shown(body, rows[ids["legacy"]])["闭环状态"] == "待回填"   # 修前 pending
+    assert _shown(body, rows[ids["legacy"]])["闭环状态"] == "已通知"   # 修前 pending；存量空串等同已通知（P2-1026，原写「待回填」）
     assert _shown(body, rows[ids["acked"]])["闭环状态"] == "已确认"
     body, rows = _drill(client, admin, "chronic_overdue")
     assert _shown(body, rows[ids["known"]])["病种"] == "高血压"

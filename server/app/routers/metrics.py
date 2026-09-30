@@ -277,8 +277,9 @@ def _row_critical(r: ExamReport) -> dict:
         "request_id": r.request_id,
         "conclusion": r.conclusion,
         "critical_status": r.critical_status or "pending",
-        # 存量空串：危急值页叫「待回填」（pages-clinical.js 的 CRIT_STATUS），这里原先编了个 pending
-        "critical_status_name": _name(CRITICAL_STATUS_NAMES, r.critical_status) if r.critical_status else "待回填",
+        # 存量空串等同已通知（M-1 整改，见 exams.CRITICAL_STATUS_NAMES 的注释）：这里原先编了个 pending，后又照危急值页写「待回填」，
+        # 像是要补录数据（P2-1026）；编码列照旧是 pending，不改既有键的值
+        "critical_status_name": _name(CRITICAL_STATUS_NAMES, r.critical_status or "notified"),
         "reported_by": r.reported_by,
         "reported_at": r.reported_at.isoformat(),
     }

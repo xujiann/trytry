@@ -730,8 +730,10 @@ class ReportTemplateOut(BaseModel):
     content: str
 
 
-#: `exam_reports.critical_status` → 中文（§13「状态文案取自后端」，P2-72）：措辞与危急值页、医生移动端一致。
-#: 空串不在表里——非危急报告没有闭环状态，文案也是空串。
+#: `exam_reports.critical_status` → 中文（§13「状态文案取自后端」，P2-72）：措辞与管理端危急值页（`CRIT_STATUS`）、指标下钻导出一致。
+#: 医生移动端（`m/doctor.js` 的 `CRITICAL_TAGS`）按接收方的视角另有一套说法（待确认 / 已接收，待处置 / 已闭环），同一个状态，不共用。
+#: 空串不在表里：非危急报告没有闭环状态，文案也是空串；存量危急报告（迁移前）的空串等同 notified（M-1 整改，确认接收两态都收），
+#: 各端都按 notified 那一格写（P2-1026：管理端与导出原先写「待回填」，像是要补录数据，医生端待办却按「待确认」计）。
 CRITICAL_STATUS_NAMES = {"notified": "已通知", "acknowledged": "已确认", "resolved": "已处置"}
 
 
