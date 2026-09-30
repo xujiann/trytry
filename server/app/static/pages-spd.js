@@ -25,7 +25,7 @@ const SPD_TASK_STATUS = {
   submitted: ["待审核", "orange"], done: ["已完成", "green"],
   rejected: ["已退回", "red"], overdue: ["已超期", "red"], cancelled: ["已取消", ""],
 };
-/** 数据源类型（`spd_data_sources.source_type`，接入表单的下拉） */
+/** 数据源类型（`spd_data_sources.source_type`）：接入表单的下拉与接入表的「类型」列同一套（P2-1025：列原先原样印 publichealth / device） */
 const SPD_DS_TYPES = {
   HIS: "HIS", EMR: "电子病历 EMR", LIS: "检验 LIS", PACS: "影像 PACS",
   checkup: "体检", publichealth: "公卫随访", device: "设备回传",
@@ -518,7 +518,7 @@ async function renderSpdAdmin() {
       </form>
       ${table(["ID", "编码", "名称", "类型", "频率(分)", "最近同步", "行数", "延迟(ms)", "成功率", "状态", "操作"],
         sources, (src) =>
-        `<tr><td>${src.id}</td><td>${esc(src.code)}</td><td>${esc(src.name)}</td><td>${esc(src.source_type)}</td>
+        `<tr><td>${src.id}</td><td>${esc(src.code)}</td><td>${esc(src.name)}</td><td>${esc(SPD_DS_TYPES[src.source_type] || src.source_type)}</td>
          <td>${src.freq_minutes}</td><td>${esc(src.last_sync_at ? src.last_sync_at.replace("T", " ").slice(0, 16) : "—")}</td>
          <td>${src.last_rows}</td><td>${src.last_latency_ms}</td><td>${src.success_rate}%</td>
          <td><span class="tag ${!src.active || src.status === "stopped" ? ""
