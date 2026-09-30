@@ -124,6 +124,14 @@ _GENDER_TO_FHIR = {"男": "male", "女": "female"}
 ID_CARD_SYSTEM = "urn:oid:2.16.156.10011.1.3"  # 中国居民身份证号 OID
 EHC_SYSTEM = "urn:medplat:ehc"
 EXAM_ITEM_SYSTEM = "urn:medplat:exam-item"   # 检查检验项目的本地编码（出站 DiagnosticReport.code，P2-1079）
+ICD10_SYSTEM = "http://hl7.org/fhir/sid/icd-10"
+
+
+def _is_icd10_system(system: str) -> bool:
+    """入站诊断的编码系统是不是 ICD-10（P2-1080）：FHIR 的 `coding.system`（http://hl7.org/fhir/sid/icd-10 及 -cm 等变体、
+    国内对接常写的 ICD-10 / ICD10）、HL7 v2 表 0396 的 `I10` / `I10C`（DG1-3.3）。`I10P` 是 ICD-10 的手术操作码，不算。"""
+    key = system.strip().lower()
+    return "icd-10" in key or "icd10" in key or key in ("i10", "i10c")
 
 _FHIR_EMPTY: tuple = ("", None, [], {})
 
@@ -982,9 +990,14 @@ def _parse_dg1(message: str) -> tuple[str, str]:
     dg1 = next((s for s in _hl7_segments(message) if s.startswith("DG1|")), None)
     if dg1 is None:
         return "", ""
-    parts = _hl7_field(dg1, 3).split("^")
+    parts = _hl7_field(dg1, 3).split("^") + [""] * 6
+    # DG1-3 是 CWE：`编码^名称^编码系统^备用编码^备用名称^备用编码系统`。主三元组明写了别的编码系统（如 SCT）、备用三元组是
+    # ICD-10 时取备用的（P2-1080）：原先一律取第一组件，SNOMED 码当 ICD-10 落库、再按 ICD-10 导出，慢专病按诊断编码也认不出。
+    # 主三元组没写编码系统的照旧当 ICD-10；一条 ICD-10 都没有时怎么办待裁定（与 P2-744 一并定）
+    if parts[2].strip() and not _is_icd10_system(parts[2]) and parts[3].strip() and _is_icd10_system(parts[5]):
+        parts = parts[3:]
     code = _hl7_unescape(parts[0].strip())
-    name = _hl7_unescape(parts[1].strip()) if len(parts) > 1 else ""
+    name = _hl7_unescape(parts[1].strip())
     return code[:64], (name or _hl7_unescape(_hl7_field(dg1, 4).strip()) or code)[:256]
 
 
@@ -1342,10 +1355,13 @@ def _do_fhir_encounter(resource: dict, db: Session, user: User):
     if encounter_type is None:
         raise HTTPException(status_code=422, detail="class.code 仅支持 AMB（门诊）/IMP（住院）")
     reasons = resource.get("reasonCode") or []
-    codings = (reasons[0].get("coding") or [{}]) if reasons else [{}]
-    diagnosis_code = str(codings[0].get("code", ""))[:64]
+    codings = [c for c in (reasons[0].get("coding") or []) if isinstance(c, dict)] if reasons else []
+    # 按编码系统挑 ICD-10 那条（P2-1080）：原先取 coding[0]，SNOMED / 本地码排在前面就当 ICD-10 落库、再按 ICD-10 导出。
+    # 一条 ICD-10 都没有的照旧取第一条（丢弃、透传还是拒收待裁定，与 P2-744 一并定）
+    coding = next((c for c in codings if _is_icd10_system(str(c.get("system") or ""))), codings[0] if codings else {})
+    diagnosis_code = str(coding.get("code", ""))[:64]
     diagnosis_name = str(
-        (reasons[0].get("text") if reasons else "") or codings[0].get("display", "")
+        (reasons[0].get("text") if reasons else "") or coding.get("display", "")
     )[:256]
     participants = resource.get("participant") or []
     doctor_name = str(
@@ -1454,7 +1470,7 @@ def fhir_encounter_resource(e: Encounter, ehc_no: str) -> dict:
                 "subject": {"reference": f"Patient/{ehc_no}"},
                 "code": {
                     "coding": (
-                        [{"system": "http://hl7.org/fhir/sid/icd-10", "code": e.diagnosis_code}]
+                        [{"system": ICD10_SYSTEM, "code": e.diagnosis_code}]
                         if e.diagnosis_code
                         else []
                     ),
