@@ -93,3 +93,28 @@ def test_charge_dict_control(tmp_path):
     rep = run_import(f)
     assert rep.imported == 1 and len(rep.errors) == 1
     assert "不在收费字典" in rep.errors[0][1]
+
+
+@pytest.mark.parametrize("dry_run", [True, False])
+def test_单价填NaN或Infinity进错误行_好行照导(tmp_path, dry_run):
+    """P2-1088（第三十一批 C2-10）：原先 `_parse_price` 只接住 Decimal() 那一步，NaN / Infinity 在下一句比较时抛
+    InvalidOperation，dry-run 与实导都带栈中断、好行一条也导不进；存量导入的 `_parse_money` 早按 P1-97 修过。"""
+    good = f"OKN0{int(dry_run)}"
+    db = SessionLocal()
+    try:   # 上一条用例配了 charge 字典：好行的编码得在字典里，才看得出「好行照导」
+        system = db.query(CodeSystem).filter(CodeSystem.code == "charge").first()
+        if system is not None:
+            db.add(CodeEntry(system_id=system.id, code=good, name="正常项目"))
+            db.commit()
+    finally:
+        db.close()
+    csv = tmp_path / "nan_price.csv"
+    csv.write_text(
+        "code,name,category,price,active\n"
+        f"NAN0{int(dry_run)},非数单价,other,NaN,true\n"
+        f"INF0{int(dry_run)},无穷单价,other,Infinity,true\n"
+        f"{good},正常项目,other,12.50,true\n",
+        encoding="utf-8",
+    )
+    rep = run_import(csv, dry_run=dry_run)   # 修前 decimal.InvalidOperation
+    assert [line for line, _ in rep.errors] == [2, 3] and rep.imported == 1

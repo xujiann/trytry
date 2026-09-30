@@ -63,6 +63,10 @@ def _parse_price(raw: str) -> float | None:
         value = Decimal(raw)
     except InvalidOperation:
         return None
+    # 「NaN」「Infinity」解析得成 Decimal，下一句比较 / quantize 就抛 InvalidOperation——整个导入带栈中断、好行一条
+    # 也导不进、错误行明细也不出（P2-1088）；与存量导入 `_parse_money` 同一句（P1-97）
+    if not value.is_finite():
+        return None
     if value <= 0 or value != value.quantize(Decimal("0.01")):
         return None
     if value >= Decimal("1000000000000"):
