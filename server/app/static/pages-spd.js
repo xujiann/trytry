@@ -1710,9 +1710,13 @@ async function renderSpdPatients() {
     if (enrDetail) return showEnrollment(enrDetail.dataset.enrDetail);
     if (profile) return spdShowProfile("#spd-profile", profile.dataset.profile);
     if (enrEdit) {
+      // 风险分层缺省「不改」、阶段只在改了才送（P2-960）：原先两项按列表载入时的值预填、恒送——页面开着的时候评估判出了
+      // 极高危、路径推进了阶段，点「调整」只填个下次随访日也把档案改回载入时的低危和旧阶段（高危复诊照挂、按极高危筛不到人）
+      const loadedRisk = enrEdit.dataset.risk || "";
       const form = await spdModal("调整纳管档案（留空的项不改）", [
         { name: "stage", label: "管理阶段", value: enrEdit.dataset.stage || "" },
-        { name: "risk_level", label: "风险分层", type: "select", value: enrEdit.dataset.risk || "low", options: [
+        { name: "risk_level", label: `风险分层（载入时：${(SPD_RISK[loadedRisk] || [loadedRisk || "未分层"])[0]}）`,
+          type: "select", value: "", options: [{ value: "", label: "（不改）" },
           { value: "low", label: "低危" }, { value: "mid", label: "中危" },
           { value: "high", label: "高危" }, { value: "very_high", label: "极高危" }] },
         { name: "team_id", label: "服务团队ID", type: "number" },
@@ -1731,8 +1735,9 @@ async function renderSpdPatients() {
         { name: "consent_no", label: "同意书号" },
       ]);
       if (!form) return;
-      const body = { risk_level: form.risk_level };
-      if (form.stage) body.stage = form.stage;
+      const body = {};
+      if (form.risk_level && form.risk_level !== loadedRisk) body.risk_level = form.risk_level;
+      if (form.stage && form.stage !== (enrEdit.dataset.stage || "")) body.stage = form.stage;
       for (const k of ["team_id", "doctor_user_id", "manager_user_id", "village_doctor_id"]) if (form[k]) body[k] = form[k];
       for (const k of ["next_followup_at", "service_start", "service_end"]) if (form[k]) body[k] = form[k];
       for (const k of ["risk_factors", "complications"]) if (form[k]) body[k] = spdSplitList(form[k]);
