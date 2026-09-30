@@ -55,7 +55,7 @@ from ..models import (
     SpdTeam,
     SpdVillageDoctor,
 )
-from ..rules import RuleError, as_validated, evaluate, is_suspect_risk, score_scale
+from ..rules import RuleError, as_validated, evaluate, is_suspect_risk, score_scale, screen
 from ..service import (ENROLL_STATUS_LABELS, PACKAGE_ITEM_NAME_MAX, paused_enrollment, SCALE_ADVICE_MAX, MEASUREMENT_SOURCE_NAMES, TASK_OPEN_STATUSES, actively_enrolled, award_points, build_facts,
                        candidate_reason, candidate_undistributed, close_open_work, exclusion_problem, match_program, migration_void_reason,
                        package_items_ok,
@@ -742,6 +742,11 @@ def auto_screen(
     只扫**本机构有就诊记录的患者**，不扫全县主索引：全域扫描是一次全表笛卡尔，
     而且业务上没有意义——本机构没接触过的人，识别出来也没人去随访。
     需要全域跑批时由 admin 走定时任务，那里可以慢慢跑。
+
+    只对命中纳入的人判排除（P2-1118）：纳入且排除 → 排除，没命中纳入 → 跳过、计入 normal，不写筛查、不进池。
+    `rules.screen()` 先判排除、不管有没有命中纳入——「有禁忌」压过「符合适应证」，那是医护登记筛查与 `exclusion_problem`
+    的口径，排除针对的是已符合适应证的人；这里扫的却是本院全部就诊患者，原先看过感冒的孩子一命中「age < 18」就落一条
+    排除筛查、进高血压目标池，累计筛查与筛查转化率都把他们算进去。就诊触发的同一个「规则自动识别」只写疑似。
     """
     program = db.query(SpdProgram).filter(SpdProgram.code == body.program_code).first()
     if program is None or not program.active:  # 同上（P1-89）：一次最多扫 5000 人，入池的全是走不通的疑似
@@ -764,11 +769,14 @@ def auto_screen(
         .all()
     ]
     suspect, excluded, normal = 0, 0, 0
+    include, exclude = program.include_rules or [], program.exclude_rules or []
     for pid in patient_ids:
-        matched = match_program(db, pid, program)
-        if matched["result"] == "normal":
+        # 与 match_program 同一份事实、同一个 screen()，只是先看纳入（P2-1118，见上）：事实只取一次
+        facts = build_facts(db, pid)
+        if not evaluate(include, facts, mode="all")[0]:
             normal += 1
             continue
+        matched = screen(include, exclude, facts)
         screening = SpdScreening(
             patient_id=pid, program_code=program.code, source="import", org_id=org_id,
             operator_id=user.id, risk_level="mid" if matched["result"] == "suspect" else "low",
