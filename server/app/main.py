@@ -12,6 +12,7 @@ import contextlib
 import json
 import logging
 import math
+import re
 import sys
 import threading
 import time
@@ -697,12 +698,20 @@ async def _unhandled_exception_handler(request, exc):
     )
 
 
+#: 孤立代理（U+D800–U+DFFF 落单）：JSON 里的 `"\\ud83d"` 经 `json.loads` 照收成一个落单的代理码点（成对的会合成一个字符），
+#: 编码成 UTF-8 时 UnicodeEncodeError。来源多是 JS `slice` / Java `substring` 截在 emoji 中间再 `JSON.stringify`
+_LONE_SURROGATE = re.compile("[\ud800-\udfff]")
+
+
 def _finite_json(value):
-    """把错误详情里的非有限浮点换成它在 JSON 里本来的写法（`"NaN"` / `"Infinity"` / `"-Infinity"`），其余原样。"""
+    """把错误详情里的非有限浮点换成它在 JSON 里本来的写法（`"NaN"` / `"Infinity"` / `"-Infinity"`），孤立代理换成 U+FFFD
+    （P2-1158：422 渲染时按 UTF-8 编码就炸，同 P1-92 的形状——校验拦住了，调用方却只看到 500），其余原样。"""
     if isinstance(value, float) and not math.isfinite(value):
         return "NaN" if math.isnan(value) else ("Infinity" if value > 0 else "-Infinity")
+    if isinstance(value, str):
+        return _LONE_SURROGATE.sub("\ufffd", value)
     if isinstance(value, dict):
-        return {key: _finite_json(item) for key, item in value.items()}
+        return {_finite_json(key): _finite_json(item) for key, item in value.items()}
     if isinstance(value, list):
         return [_finite_json(item) for item in value]
     return value
