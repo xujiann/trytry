@@ -123,6 +123,7 @@ _GENDER_TO_FHIR = {"男": "male", "女": "female"}
 
 ID_CARD_SYSTEM = "urn:oid:2.16.156.10011.1.3"  # 中国居民身份证号 OID
 EHC_SYSTEM = "urn:medplat:ehc"
+EXAM_ITEM_SYSTEM = "urn:medplat:exam-item"   # 检查检验项目的本地编码（出站 DiagnosticReport.code，P2-1079）
 
 _FHIR_EMPTY: tuple = ("", None, [], {})
 
@@ -1449,6 +1450,8 @@ def fhir_encounter_resource(e: Encounter, ehc_no: str) -> dict:
             {
                 "resourceType": "Condition",
                 "id": "dx",
+                # R4 的 Condition.subject 是 1..1，内联的同样要带（P2-1079）：做校验的前置机整条拒收
+                "subject": {"reference": f"Patient/{ehc_no}"},
                 "code": {
                     "coding": (
                         [{"system": "http://hl7.org/fhir/sid/icd-10", "code": e.diagnosis_code}]
@@ -1464,14 +1467,22 @@ def fhir_encounter_resource(e: Encounter, ehc_no: str) -> dict:
 
 
 def fhir_diagnostic_report_resource(
-    report: ExamReport, request_id: int, ehc_no: str, status: str = "final"
+    report: ExamReport, request_id: int, ehc_no: str, status: str = "final", item_code: str = "", item_name: str = ""
 ) -> dict:
     """ExamReport → FHIR R4 DiagnosticReport（conclusion→conclusion、finding→presentedForm、
-    critical→urn:medplat:critical 扩展，与入站承载对称）。修订后再导的一份 `status="amended"`（P2-102）。"""
+    critical→urn:medplat:critical 扩展，与入站承载对称）。修订后再导的一份 `status="amended"`（P2-102）。
+
+    `code` 取申请单的检查项目（P2-1079，对接规范映射表 item_code→code）：R4 的 DiagnosticReport.code 是 1..1，原先不导——
+    省平台看不出这是哪项检查，做校验的前置机整条拒收；basedOn 指向的 ServiceRequest 又从不导出。项目编码是本地码，
+    系统写 `urn:medplat:exam-item`，名称进 text。"""
     return _fhir_compact({
         "resourceType": "DiagnosticReport",
         "id": str(report.id),
         "status": status,
+        "code": {
+            "coding": [{"system": EXAM_ITEM_SYSTEM, "code": item_code}] if item_code else [],
+            "text": item_name,
+        },
         "basedOn": [{"reference": f"ServiceRequest/{request_id}"}],
         "subject": {"reference": f"Patient/{ehc_no}"},
         "issued": to_aware(report.reported_at).isoformat(),
@@ -1575,7 +1586,7 @@ def run_fhir_batch_export(db: Session) -> tuple[int, str]:
     exported_upto = _wm_get(db, FHIR_EXPORT_WM_KEYS["DiagnosticReport"])
 
     reports = (
-        db.query(ExamReport, ExamRequest.id, Patient.ehc_no)
+        db.query(ExamReport, ExamRequest.id, Patient.ehc_no, ExamRequest.item_code, ExamRequest.item_name)
         .join(ExamRequest, ExamRequest.id == ExamReport.request_id)
         .join(Patient, Patient.id == ExamRequest.patient_id)
         .filter(ExamReport.id > exported_upto)
@@ -1586,8 +1597,8 @@ def run_fhir_batch_export(db: Session) -> tuple[int, str]:
     _export(
         "DiagnosticReport",
         [
-            (r.id, fhir_diagnostic_report_resource(r, req_id, ehc_no))
-            for r, req_id, ehc_no in reports
+            (r.id, fhir_diagnostic_report_resource(r, req_id, ehc_no, item_code=code, item_name=name))
+            for r, req_id, ehc_no, code, name in reports
         ],
     )
 
@@ -1598,7 +1609,7 @@ def run_fhir_batch_export(db: Session) -> tuple[int, str]:
     if revisions:
         last_revision = {report_id: revision_id for revision_id, report_id in revisions}
         amended = (
-            db.query(ExamReport, ExamRequest.id, Patient.ehc_no)
+            db.query(ExamReport, ExamRequest.id, Patient.ehc_no, ExamRequest.item_code, ExamRequest.item_name)
             .join(ExamRequest, ExamRequest.id == ExamReport.request_id)
             .join(Patient, Patient.id == ExamRequest.patient_id)
             .filter(ExamReport.id.in_([rid for rid in last_revision if rid <= exported_upto]))
@@ -1607,8 +1618,9 @@ def run_fhir_batch_export(db: Session) -> tuple[int, str]:
         _export(
             "DiagnosticReport",
             sorted(
-                (last_revision[r.id], fhir_diagnostic_report_resource(r, req_id, ehc_no, status="amended"))
-                for r, req_id, ehc_no in amended
+                (last_revision[r.id], fhir_diagnostic_report_resource(r, req_id, ehc_no, status="amended",
+                                                                      item_code=code, item_name=name))
+                for r, req_id, ehc_no, code, name in amended
             ),
             kind="amended",
         )
