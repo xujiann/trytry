@@ -1293,7 +1293,10 @@ async function renderPatients() {
     }
   };
   const SCOPES = { all: "全部档案", encounter: "就诊记录", exam: "检查报告" };
+  // 先清空（P2-1010）：原先换了患者号查不到（查无此人 404），原因写出来了，上一位的授权清单连同「撤销」按钮还挂着——
+  // 按钮上是上一位的患者号，点撤销撤的是上一位的授权
   const drawAuths = async (pid) => {
+    $("#auth-table").innerHTML = "";
     const auths = await api(`/api/patients/${pid}/authorizations`);
     $("#auth-table").innerHTML = table(["ID", "被授权机构", "范围", "有效期至", "状态", "操作"], auths, (a) =>
       `<tr><td>${a.id}</td><td>${a.grantee_org_id}</td><td>${SCOPES[a.scope] || esc(a.scope)}</td><td>${esc(a.expire_date)}</td>
@@ -1350,9 +1353,11 @@ async function renderPatients() {
   };
   $("#patient-search").onsubmit = async (e) => {
     e.preventDefault();
-    // 查询失败要说出来（P2-378）：原先 draw() 抛错没人接，列表还是上一次的结果
+    // 查询失败要说出来（P2-378）：原先 draw() 抛错没人接，列表还是上一次的结果。先清空、原因写在检索这一块（P2-1010）：
+    // 原先写进上方建档面板的消息行，列表照旧是上一次的
+    $("#patient-table").innerHTML = "";
     try { await draw(new FormData(e.target).get("keyword")); }
-    catch (err) { setMsg("#patient-msg", err.message, false); }
+    catch (err) { $("#patient-table").innerHTML = `<p class="msg err">${esc(err.message)}</p>`; }
   };
   // 取数放最后：监听已与 innerHTML 同一同步块挂好，窗口为零（P2-31 根修，样板见 pages-spd.js renderSpdPath）
   await draw();

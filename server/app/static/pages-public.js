@@ -402,7 +402,9 @@ async function renderCerts() {
   $("#cert-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/certs", formJson(e.target, ["org_id", "patient_id"]), "#cert-msg"); };
   $("#cert-filter").onsubmit = async (e) => {
     e.preventDefault();
-    // 查询失败要说出来（P2-378）：原先 draw() 抛错没人接，列表还是上一次的结果
+    // 查询失败要说出来（P2-378）：原先 draw() 抛错没人接，列表还是上一次的结果。先清空（P2-1010）：原先只写了原因，
+    // 列表照旧是上一次那一类的证书
+    $("#cert-table").innerHTML = "";
     try { await draw(new FormData(e.target).get("cert_type")); }
     catch (err) { setMsg("#cert-msg", err.message, false); }
   };

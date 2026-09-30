@@ -1699,7 +1699,8 @@ async function renderSpdPatients() {
   };
   $("#spd-enroll-filter").onsubmit = async (e) => {
     e.preventDefault();
-    // 查询失败要说出来（P2-378）：原先 draw 抛错没人接，列表还是上一次的结果
+    // 查询失败要说出来（P2-378）：原先 draw 抛错没人接，列表还是上一次的结果；先清空（P2-1010）：原先只写了原因，列表照旧
+    $("#spd-enroll-list").innerHTML = "";
     try { await drawEnrollments(formJson(e.target)); } catch (err) { setMsg("#spd-enroll-msg", err.message, false); }
   };
   $("#spd-life-form").onsubmit = (e) => {
@@ -2269,7 +2270,8 @@ async function renderSpdPath() {
   };
   $("#spd-task-filter").onsubmit = async (e) => {
     e.preventDefault();
-    // 查询失败要说出来（P2-378）：原先 draw 抛错没人接，列表还是上一次的结果
+    // 查询失败要说出来（P2-378）：原先 draw 抛错没人接，列表还是上一次的结果；先清空（P2-1010）：原先只写了原因，列表照旧
+    $("#spd-task-list").innerHTML = "";
     try { await drawTasks(formJson(e.target)); } catch (err) { setMsg("#spd-task-msg", err.message, false); }
   };
   // 路径节点任务由路径派生，这里不给「路径节点」类型；挂档案时后端核对档案是这位患者、这个病种的（P2-89）
@@ -3287,7 +3289,8 @@ async function renderSpdFollowup() {
   fuFilter.overdue.onchange = () => { fuFilter.status.disabled = fuFilter.overdue.checked; };
   $("#spd-fu-filter").onsubmit = async (e) => {
     e.preventDefault();
-    // 查询失败要说出来（P2-378）：原先 draw 抛错没人接，列表还是上一次的结果
+    // 查询失败要说出来（P2-378）：原先 draw 抛错没人接，列表还是上一次的结果；先清空（P2-1010）：原先只写了原因，列表照旧
+    $("#spd-fu-list").innerHTML = "";
     try { await drawRecords(formJson(e.target)); } catch (err) { setMsg("#spd-fu-msg", err.message, false); }
   };
   $("#spd-qc-form").onsubmit = (e) => {
@@ -3297,6 +3300,8 @@ async function renderSpdFollowup() {
   $("#spd-cal-form").onsubmit = async (e) => {
     e.preventDefault();
     const q = formJson(e.target, ["patient_id"]);
+    // 先清空（P2-1010）：原先换了患者号查失败，只写了原因，日历区照旧是上一位的随访、复诊、任务
+    $("#spd-cal-box").innerHTML = "";
     try {
       const cal = await api(`/api/spd/health-calendar?patient_id=${q.patient_id}${q.day ? `&day=${encodeURIComponent(q.day)}` : ""}`);
       $("#spd-cal-box").innerHTML = `
@@ -3352,6 +3357,8 @@ async function renderSpdFollowup() {
       }, "#spd-quest-msg", "PATCH");
     }
     if (ctx) {
+      // 先清空（P2-1010）：原先取不到只写了原因，前置资料区照旧是上一条随访那位患者的就诊、住院与电话
+      $("#spd-fu-detail").innerHTML = "";
       try {
         const c = await api(`/api/spd/followup-records/${ctx.dataset.fuCtx}/context`);
         const pt = c.patient;

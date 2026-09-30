@@ -3206,8 +3206,12 @@ async function renderBilling() {
     e.preventDefault();
     const f = new FormData(e.target);
     const query = new URLSearchParams([...f.entries()].filter(([, v]) => v !== ""));
+    // 先清空、原因写在本面板（P2-1010，与 P2-378 同一写法）：原先查失败只把原因写进上方「收费项目目录」面板的消息行，
+    // 明细区照旧挂着上一位的明细与合计——换了患者号查（无权 403），看的人会当成这一位欠着这些费
+    $("#bd-list").innerHTML = "";
+    const fail = (text) => { $("#bd-list").innerHTML = `<p class="msg err">${esc(text)}</p>`; };
     if (!["patient_id", "admission_id", "encounter_id"].some((k) => query.has(k))) {
-      return setMsg("#bill-msg", "查明细请填患者ID、住院单ID 或就诊ID 之一", false);
+      return fail("查明细请填患者ID、住院单ID 或就诊ID 之一");
     }
     try {
       const rows = await api(`/api/billing/details?${query}`);
@@ -3219,7 +3223,7 @@ async function renderBilling() {
            <td>${d.admission_id ? `住院 ${esc(d.admission_id)}` : `就诊 ${esc(d.encounter_id ?? "—")}`}</td>
            <td>${esc(d.item_name)}（${esc(d.item_code)}）</td><td>${esc(d.unit_price)}</td><td>${esc(d.quantity)}</td>
            <td>${esc(d.amount)}</td><td>${d.settled ? `已结算（结算单 ${esc(d.settlement_id)}）` : '<span class="tag orange">未结清</span>'}</td></tr>`)}`;
-    } catch (err) { setMsg("#bill-msg", err.message, false); }
+    } catch (err) { fail(err.message); }
   };
   $("#settle-form").onsubmit = async (e) => {
     e.preventDefault();
