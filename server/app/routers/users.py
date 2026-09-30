@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import func
+from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
 from ..concurrency import insert_or_conflict
@@ -24,6 +24,7 @@ from ..deps import (
     require_roles,
     resolve_business_date,
     set_auth_cookies,
+    utc_date_parts,
 )
 from ..audit_chain import verify_chain
 from ..models import AuditLog, LoginLog, Organization, RoleChangeLog, User, utcnow
@@ -470,14 +471,21 @@ def audit_stats(days: int = 30, db: Session = Depends(get_db)):
     since = utcnow() - timedelta(days=days)
     base = db.query(AuditLog).filter(AuditLog.created_at >= since)
 
-    # 按日趋势：成功与失败分开，只看总量看不出"改坏了多少次"
-    daily: dict[str, dict[str, int]] = {}
-    for created_at, status_code in base.with_entities(
-        AuditLog.created_at, AuditLog.status_code
-    ).all():
-        day = created_at.strftime("%Y-%m-%d")
-        bucket = daily.setdefault(day, {"date": day, "ok": 0, "failed": 0})
-        bucket["failed" if status_code >= 400 else "ok"] += 1
+    # 按日趋势：成功与失败分开，只看总量看不出"改坏了多少次"。
+    # 在库里按年、月、日 GROUP BY（P2-1149）：原先把窗口内每一条审计的（时刻, 状态码）都取回来在 Python 里分桶，
+    # 窗口最长 365 天，审计量上来之后一次就是几十万行。口径不变：按落库的 naive UTC 时间戳的日历日分桶
+    # （`utc_date_parts`，与原先的 `strftime("%Y-%m-%d")` 逐值相同；页面按 UTC 日补零，P2-417），没有写操作的日子照旧不出现
+    year, month, day = utc_date_parts(db, AuditLog.created_at)
+    daily: dict[str, dict[str, str | int]] = {}
+    for y, m, d, count, failed_count in (
+        base.with_entities(year, month, day, func.count(AuditLog.id),
+                           func.sum(case((AuditLog.status_code >= 400, 1), else_=0)))
+        .group_by(year, month, day)
+        .order_by(year, month, day)
+        .all()
+    ):
+        key = f"{int(y):04d}-{int(m):02d}-{int(d):02d}"
+        daily[key] = {"date": key, "ok": count - failed_count, "failed": failed_count}
 
     def _top(column, limit=10, failed_only=False):
         query = base

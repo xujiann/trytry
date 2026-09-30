@@ -2,11 +2,11 @@ import hmac
 import re
 import time
 from datetime import date, datetime, timedelta, timezone
-from typing import Iterable, TypeVar
+from typing import Any, Iterable, TypeVar
 
 from fastapi import Depends, HTTPException, Request, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from sqlalchemy import func, literal, true
+from sqlalchemy import ColumnElement, Integer, cast, extract, func, literal, true
 from sqlalchemy.engine import Row
 from sqlalchemy.orm import Session
 
@@ -362,6 +362,25 @@ def through_day(column, day: str):
     except OverflowError:
         return true()
     return column < f"{after.isoformat()} 00:00:00"
+
+
+def utc_date_parts(db: Session, column: Any) -> tuple[ColumnElement[int], ColumnElement[int], ColumnElement[int]]:
+    """落库时刻列（naive UTC）的年、月、日三个整数表达式，供库内按日历 GROUP BY（P2-1149）。
+
+    与 Python 侧的 `dt.year` / `dt.month` / `dt.day`（`strftime("%Y-%m-%d")` 同值）逐值相同——把「整表读进内存再分桶」
+    挪进库里时，口径一格不变：
+    - PostgreSQL 用 `extract`：`timestamp without time zone` 不做时区换算，精确到微秒；回的是 numeric，调用方 `int()`；
+    - SQLite 不用 `extract`（它编译成 `strftime`）：SQLite 的日期函数用浮点儒略日、只到毫秒，一天最后那不到一毫秒里的
+      时刻有的日子会算进次日——实测 `2025-09-30 23:59:59.999999` 的月份是 10、`2025-12-31 23:59:59.999999` 的年份是
+      2026。落库文本是 ISO 8601（`YYYY-MM-DD HH:MM:SS.ffffff`），直接截前十个字符的三段，与 Python 侧读回的值一致。
+    """
+    if db.get_bind().dialect.name == "sqlite":
+        return (
+            cast(func.substr(column, 1, 4), Integer),
+            cast(func.substr(column, 6, 2), Integer),
+            cast(func.substr(column, 9, 2), Integer),
+        )
+    return extract("year", column), extract("month", column), extract("day", column)
 
 
 def month_bounds(period: str) -> tuple[date, date]:
