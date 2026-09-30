@@ -13,7 +13,8 @@ from ..deps import get_current_user, paginate, require_roles, resolve_business_d
 from pydantic import BaseModel, Field
 
 from ..models import ArchiveAuthorization, Organization, Patient, User
-from ..pii import pii_filter, pii_index_match
+from ..config import settings
+from ..pii import PII_PREFIX, pii_filter, pii_index_match
 from ..privacy import desensitize, mask_id_card, mask_phone  # noqa: F401  公共脱敏模块（H1）
 from ..schemas import PatientCreate, PatientOut
 from ..datetypes import DateStr
@@ -126,15 +127,19 @@ def search_patients(
     query = db.query(Patient).filter(Patient.deactivated_at.is_(None))
     if keyword:
         # PII 加密开态的降级口径（工程包 E3，文档见 app/pii.py）：证件号模糊检索
-        # 对密文行不可用，追加索引列等值让**全值**证件号仍可命中；前缀/中缀不支持。
-        # 关态该等值分支是 like 的子集，结果集不变。
+        # 对密文行不可用，走索引列等值让**全值**证件号仍可命中；前缀/中缀不支持。
+        # 开态不再拿关键词去 LIKE 密文列（P2-916，与慢专病两处 P1-25 同一句）：列里存的是 `pii1$<base64>$<hex>`，
+        # 原先照样 OR 进 LIKE——搜「$」「pii」全部命中、2～4 位数字随机命中不相干的人，X-Total-Count 跟着撑大。
+        # 关态照旧 LIKE，但排除开过又关回时的存量密文行（`pii1$` 前缀）；索引等值两态都并上（关态是 like 的子集）。
         # 证件号两种写法都认（P1-114）：真 PG 的 LIKE 区分大小写，按 x 搜原先查不到存成 X 的档案
         variants = id_card_variants(keyword)
+        id_card_hit = or_(*(pii_index_match(Patient.id_card_idx, v) for v in variants))
+        if not settings.pii_encryption_enabled:
+            id_card_hit = id_card_hit | (
+                or_(*(Patient.id_card.like(f"%{v}%") for v in variants)) & ~Patient.id_card.startswith(PII_PREFIX)
+            )
         query = query.filter(
-            keyword_like(Patient.name, keyword)
-            | or_(*(Patient.id_card.like(f"%{v}%") for v in variants))
-            | keyword_like(Patient.ehc_no, keyword)
-            | or_(*(pii_index_match(Patient.id_card_idx, v) for v in variants))
+            keyword_like(Patient.name, keyword) | id_card_hit | keyword_like(Patient.ehc_no, keyword)
         )
     rows = paginate(query.order_by(Patient.id), response, offset, limit)
     return [desensitize(p, user) for p in rows]

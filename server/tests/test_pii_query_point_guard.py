@@ -29,6 +29,10 @@ docstring 与 CLAUDE.md 里——**靠人记得**。本轮的事故正是"漏改
    只允许作为"关态原行为"的一支，且**同一函数里必须出现** `pii_filter` /
    `pii_index_match` 作为开态降级（现状三处都是这个形状：patients.py 的关键字
    检索、spd 的两处证件号筛选）。孤立的模糊比较 = 开态静默失明，违规。
+   「关态的一支」要**写在分支里**：模糊比较必须位于 ``if settings.pii_encryption_enabled:``
+   的 else 支（或 ``if not settings.pii_encryption_enabled:`` 的本体）里（P2-916）——原先只查同函数里
+   有没有降级入口，patients.py 把 LIKE 与索引等值不分开关一起 OR，开态照样拿关键词去匹配密文：
+   搜「$」「pii」返回全部患者，2～4 位数字随机命中不相干的人。
 3. **索引列的裸等值**（``Model.col_idx == pii_index(x)``）—— 违规。这正是本轮
    事故的形状：裸写只算当前钥，轮换宽限期内存量行的索引是旧钥算的，一比就漏。
    必须走 `pii_index_match`（`app/pii.py` 自己除外，它是实现处）。
@@ -155,6 +159,18 @@ def _enclosing_functions(tree: ast.AST) -> dict[int, ast.AST]:
     return owner
 
 
+def _off_branch_lines(tree: ast.AST) -> set[int]:
+    """关态分支里的行号：``if settings.pii_encryption_enabled:`` 的 else 支，或 ``if not …:`` 的本体（P2-916）。"""
+    lines: set[int] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.If) or "pii_encryption_enabled" not in ast.unparse(node.test):
+            continue
+        negated = isinstance(node.test, ast.UnaryOp) and isinstance(node.test.op, ast.Not)
+        for stmt in node.body if negated else node.orelse:
+            lines.update(sub.lineno for sub in ast.walk(stmt) if hasattr(sub, "lineno"))
+    return lines
+
+
 def _has_safe_helper(fn: ast.AST | None) -> bool:
     # 剥 docstring 再匹配：散文里提一句 `pii_filter` 不算做过检索保护
     # （理由与共享实现见 tests/astcode.py）。
@@ -180,6 +196,7 @@ def scan() -> _Scan:
         source = path.read_text(encoding="utf-8")
         tree = ast.parse(source)
         owner = _enclosing_functions(tree)
+        off_lines = _off_branch_lines(tree)
         is_impl = path in IMPLEMENTATION_FILES
 
         for node in ast.walk(tree):
@@ -219,8 +236,13 @@ def scan() -> _Scan:
                             result.violations.append(
                                 f"{where}\n      → 索引列做模糊匹配无意义（索引是定长 HMAC）"
                             )
-                        elif _has_safe_helper(fn):
+                        elif _has_safe_helper(fn) and node.lineno in off_lines:
                             result.paired.append(where)
+                        elif _has_safe_helper(fn):
+                            result.violations.append(
+                                f"{where}\n      → 模糊比较不在关态分支里：开态会拿关键词去匹配密文（P2-916）；"
+                                "放进 `if settings.pii_encryption_enabled:` 的 else 支"
+                            )
                         else:
                             result.violations.append(
                                 f"{where}\n      → 密文态模糊匹配恒空，且同函数内没有 "
