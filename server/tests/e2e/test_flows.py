@@ -3015,7 +3015,8 @@ def test_计费明细能按住院单查_未结清的看得见(page, base_url, ad
     _open_page(page, "billing", "费用结算")
     form = page.locator("#bd-query")
     form.locator("button").click()
-    expect(page.locator("#bill-msg")).to_contain_text("查明细请填患者ID、住院单ID 或就诊ID 之一")
+    # 提示写在明细面板里（P2-1010）：原先写进上方「收费项目目录」面板的消息行
+    expect(page.locator("#bd-list")).to_contain_text("查明细请填患者ID、住院单ID 或就诊ID 之一")
     form.locator('[name="admission_id"]').fill(str(adm["id"]))
     form.locator("button").click()   # 缺省只看未结清
     listing = page.locator("#bd-list")
