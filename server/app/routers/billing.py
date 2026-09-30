@@ -1488,10 +1488,15 @@ def create_payment(
             if remaining > 0:
                 amount = remaining
         if paid_already + amount > cap + 1e-6:
+            # 额度按「到账 + 待支付」占，说明里两样分开写（P2-1124）：原先整个写成「已付」——网关单受理了、患者还没扫码，
+            # 收银台改收现金得到「已付 400」，实际一分没付。在回滚之前取，与上面判额度的是同一份数
+            arrived = _collected_amount(db, settlement.id, include_pending=False, insurance=is_insurance)
             # 先收事务再抛：作废写入还挂在未提交的事务里，SQLite 的库级写锁
             # 要等依赖清理才放，下一个请求会撞 "database is locked"
             db.rollback()
-            covered = f"已付 {paid_already}" + (f"，押金冲抵 {offset}" if offset and not is_insurance else "")
+            pending_total = round(paid_already - arrived, 2)
+            covered = (f"已付 {arrived}" + (f"，待支付 {pending_total}" if pending_total > 0 else "")
+                       + (f"，押金冲抵 {offset}" if offset and not is_insurance else ""))
             raise HTTPException(
                 status_code=422,
                 detail=f"支付金额超出结算单未付余额（总额 {settlement.total_amount}，{part_name} {part_amount}，{covered}）",
