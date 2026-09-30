@@ -390,10 +390,10 @@ def _check_correction_value(field: str, value: str) -> None:
     """
     if field == "birth_date":
         check_date(value)
-    if field == "name" and len(value) > PATIENT_NAME_MAX:
-        raise ValueError(f"姓名不超过 {PATIENT_NAME_MAX} 字")
         if value > clock.today().isoformat():   # 与建档同一句（P2-713）：将来的出生日期算出负年龄
             raise ValueError(f"出生日期（{value}）不得晚于今天")
+    if field == "name" and len(value) > PATIENT_NAME_MAX:
+        raise ValueError(f"姓名不超过 {PATIENT_NAME_MAX} 字")
     # 性别与建档同一口径（P2-941）：原先「女性」审批通过即落库，区域结构、审方、FHIR 出站都认不得
     if field == "gender" and normalize_gender(value) is None:
         raise ValueError(f"性别（{value}）只能是 男 / 女 / 未知")
