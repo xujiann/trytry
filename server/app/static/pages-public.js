@@ -673,8 +673,10 @@ async function renderEsb() {
         await api(`/api/esb/endpoints/${esbtoggle}`, { method: "PATCH", body: JSON.stringify({ active: active !== "1" }) });
         route();
       } else if (esburl) {
+        // 留空即「仅登记不投递」（P2-1085，后端改档照收空串）：原先必填，下游停用或维护时界面上改不回仅登记，
+        // 只能停用整个接入方或直接调接口
         const form = await spdModal("改出站投递地址", [
-          { name: "endpoint_url", label: "投递地址（http / https）", value: url || "", required: true }]);
+          { name: "endpoint_url", label: "投递地址（http / https；留空 = 仅登记不投递）", value: url || "" }]);
         if (!form) return;
         await api(`/api/esb/endpoints/${esburl}`, { method: "PATCH",
           body: JSON.stringify({ endpoint_url: String(form.endpoint_url).trim() }) });
