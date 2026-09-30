@@ -76,7 +76,8 @@ def _pending_exams(db: Session) -> dict:
 
 def _stock_alerts(db: Session) -> dict:
     query = db.query(DrugStock).filter(DrugStock.quantity < DrugStock.threshold)
-    rows = query.order_by(DrugStock.org_id).limit(PREVIEW).all()
+    # 同一机构内按库存行编号排（P2-971）：原先只按机构，同一家谁先谁后由库决定，PG 上每次入库、发药都可能换一批
+    rows = query.order_by(DrugStock.org_id, DrugStock.id).limit(PREVIEW).all()
     # 带上机构名称（P2-371）：缺药是哪家的，医生移动端的待办卡片原先只能打出「机构 3」
     names = {oid: name for oid, name in db.query(Organization.id, Organization.name)
              .filter(Organization.id.in_({s.org_id for s in rows}))} if rows else {}
