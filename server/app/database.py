@@ -44,8 +44,13 @@ def build_engine(url: str):
     任何悬空 id——夹具写个占位 `patient_id=1` 照样绿、接口把请求体里不存在的编号原样写库也照样 201，
     同一份代码到生产 PG 上才撞外键。开了之后两边一个口径。只挂在应用自己的引擎上：alembic 迁移走
     `env.py` 自建的引擎，SQLite 上的批量改表（复制重建表）照旧在不查外键的连接上跑。
+
+    库报的错不带绑定参数（`hide_parameters=True`，P2-1144）：`str(DBAPIError)` 原先带 `[parameters: …]`——插患者那一句
+    就是姓名、证件号、电话（开了 PII 加密也还有姓名、出生日期）。这段文字会进 ESB 消费回执与交换日志（任一机构的经办
+    都读得到）、`job_runs.message` 与外发告警、`logger.exception` 的 traceback，这里一处收住。只改异常与 SQL 日志里的
+    文字：`exc.params` / `exc.orig` 照旧在，判冲突一律按异常类型（`IntegrityError`）走，不读这段文字。
     """
-    engine = create_engine(url, **engine_kwargs(url))
+    engine = create_engine(url, hide_parameters=True, **engine_kwargs(url))
     if url.startswith("sqlite"):
         event.listen(engine, "connect", _sqlite_foreign_keys_on)
     return engine

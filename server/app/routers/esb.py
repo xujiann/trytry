@@ -687,12 +687,20 @@ def _unexpected(db: Session, message_id: int, exc: Exception) -> tuple[EsbMessag
     都是空的；编排里建档那一步已经提交的，消息卡在「处理中」，页面不给消费 / 重试；定时出站那一轮整个中断，排在它
     后面的所有出站消息一条也投不出去——「每条各自 commit：一条投挂不拖累同批其余消息」只对预料到的失败成立。
     先回滚：库报的错（真 PG 上超长的姓名、日期撞列宽）让会话处于失败状态，不回滚什么也写不进去；回滚后按编号重取消息与
-    端点。错误全文进日志，消息上记类名与说明（`last_error` 是给页面上的人看的）。"""
+    端点。错误全文进日志，消息上记类名与说明（`last_error` 是给页面上的人看的）。
+
+    说明只取驱动原错（`exc.orig`，SQLAlchemy 包的库错才有）的首行（P2-1144）：原先是 `str(exc)` 全文——库错后面跟着整条
+    SQL 与绑定参数（患者的姓名、证件号、电话），进了回执 detail、`last_error` 和交换日志，交换日志任一机构的经办都读得到，
+    回执里的载荷却已按 P0-49 清空。参数已由引擎不再写进异常（`database.build_engine`）；PG 驱动原错第二行起是 DETAIL，
+    唯一键冲突时带着键值，同样不往外给。"""
     db.rollback()
     logger.exception("ESB 消息 %s 消费时出现未预期错误", message_id)
     message = ensure_present(db.get(EsbMessage, message_id), "消息")
     endpoint = db.get(EsbEndpoint, message.endpoint_id)
-    return message, endpoint, f"未预期错误（{type(exc).__name__}：{exc}）"[:1024]
+    orig = getattr(exc, "orig", None)
+    lines = str(exc if orig is None else orig).strip().splitlines()
+    reason = lines[0] if lines else ""
+    return message, endpoint, f"未预期错误（{type(exc).__name__}：{reason}）"[:1024]
 
 
 @router.post(
