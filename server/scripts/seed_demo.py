@@ -3,8 +3,12 @@
 用法：先启动服务（uvicorn app.main:app --port 8000），再执行
     python scripts/seed_demo.py [base_url]
 默认 base_url 为 http://127.0.0.1:8000。
+
+可以重复执行：start.sh 在 MEDPLAT_SEED_DEMO=1 时每次启动都跑一遍。每一段各查各的标记、存在即跳过，
+只增不改（P2-1095，`tests/test_seed_demo_rerun.py` 跑两遍盯着）。
 """
 import sys
+from datetime import date, timedelta
 
 import httpx
 
@@ -19,6 +23,23 @@ def ensure_org(payload):
     if resp.status_code == 201:
         return resp.json()
     return next(o for o in c.get("/api/organizations").json() if o["name"] == payload["name"])
+
+
+def _exists(rows, pred):
+    return next((r for r in rows if pred(r)), None)
+
+
+def _all_pages(path):
+    """分页清单（deps.paginate：新的在前、一页至多 500 条）按页取全。库里灌过仿真数据（seed_bulk 一灌上万张处方）
+    之后，种子自己那几条早翻到第一页之外——只看第一页就认不出，每次重启照样再补一份"""
+    sep = "&" if "?" in path else "?"
+    rows, offset = [], 0
+    while True:
+        page = c.get(f"{path}{sep}offset={offset}&limit=500").json()
+        rows += page
+        if len(page) < 500:
+            return rows
+        offset += 500
 
 
 county = ensure_org({"name": "县人民医院", "org_type": "lead_hospital", "level": "county"})
@@ -91,27 +112,50 @@ c.post("/api/dictionaries/diagnosis/import", json=[
     {"code": "J11", "name": "流行性感冒"},
 ])
 
+# ================= 诊疗业务演示数据（幂等：各段各查各的标记，存在即跳过） =================
+# start.sh 每次启动都跑本脚本（失败被 `|| true` 吞掉），这一段原先却一处存在性判断都没有（P2-1095）：
+# 重启一次就多一份就诊、检查申请（连同危急值与居民消息）、处方、传染病报卡、会诊与上转，两家的二甲双胍
+# 库存跟着翻倍；同一天再跑，号源那一步拿到 409 还去取 id，KeyError 让其后各段与末端自检全都不跑。
+# 口径与后半段相同：只增不改，查到就跳过、不去动已有的记录。标记按段各取各的，不设一个总开关——
+# 上一次跑到一半断掉的，下一次照样把没灌上的那几段补齐。
+
+# 就诊按（患者、机构、诊断名）认：张伟在村卫生室与县医院各有一次
 for p, org, code, name in [
     (patients[0], village, "I10", "高血压"),
     (patients[1], zhen1, "E11", "2型糖尿病"),
     (patients[2], zhen2, "J44", "慢阻肺急性加重"),
     (patients[0], county, "I10", "高血压（复诊）"),
 ]:
+    if _exists(c.get(f"/api/encounters?patient_id={p['id']}").json(),
+               lambda e, o=org, n=name: e["org_id"] == o["id"] and e["diagnosis_name"] == n):
+        continue
     c.post("/api/encounters", json={"patient_id": p["id"], "org_id": org["id"], "doctor_name": "接诊医生",
                                     "diagnosis_code": code, "diagnosis_name": name, "summary": "常规诊疗记录"})
 
 # 共享诊断中心：基层检查、上级诊断（含危急值与互认）
-r1 = c.post("/api/exams", json={"patient_id": patients[0]["id"], "from_org_id": zhen1["id"], "center_type": "imaging",
-                                "item_code": "DR-CHEST", "item_name": "胸部DR", "clinical_info": "咳嗽发热3天"}).json()
-c.post(f"/api/exams/{r1['id']}/claim")
-c.post(f"/api/exams/{r1['id']}/report", json={"finding": "右下肺斑片影", "conclusion": "考虑肺部感染", "critical": False, "reported_by": "县院影像科"})
-r2 = c.post("/api/exams", json={"patient_id": patients[2]["id"], "from_org_id": village["id"], "center_type": "ecg",
-                                "item_code": "ECG-12", "item_name": "十二导联心电图", "clinical_info": "胸闷心悸"}).json()
-c.post(f"/api/exams/{r2['id']}/claim")
-c.post(f"/api/exams/{r2['id']}/report", json={"finding": "ST段抬高", "conclusion": "急性心肌梗死可能，立即启动胸痛绿色通道", "critical": True, "reported_by": "县院心电中心"})
-chk = c.get(f"/api/exams/recognition-check?patient_id={patients[0]['id']}&item_code=DR-CHEST").json()
-c.post("/api/exams", json={"patient_id": patients[0]["id"], "from_org_id": county["id"], "center_type": "imaging",
-                           "item_code": "DR-CHEST", "item_name": "胸部DR", "accept_recognition_of": chk["request_id"]})
+# 三张申请单各按（患者、申请机构、项目）认，报告跟着申请单走：单子在就不再出报告——再出一份就是再报一次
+# 危急值、再给居民投一条"报告已出具"（P2-1095）
+_imaging = _all_pages("/api/exams?center_type=imaging")
+if not _exists(_imaging, lambda r: r["patient_id"] == patients[0]["id"] and r["from_org_id"] == zhen1["id"]
+               and r["item_code"] == "DR-CHEST"):
+    r1 = c.post("/api/exams", json={"patient_id": patients[0]["id"], "from_org_id": zhen1["id"], "center_type": "imaging",
+                                    "item_code": "DR-CHEST", "item_name": "胸部DR", "clinical_info": "咳嗽发热3天"}).json()
+    c.post(f"/api/exams/{r1['id']}/claim")
+    c.post(f"/api/exams/{r1['id']}/report", json={"finding": "右下肺斑片影", "conclusion": "考虑肺部感染", "critical": False, "reported_by": "县院影像科"})
+if not _exists(_all_pages("/api/exams?center_type=ecg"),
+               lambda r: r["patient_id"] == patients[2]["id"] and r["from_org_id"] == village["id"]
+               and r["item_code"] == "ECG-12"):
+    r2 = c.post("/api/exams", json={"patient_id": patients[2]["id"], "from_org_id": village["id"], "center_type": "ecg",
+                                    "item_code": "ECG-12", "item_name": "十二导联心电图", "clinical_info": "胸闷心悸"}).json()
+    c.post(f"/api/exams/{r2['id']}/claim")
+    c.post(f"/api/exams/{r2['id']}/report", json={"finding": "ST段抬高", "conclusion": "急性心肌梗死可能，立即启动胸痛绿色通道", "critical": True, "reported_by": "县院心电中心"})
+if not _exists(_imaging, lambda r: r["patient_id"] == patients[0]["id"] and r["from_org_id"] == county["id"]
+               and r["item_code"] == "DR-CHEST"):
+    chk = c.get(f"/api/exams/recognition-check?patient_id={patients[0]['id']}&item_code=DR-CHEST").json()
+    # 基层那份报告出了 30 天互认窗口时，预检只回 recognizable=false、不带 request_id：没得互认就不建这张单
+    if chk.get("request_id"):
+        c.post("/api/exams", json={"patient_id": patients[0]["id"], "from_org_id": county["id"], "center_type": "imaging",
+                                   "item_code": "DR-CHEST", "item_name": "胸部DR", "accept_recognition_of": chk["request_id"]})
 
 # 审方与药房
 c.post("/api/prescriptions/rules", json={"drug_code": "METFORMIN", "max_daily_dose": 2000, "dose_unit": "mg"})
@@ -123,37 +167,68 @@ c.post("/api/prescriptions/rules", json={"drug_code": "CEFUROXIME", "max_daily_d
                                          "dose_unit": "mg", "antibiotic": True, "ddd": 3000})
 c.post("/api/prescriptions/rules", json={"drug_code": "AZITHROMYCIN", "max_daily_dose": 500,
                                          "dose_unit": "mg", "antibiotic": True, "ddd": 0})
+# 审方规则撞编码回 409、不覆盖，照发无妨；处方接口不去重，按（患者、开方机构、药品编码）认（P2-1095）
+_rx = _all_pages("/api/prescriptions")
+
+
+def _has_rx(patient, org, drug_code):
+    return _exists(_rx, lambda r: r["patient_id"] == patient["id"] and r["org_id"] == org["id"]
+                   and any(i["drug_code"] == drug_code for i in r["items"]))
+
+
 for _code, _name, _dose in [("CEFUROXIME", "头孢呋辛", 3000), ("AZITHROMYCIN", "阿奇霉素", 500)]:
-    c.post("/api/prescriptions", json={
-        "patient_id": patients[2]["id"], "org_id": county["id"], "diagnosis_name": "社区获得性肺炎",
-        "items": [{"drug_code": _code, "drug_name": _name, "daily_dose": _dose, "days": 7}]})
-c.post("/api/prescriptions", json={"patient_id": patients[1]["id"], "org_id": zhen1["id"], "diagnosis_name": "2型糖尿病",
-                                   "items": [{"drug_code": "METFORMIN", "drug_name": "二甲双胍", "daily_dose": 1500, "days": 30}]})
-c.post("/api/prescriptions", json={"patient_id": patients[1]["id"], "org_id": village["id"], "diagnosis_name": "2型糖尿病",
-                                   "items": [{"drug_code": "METFORMIN", "drug_name": "二甲双胍", "daily_dose": 2500, "days": 30}]})
-c.post("/api/pharmacy/stocks", json={"org_id": county["id"], "drug_code": "METFORMIN", "drug_name": "二甲双胍", "quantity": 500, "threshold": 100})
-c.post("/api/pharmacy/stocks", json={"org_id": zhen1["id"], "drug_code": "METFORMIN", "drug_name": "二甲双胍", "quantity": 30, "threshold": 50})
-c.post("/api/pharmacy/transfers", json={"drug_code": "METFORMIN", "from_org_id": county["id"], "to_org_id": zhen1["id"], "quantity": 100})
+    if not _has_rx(patients[2], county, _code):
+        c.post("/api/prescriptions", json={
+            "patient_id": patients[2]["id"], "org_id": county["id"], "diagnosis_name": "社区获得性肺炎",
+            "items": [{"drug_code": _code, "drug_name": _name, "daily_dose": _dose, "days": 7}]})
+if not _has_rx(patients[1], zhen1, "METFORMIN"):
+    c.post("/api/prescriptions", json={"patient_id": patients[1]["id"], "org_id": zhen1["id"], "diagnosis_name": "2型糖尿病",
+                                       "items": [{"drug_code": "METFORMIN", "drug_name": "二甲双胍", "daily_dose": 1500, "days": 30}]})
+if not _has_rx(patients[1], village, "METFORMIN"):
+    c.post("/api/prescriptions", json={"patient_id": patients[1]["id"], "org_id": village["id"], "diagnosis_name": "2型糖尿病",
+                                       "items": [{"drug_code": "METFORMIN", "drug_name": "二甲双胍", "daily_dose": 2500, "days": 30}]})
+# 入库是累加语义（还照请求改阈值）：重跑一次两家的二甲双胍各翻一倍。机构已有这味药的库存就不再入库（P2-1095）。
+# 调拨没有清单可查，跟调入方的首次入库算一段——两步紧挨着，镇卫生院已有库存即视为调过了
+if not _exists(c.get(f"/api/pharmacy/stocks?org_id={county['id']}").json(), lambda s: s["drug_code"] == "METFORMIN"):
+    c.post("/api/pharmacy/stocks", json={"org_id": county["id"], "drug_code": "METFORMIN", "drug_name": "二甲双胍", "quantity": 500, "threshold": 100})
+if not _exists(c.get(f"/api/pharmacy/stocks?org_id={zhen1['id']}").json(), lambda s: s["drug_code"] == "METFORMIN"):
+    c.post("/api/pharmacy/stocks", json={"org_id": zhen1["id"], "drug_code": "METFORMIN", "drug_name": "二甲双胍", "quantity": 30, "threshold": 50})
+    c.post("/api/pharmacy/transfers", json={"drug_code": "METFORMIN", "from_org_id": county["id"], "to_org_id": zhen1["id"], "quantity": 100})
 
 # 慢病、转诊、传染病
+# 慢病建档本身幂等（同一患者同一病种返回既有档案）；随访不是——每交一次多一条，还改写分级与下次随访日，
+# 档案已有随访就不再补（P2-1095）
 ch1 = c.post("/api/chronic", json={"patient_id": patients[0]["id"], "disease": "hypertension", "managed_by_org_id": zhen1["id"]}).json()
-c.post(f"/api/chronic/{ch1['id']}/followups", json={"sbp": 165, "dbp": 102, "next_due": "2026-07-01"})
+if not c.get(f"/api/chronic/{ch1['id']}/followups").json():
+    c.post(f"/api/chronic/{ch1['id']}/followups", json={"sbp": 165, "dbp": 102, "next_due": "2026-07-01"})
 ch2 = c.post("/api/chronic", json={"patient_id": patients[1]["id"], "disease": "diabetes", "managed_by_org_id": zhen1["id"]}).json()
-c.post(f"/api/chronic/{ch2['id']}/followups", json={"glucose": 7.8, "next_due": "2026-09-15"})
-ref = c.post("/api/referrals", json={"patient_id": patients[0]["id"], "from_org_id": zhen1["id"], "to_org_id": county["id"],
-                                     "direction": "up", "reason": "血压3级，建议上级调整方案"}).json()
-c.patch(f"/api/referrals/{ref['id']}/status", json={"status": "accepted"})
-c.patch(f"/api/referrals/{ref['id']}/status", json={"status": "completed"})
+if not c.get(f"/api/chronic/{ch2['id']}/followups").json():
+    c.post(f"/api/chronic/{ch2['id']}/followups", json={"glucose": 7.8, "next_due": "2026-09-15"})
+# 上转按（患者、转出、转入、方向）认——后面县外就诊那段另有一张刘洋的上转，不能混成一张
+if not _exists(c.get("/api/referrals").json(),
+               lambda r: r["patient_id"] == patients[0]["id"] and r["from_org_id"] == zhen1["id"]
+               and r["to_org_id"] == county["id"] and r["direction"] == "up"):
+    ref = c.post("/api/referrals", json={"patient_id": patients[0]["id"], "from_org_id": zhen1["id"], "to_org_id": county["id"],
+                                         "direction": "up", "reason": "血压3级，建议上级调整方案"}).json()
+    c.patch(f"/api/referrals/{ref['id']}/status", json={"status": "accepted"})
+    c.patch(f"/api/referrals/{ref['id']}/status", json={"status": "completed"})
+# 流感报卡按（报告机构、发病日期）认：城东镇的两张发病日期不同
+_flu = c.get("/api/infectious/cases?disease_code=J11").json()
 for i, org in enumerate([zhen1, zhen1, zhen2, village, county]):
+    if _exists(_flu, lambda r, o=org, d=f"2026-08-0{i + 4}": r["org_id"] == o["id"] and r["onset_date"] == d):
+        continue
     c.post("/api/infectious/cases", json={"org_id": org["id"], "disease_code": "J11", "disease_name": "流行性感冒",
                                           "onset_date": f"2026-08-0{i + 4}"})
 
-# 远程会诊
-cons = c.post("/api/consultations", json={"patient_id": patients[2]["id"], "from_org_id": village["id"],
-                                          "to_org_id": county["id"], "question": "心电图ST段抬高，请求心内科急会诊"}).json()
-c.post(f"/api/consultations/{cons['id']}/accept", json={"expert_name": "心内科张主任"})
-c.post(f"/api/consultations/{cons['id']}/complete", json={"opinion": "确认急性心梗，立即转入导管室行PCI"})
-c.post(f"/api/consultations/{cons['id']}/rate", json={"rating": 5})
+# 远程会诊（按患者与申请、受邀两方认）
+if not _exists(c.get("/api/consultations").json(),
+               lambda x: x["patient_id"] == patients[2]["id"] and x["from_org_id"] == village["id"]
+               and x["to_org_id"] == county["id"]):
+    cons = c.post("/api/consultations", json={"patient_id": patients[2]["id"], "from_org_id": village["id"],
+                                              "to_org_id": county["id"], "question": "心电图ST段抬高，请求心内科急会诊"}).json()
+    c.post(f"/api/consultations/{cons['id']}/accept", json={"expert_name": "心内科张主任"})
+    c.post(f"/api/consultations/{cons['id']}/complete", json={"opinion": "确认急性心梗，立即转入导管室行PCI"})
+    c.post(f"/api/consultations/{cons['id']}/rate", json={"rating": 5})
 
 # 家医签约与履约（幂等：已有有效签约时跳过）
 ct_resp = c.post("/api/contracts", json={"patient_id": patients[0]["id"], "org_id": zhen1["id"],
@@ -163,32 +238,33 @@ if ct_resp.status_code == 201:
     c.post(f"/api/contracts/{ct['id']}/services", json={"service_type": "visit", "note": "上门测血压"})
     c.post(f"/api/contracts/{ct['id']}/services", json={"service_type": "followup", "note": "季度随访"})
 
-# 预约诊疗：号源放在一周后——日期已过的号源不再约得上（P2-64），写死的演示日期一过，这条预约就静默约空了
-from datetime import date, timedelta
+# 预约诊疗：号源放在一周后——日期已过的号源不再约得上（P2-64），写死的演示日期一过，这条预约就静默约空了。
+# 张伟已有预约就整段跳过（P2-1095）：同一天重跑，号源撞唯一约束回 409，原先照样从响应体取 id；隔天重跑则
+# 又多一个号源、一条预约。号源回 409 时按日期查回已有的那个再约，不拿错误响应体当号源
+if not c.get(f"/api/appointments?patient_id={patients[0]['id']}").json():
+    _slot_body = {"org_id": county["id"], "resource_type": "exam", "resource_name": "CT室上午",
+                  "slot_date": (date.today() + timedelta(days=7)).isoformat(),
+                  "slot_time": "09:00-10:00", "capacity": 5}
+    _slot_resp = c.post("/api/appointments/slots", json=_slot_body)
+    slot = _slot_resp.json() if _slot_resp.status_code == 201 else _exists(
+        c.get(f"/api/appointments/slots?org_id={county['id']}&slot_date={_slot_body['slot_date']}").json(),
+        lambda s: s["employee_id"] is None and all(s[k] == _slot_body[k] for k in ("resource_type", "resource_name", "slot_time")))
+    if slot:
+        c.post("/api/appointments", json={"slot_id": slot["id"], "patient_id": patients[0]["id"]})
 
-slot = c.post("/api/appointments/slots", json={"org_id": county["id"], "resource_type": "exam",
-                                               "resource_name": "CT室上午",
-                                               "slot_date": (date.today() + timedelta(days=7)).isoformat(),
-                                               "slot_time": "09:00-10:00", "capacity": 5}).json()
-c.post("/api/appointments", json={"slot_id": slot["id"], "patient_id": patients[0]["id"]})
-
-# 消毒供应与医废（消毒批次幂等：同批号已存在时跳过）
+# 消毒供应与医废（消毒批次幂等：同批号已存在时跳过；医废按机构、类别、收集日期认，P2-1095）
 batch_resp = c.post("/api/cssd/batches", json={"batch_no": "CSSD-20260810-01", "center_org_id": county["id"],
                                                "item_name": "手术器械包", "quantity": 20})
 if batch_resp.status_code == 201:
     batch = batch_resp.json()
     c.post(f"/api/cssd/batches/{batch['id']}/advance")
     c.post(f"/api/cssd/batches/{batch['id']}/advance?dispatched_to_org_id=" + str(zhen1["id"]))
-c.post("/api/medwaste", json={"org_id": zhen1["id"], "waste_type": "infectious", "weight_kg": 3.5, "collected_date": "2026-08-09"})
-c.post("/api/medwaste", json={"org_id": zhen2["id"], "waste_type": "sharp", "weight_kg": 1.2, "collected_date": "2026-08-01"})
+for _org, _type, _kg, _day in [(zhen1, "infectious", 3.5, "2026-08-09"), (zhen2, "sharp", 1.2, "2026-08-01")]:
+    if not _exists(_all_pages(f"/api/medwaste?org_id={_org['id']}"),
+                   lambda w, t=_type, d=_day: w["waste_type"] == t and w["collected_date"] == d):
+        c.post("/api/medwaste", json={"org_id": _org["id"], "waste_type": _type, "weight_kg": _kg, "collected_date": _day})
 
 # ================= 第四阶段块6：新模块演示数据（幂等：存在即跳过） =================
-from datetime import date, timedelta
-
-
-def _exists(rows, pred):
-    return next((r for r in rows if pred(r)), None)
-
 
 # ---------- 互认目录（2 项） ----------
 _items = c.get("/api/exams/recognition-items").json()
