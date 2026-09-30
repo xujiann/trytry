@@ -689,8 +689,9 @@ def recognition_stats(db: Session = Depends(get_db)):
     return {
         "recognized_total": recognized,
         "reported_total": reported,
-        # 互认率 = 互认单数 / (已报告 + 互认)
-        "recognition_ratio_pct": round(recognized / total * 100, 1) if total else 0.0,
+        # 互认率 = 互认单数 / (已报告 + 互认)。与监测指标 #5、驾驶舱同一个算式与位数（P2-996：原先这里先除后乘、取一位，
+        # 同一个率这页 33.3、监测指标与驾驶舱 33.33；先除还是先乘在 .x5 处结果也会不同）
+        "recognition_ratio_pct": round(recognized * 100.0 / total, 2) if total else 0.0,
         # 每一次互认即节约一次重复检查
         "saved_exams": recognized,
         "by_item": [

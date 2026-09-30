@@ -11,7 +11,7 @@
   item_name+conclusion`。按出键序声明（reason 在 request_id 前，两键从不同
   分支出现互不打架）+ `response_model_exclude_unset=True`，三分支各钉一遍
   ——尤其"键**整个不在**"那一半，只钉出现分支等于没钉。
-- `recognition_ratio_pct` 恒 float：`round(x/total*100, 1)` 与兜底字面量
+- `recognition_ratio_pct` 恒 float：`round(x*100.0/total, 2)`（P2-996 起与监测指标同一算式）与兜底字面量
   `0.0` 都是浮点，零分支在造数前单独钉。本簇无 Money 出参，其余数值全 int。
 - 催办行的 `reported_at` 是 handler 里 `isoformat()` 过的**字符串**（非
   datetime 透传），与 DB 值逐字符回绑；空清单与 today 覆盖两分支都钉。
