@@ -1546,12 +1546,16 @@ async function renderExams() {
         // 照样开单（理由记"未填写"）：想放弃开单的人连点两次取消，反而开出一张重复检查。
         // 表单里互认与否是显式选择，取消就是不开单。
         // 框自己提交（P2-607）：不互认理由写超了、建单被拒时报错写在框里、框不关，选的处理方式与理由都在
+        // 印出原报告的项目名，与本次开单的名称并排（P2-1086）：互认只比编码，名称随手填——开「头颅CT平扫」误填成
+        // DR-CHEST，原先只看得到一句结论，照着点确定就拿胸片报告互认掉了、头颅 CT 不会再做
         const ok = await spdModal("可互认：30 天内已有同项目报告", [
           { name: "decision", label: "处理方式", type: "select", value: "accept", options: [
             { value: "accept", label: "互认该结果，不再重复检查" },
             { value: "decline", label: "不互认，仍开新检查" }] },
           { name: "reason", label: "不互认理由（选「不互认」时填写，监管留痕）", type: "textarea" },
-        ], { intro: `已有报告结论：${check.conclusion || "—"}`, submit: (form) => api("/api/exams", { method: "POST",
+        ], { intro: `已有报告：${check.item_name || "—"}（${itemCode}）\n报告结论：${check.conclusion || "—"}\n`
+            + `本次开单：${body.item_name || "—"}（${itemCode}）——两个项目名对不上时请先核对编码`,
+        submit: (form) => api("/api/exams", { method: "POST",
           body: JSON.stringify({ ...body, ...(form.decision === "accept"
             ? { accept_recognition_of: check.request_id }
             : { recognition_declined_reason: form.reason || "未填写" }) }) }) });

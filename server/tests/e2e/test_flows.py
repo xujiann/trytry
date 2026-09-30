@@ -2395,6 +2395,32 @@ def test_修订危急值报告由框自己提交_理由写超了框不关(page, 
     assert (rev["prev_conclusion"], rev["reason"]) == ("E2E 高钾血症（危急）", "E2E 复核后改结论"), rev
 
 
+def test_互认弹窗印出原报告的项目名_与本次开单并排(page, base_url, seed, admin_call):
+    """P2-1086（第三十一批 C4-3）：互认只比编码、名称随手填——开「头颅CT平扫」误填成胸片的编码，弹窗原先只印一句
+    结论，照着点确定就拿胸片报告互认掉了。修后印出原报告的项目名、本次开单的名称，两个名对不上一眼看得出。"""
+    admin_call("POST", "/api/exams/recognition-items",
+               {"item_code": "E2E-P21086", "item_name": "E2E胸部DR", "center_type": "imaging"})
+    req = admin_call("POST", "/api/exams", {"patient_id": seed["patient"]["id"], "from_org_id": seed["org"]["id"],
+                                            "center_type": "imaging", "item_code": "E2E-P21086", "item_name": "E2E胸部DR"})
+    admin_call("POST", f"/api/exams/{req['id']}/claim")
+    admin_call("POST", f"/api/exams/{req['id']}/report", {
+        "finding": "", "conclusion": "E2E 双肺未见异常", "critical": False, "reported_by": "影像科"})
+
+    _login(page, base_url)
+    _open_page(page, "exams", "共享诊断中心")
+    page.fill("#exam-form input[name=patient_id]", str(seed["patient"]["id"]))
+    page.fill("#exam-form input[name=from_org_id]", str(seed["org"]["id"]))
+    page.select_option("#exam-form select[name=center_type]", "imaging")
+    page.fill("#exam-form input[name=item_code]", "E2E-P21086")
+    page.fill("#exam-form input[name=item_name]", "E2E头颅CT平扫")
+    page.click("#exam-form button")
+    intro = _modal(page).locator(".desc")
+    expect(intro).to_contain_text("已有报告：E2E胸部DR（E2E-P21086）")   # 修前只有「已有报告结论：…」
+    expect(intro).to_contain_text("报告结论：E2E 双肺未见异常")
+    expect(intro).to_contain_text("本次开单：E2E头颅CT平扫（E2E-P21086）")
+    _cancel_modal(page)
+
+
 def test_申请单行上直接打印本单的报告_不用照申请单号去填报告ID(page, base_url, seed, admin_call):
     """P2-678（第十六批 T1-6）：打印 / 修订史按报告号取，申请单清单原先只给申请单号——两套编号各自递增，后开的单先出报告，
     照申请单号填「报告ID」打出来的是另一张单的报告。修后已出报告的申请单行直接给「打印报告」，打的是这一行的报告。"""
