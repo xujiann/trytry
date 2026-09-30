@@ -5178,6 +5178,39 @@ def test_居民端线上自助随访按问卷逐题作答_判出异常(page, bas
     assert messages and "重度" in messages[-1], messages
 
 
+def test_居民端自助随访提交失败_表单留着_原因写在表单里(page, base_url, spd_seed, admin_call, admin_read):
+    """P2-1014：居民端卡片内表单原先一提交就先移除、调用方才发请求——这条随访其间已被医护执行（409），只弹一句，
+    逐题作答全没了。修后表单留到提交成功，失败原因写在表单里、填过的还在。"""
+    person = {"name": "自助失败E2E居民", "id_card": "320981197509092029", "phone": "13788990044"}
+    resident = admin_call("POST", "/api/patients", {**person, "gender": "女", "birth_date": "1975-09-09"})
+    admin_call("POST", "/api/spd/questionnaires", {
+        "code": "E2E_Q1014", "name": "E2E 提交失败问卷",
+        "items": [{"key": "pain", "title": "疼痛评分", "type": "number"}], "abnormal_rules": []})
+    rule = admin_call("POST", "/api/spd/followup-rules", {
+        "code": "E2E_R1014", "name": "E2E 提交失败随访", "points": [0], "questionnaire_code": "E2E_Q1014"})
+    plan = admin_call("POST", "/api/spd/followup-plans", {
+        "patient_id": resident["id"], "rule_id": rule["id"], "base_date": "2001-01-01",
+        "org_id": spd_seed["org"]["id"]})
+    record_id = plan["items"][0]["id"]
+
+    _resident_login(page, base_url, person)
+    messages = []
+    page.on("dialog", lambda d: (messages.append(d.message), d.accept()))
+    page.click('[data-tab="spd"]')
+    page.click('[data-spd="followup"]')
+    page.click(f'[data-spd-self="{record_id}"]')
+    form = page.locator(".m-card .inline-input")
+    form.locator('[data-q="0"]').fill("3")
+    # 居民填着的时候，医护电话随访执行了这一条
+    admin_call("POST", f"/api/spd/followup-records/{record_id}/execute", {"channel": "phone", "result": "电话已随访"})
+    form.locator('button[type="submit"]').click()
+    expect(form.locator("[data-inline-msg]")).not_to_be_empty()   # 修前表单已移除、只弹一句
+    expect(form.locator('[data-q="0"]')).to_have_value("3")      # 填过的还在
+    assert not messages, messages
+    record = admin_read(f"/api/spd/followup-records/{record_id}/context")["record"]
+    assert (record["status"], record["channel"]) == ("done", "phone"), record
+
+
 def test_居民端退回重做的任务_卡片上能重新填报提交(page, base_url, spd_seed, admin_call, admin_read):
     """P1-127：医护审核「退回」的任务回到居民手里重做。修前居民端卡片上状态显示原码 rejected、只看得到审核意见，
     「填报并提交」「上传凭证」两个按钮只给待办 / 办理中 / 超期的任务——退回的任务在手机上重做不了。

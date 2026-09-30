@@ -1368,16 +1368,17 @@ async function renderSpdTasks(box) {
     </div>`).join("") || '<p class="empty">暂无健康任务</p>';
   box.querySelectorAll("[data-spd-task]").forEach((btn) => {
     btn.addEventListener("click", async () => {
+      // 请求放进表单的提交回调（P2-1014）：提交失败时原因写在表单里、填的字还在
       const note = await inlineInput(btn.closest(".m-card"), {
-        placeholder: "填写完成情况（如：已服药、已测量血压）", submitLabel: "提交" });
+        placeholder: "填写完成情况（如：已服药、已测量血压）", submitLabel: "提交",
+        submit: (value) => {
+          const body = { result: { note: value } };
+          if (viewingPatientId !== null) body.patient_id = viewingPatientId;
+          return authApi(`/api/portal/spd/tasks/${btn.dataset.spdTask}/submit`, {
+            method: "POST", body: JSON.stringify(body) });
+        } });
       if (note === null) return;
-      const body = { result: { note } };
-      if (viewingPatientId !== null) body.patient_id = viewingPatientId;
-      try {
-        await authApi(`/api/portal/spd/tasks/${btn.dataset.spdTask}/submit`, {
-          method: "POST", body: JSON.stringify(body) });
-        await loadSpd();
-      } catch (err) { alert(err.message); }
+      try { await loadSpd(); } catch (err) { alert(err.message); }
     });
   });
   // 患者端 #15：为自己的任务上传照片 / 报告等凭证。multipart 不能走 api()（它写死 JSON 头）
@@ -1413,7 +1414,27 @@ async function spdUploadEvidence(taskId, file) {
 
 /** 卡片内的小表单，代替系统弹窗（P2-38）：文本域或下拉 + 确定/取消。
     resolve 文本；取消 resolve(null)。同一张卡片里不重复插。 */
-function inlineInput(card, { placeholder = "", options = null, submitLabel = "确定" } = {}) {
+/* 卡片内表单交值（P2-1014）：带了 submit 回调的，表单留到提交成功才收起——后端报错时原因写在表单里、填过的字还在，
+ * 改了再交（与医生端 cardForm、管理端 P2-607 同一条规矩）。原先一律先 form.remove() 再交值、调用方才发请求，失败只弹
+ * 一句，逐题作答和完成情况全没了。不带回调的照旧：交值即收起。 */
+async function inlineSubmit(form, value, submit, resolve) {
+  if (!submit) { form.remove(); resolve(value); return; }
+  const button = form.querySelector('button[type="submit"]');
+  const msg = form.querySelector("[data-inline-msg]");
+  button.disabled = true;
+  msg.textContent = "";
+  try {
+    await submit(value);
+  } catch (err) {
+    msg.textContent = err.message;
+    button.disabled = false;
+    return;
+  }
+  form.remove();
+  resolve(value);
+}
+
+function inlineInput(card, { placeholder = "", options = null, submitLabel = "确定", submit = null } = {}) {
   return new Promise((resolve) => {
     if (!card || card.querySelector(".inline-input")) { resolve(null); return; }
     const form = document.createElement("form");
@@ -1423,8 +1444,9 @@ function inlineInput(card, { placeholder = "", options = null, submitLabel = "�
       : `<textarea name="v" rows="2" placeholder="${esc(placeholder)}"></textarea>`;
     form.innerHTML = `${control}
       <button type="submit" class="ghost-btn">${esc(submitLabel)}</button>
-      <button type="button" class="ghost-btn" data-cancel>取消</button>`;
-    form.onsubmit = (e) => { e.preventDefault(); const v = form.v.value.trim(); form.remove(); resolve(v); };
+      <button type="button" class="ghost-btn" data-cancel>取消</button>
+      <p class="msg" data-inline-msg></p>`;
+    form.onsubmit = (e) => { e.preventDefault(); inlineSubmit(form, form.v.value.trim(), submit, resolve); };
     form.querySelector("[data-cancel]").onclick = () => { form.remove(); resolve(null); };
     card.appendChild(form);
     form.v.focus();
@@ -1434,7 +1456,7 @@ function inlineInput(card, { placeholder = "", options = null, submitLabel = "�
 /* 线上自助随访逐题作答（P1-122 ②）：题目取这条随访挂的问卷（接口给的 `questions`），答案按题目 key 交，
  * 与医护执行走同一套异常分级。没答的题不交（规则按「没有这个字段」处理）；数值题用文本框，空着不会被读成 0。
  * 控件按题目序号标记，不拿题目 key 拼选择器。 */
-function inlineQuestions(card, questions, submitLabel) {
+function inlineQuestions(card, questions, submitLabel, submit = null) {
   return new Promise((resolve) => {
     if (!card || card.querySelector(".inline-input")) { resolve(null); return; }
     const form = document.createElement("form");
@@ -1453,7 +1475,8 @@ function inlineQuestions(card, questions, submitLabel) {
     form.innerHTML = `${questions.map((q, i) =>
       `<div class="q-item">${esc(q.title)}<br>${control(q, i)}</div>`).join("")}
       <button type="submit" class="ghost-btn">${esc(submitLabel)}</button>
-      <button type="button" class="ghost-btn" data-cancel>取消</button>`;
+      <button type="button" class="ghost-btn" data-cancel>取消</button>
+      <p class="msg" data-inline-msg></p>`;
     form.onsubmit = (e) => {
       e.preventDefault();
       const answers = {};
@@ -1470,8 +1493,7 @@ function inlineQuestions(card, questions, submitLabel) {
         else if (q.type === "number" && !Number.isNaN(Number(raw))) answers[q.key] = Number(raw);
         else answers[q.key] = raw;
       });
-      form.remove();
-      resolve(answers);
+      inlineSubmit(form, answers, submit, resolve);
     };
     form.querySelector("[data-cancel]").onclick = () => { form.remove(); resolve(null); };
     card.appendChild(form);
@@ -1497,25 +1519,24 @@ async function renderSpdFollowups(box) {
     btn.addEventListener("click", async () => {
       const card = btn.closest(".m-card");
       const questions = (rows.find((f) => String(f.id) === btn.dataset.spdSelf) || {}).questions || [];
-      let answers;
-      if (questions.length) {
-        answers = await inlineQuestions(card, questions, "提交自助随访");
-        if (answers === null) return;
-      } else {   // 没挂问卷的随访：仍只问恢复情况
-        const recovery = await inlineInput(card, { options: ["良好", "一般", "较差"], submitLabel: "提交自助随访" });
-        if (recovery === null) return;
-        answers = { recovery };
-      }
-      const body = { answers };
-      if (viewingPatientId !== null) body.patient_id = viewingPatientId;
-      try {
-        const r = await authApi(`/api/portal/spd/followups/${btn.dataset.spdSelf}/self-answer`, {
-          method: "POST", body: JSON.stringify(body) });
-        alert(r.abnormal_level && r.abnormal_level !== "none"
-          ? `已提交。系统判定为${r.abnormal_level_name}异常，${r.action || "医护将尽快联系您"}`
-          : "已提交，感谢配合");
-        await loadSpd();
-      } catch (err) { alert(err.message); }
+      // 请求放进表单的提交回调（P2-1014）：提交失败（如这条随访已被医护执行，409）时原因写在表单里、逐题作答还在
+      let r;
+      const send = (answers) => {   // 交出请求的 promise，失败由表单接住（inlineSubmit）
+        const body = { answers };
+        if (viewingPatientId !== null) body.patient_id = viewingPatientId;
+        return authApi(`/api/portal/spd/followups/${btn.dataset.spdSelf}/self-answer`, {
+          method: "POST", body: JSON.stringify(body) }).then((res) => { r = res; });
+      };
+      const done = questions.length
+        ? await inlineQuestions(card, questions, "提交自助随访", send)
+        // 没挂问卷的随访：仍只问恢复情况
+        : await inlineInput(card, { options: ["良好", "一般", "较差"], submitLabel: "提交自助随访",
+          submit: (recovery) => send({ recovery }) });
+      if (done === null) return;
+      alert(r.abnormal_level && r.abnormal_level !== "none"
+        ? `已提交。系统判定为${r.abnormal_level_name}异常，${r.action || "医护将尽快联系您"}`
+        : "已提交，感谢配合");
+      try { await loadSpd(); } catch (err) { alert(err.message); }
     });
   });
 }
@@ -1533,16 +1554,17 @@ async function renderSpdPlans(box) {
     </div>`).join("") || '<p class="empty">暂无干预方案</p>';
   box.querySelectorAll("[data-spd-read]").forEach((btn) => {
     btn.addEventListener("click", async () => {
+      // 请求放进表单的提交回调（P2-1014）：提交失败时原因写在表单里、写的反馈还在
       const feedback = await inlineInput(btn.closest(".m-card"), {
-        placeholder: "执行情况反馈（可留空）", submitLabel: "标记已读并反馈" });
+        placeholder: "执行情况反馈（可留空）", submitLabel: "标记已读并反馈",
+        submit: (value) => {
+          const body = { feedback: value };
+          if (viewingPatientId !== null) body.patient_id = viewingPatientId;
+          return authApi(`/api/portal/spd/interventions/${btn.dataset.spdRead}/feedback`, {
+            method: "POST", body: JSON.stringify(body) });
+        } });
       if (feedback === null) return;
-      const body = { feedback };
-      if (viewingPatientId !== null) body.patient_id = viewingPatientId;
-      try {
-        await authApi(`/api/portal/spd/interventions/${btn.dataset.spdRead}/feedback`, {
-          method: "POST", body: JSON.stringify(body) });
-        await loadSpd();
-      } catch (err) { alert(err.message); }
+      try { await loadSpd(); } catch (err) { alert(err.message); }
     });
   });
 }
