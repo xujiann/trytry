@@ -20,9 +20,35 @@ KEEP_DAYS="${MEDPLAT_BACKUP_KEEP_DAYS:-30}"
 
 mkdir -p "$BACKUP_DIR"
 OUT="$BACKUP_DIR/medplat_${STAMP}.sql.gz"
+PARTIAL="$OUT.partial"
 
-docker compose exec -T "$DB_SERVICE" pg_dump -U "$DB_USER" "$DB_NAME" | gzip > "$OUT"
+# cron 的工作目录是家目录，docker compose 在那里找不到编排文件（上面的 crontab 示例正是不 cd 的写法）：当前目录没有
+# 编排文件、也没设 COMPOSE_FILE 时，到仓库根去找（本脚本在 <仓库>/scripts/ 下）；当前目录有的，照旧用当前目录的
+COMPOSE_DIR="$PWD"
+if [ -z "${COMPOSE_FILE:-}" ]; then
+  FOUND=""
+  for f in compose.yaml compose.yml docker-compose.yaml docker-compose.yml; do
+    if [ -f "$f" ]; then FOUND=1; fi
+  done
+  if [ -z "$FOUND" ]; then COMPOSE_DIR="$(cd "$(dirname "$0")/.." && pwd)"; fi
+fi
+
+# 先落临时文件、确认导出成功且非空，才压缩、才清理旧备份（P2-1076）。原先 `pg_dump | gzip`：没有 pipefail，管道的退出码
+# 取的是 gzip 的——编排文件找不到、db 容器不在、口令改了，都写出一个 20 字节的空包、打印「备份完成」、exit 0，紧接着按
+# 保留天数把之前的好备份删掉；连续失败一个月，手里一份可用备份都没有
+if ! (cd "$COMPOSE_DIR" && docker compose exec -T "$DB_SERVICE" pg_dump -U "$DB_USER" "$DB_NAME") > "$PARTIAL"; then
+  rm -f "$PARTIAL"
+  echo "备份失败：pg_dump 没有跑成（编排目录 $COMPOSE_DIR），旧备份一个没删" >&2
+  exit 1
+fi
+if [ ! -s "$PARTIAL" ]; then
+  rm -f "$PARTIAL"
+  echo "备份失败：pg_dump 导出为空（编排目录 $COMPOSE_DIR），旧备份一个没删" >&2
+  exit 1
+fi
+gzip -c "$PARTIAL" > "$OUT"
+rm -f "$PARTIAL"
 echo "备份完成：$OUT"
 
-# 清理超过保留天数的旧备份
+# 清理超过保留天数的旧备份（只在这次备份成功之后）
 find "$BACKUP_DIR" -name 'medplat_*.sql.gz' -mtime +"$KEEP_DAYS" -delete
