@@ -1585,13 +1585,15 @@ async function renderExams() {
       if (amend) {
         // 框自己提交（P2-607）：修订理由写超了、结论只填了空格时报错写在框里、框不关，改好的结论与理由不用重填
         const r = await spdModal("修订报告（改前值会连同理由留痕）", [
-          { name: "conclusion", label: "新结论", value: e.target.dataset.conclusion, required: true },
+          // 结论按载入时的值预填，只在改了才送（P2-962）：原先必填、恒送，只补所见也把别人刚修订的结论改回载入时的旧文本
+          { name: "conclusion", label: "新结论（不改就原样留着）", value: e.target.dataset.conclusion },
           { name: "finding", label: "新所见（留空不改）" },
           { name: "critical", label: "危急值标记", type: "select", value: "keep",
             options: [{ value: "keep", label: "不改" }, { value: "1", label: "是危急值" }, { value: "0", label: "解除危急" }] },
           { name: "reason", label: "修订理由", type: "textarea" },
         ], { submit: (form) => {
-          const body = { conclusion: form.conclusion, reason: form.reason || "" };
+          const body = { reason: form.reason || "" };
+          if (form.conclusion && form.conclusion !== e.target.dataset.conclusion) body.conclusion = form.conclusion;
           // finding/critical 是 `| None` 的可选项：不改就别送，送 null 会把所见清空
           if (form.finding) body.finding = form.finding;
           if (form.critical !== "keep") body.critical = form.critical === "1";

@@ -810,7 +810,9 @@ def list_templates(center_type: str | None = None, db: Session = Depends(get_db)
 
 
 class ReportAmend(BaseModel):
-    conclusion: str = Field(min_length=1, max_length=1024, pattern=NON_BLANK)
+    # 结论不送就不改（P2-962）：原先必填，修订框按页面载入时的结论预填、恒送——乙只想补一段所见，就把甲刚修订的结论改回
+    # 载入时的旧文本；仍是危急值的，闭环状态随之复位、按旧结论重发通知
+    conclusion: str | None = Field(default=None, min_length=1, max_length=1024, pattern=NON_BLANK)
     finding: str | None = Field(default=None, max_length=2048)
     # 允许修订危急值标记：置 True/False 均联动闭环状态
     critical: bool | None = None
@@ -838,6 +840,8 @@ def amend_report(
     report = db.get(ExamReport, report_id)
     if report is None:
         raise HTTPException(status_code=404, detail="报告不存在")
+    if body.conclusion is None and body.finding is None and body.critical is None:
+        raise HTTPException(status_code=422, detail="修订须至少改结论、所见或危急值标记中的一项")
     # 归属校验（上线前审计）：`ExamReport` 自己不带 org_id/patient_id，归属隔一跳
     # 在 `exam_requests.patient_id` 上，所以走患者可见性而不是机构可写。
     # 原先只有 `require_roles("doctor")`——任一成员单位的医师遍历 report_id
@@ -863,7 +867,8 @@ def amend_report(
             reason=body.reason,
         )
     )
-    report.conclusion = body.conclusion
+    if body.conclusion is not None:
+        report.conclusion = body.conclusion
     if body.finding is not None:
         report.finding = body.finding
     if body.critical is not None:
