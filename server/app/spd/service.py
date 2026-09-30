@@ -1441,6 +1441,10 @@ def enrollment_feed(db: Session, patient_id: int) -> list[dict]:
             level_label=RISK_LEVEL_NAMES.get(r.risk_level, r.risk_level),
             stage=r.stage,
             org=orgs.get(r.org_id, ""),
+            # 下次随访取档案这一列（P2-973）：原先不传、恒为空，居民端「疾病管理档案」的慢专病一栏永远「待安排」，同一居民的
+            # 慢专病首页（/spd/home）却显示着日期。只给在管的——与首页只列在管同一口径；结案、迁出、死亡时这一列不清，原样给会
+            # 露出过期的日期
+            next_followup_due=(r.next_followup_at or "") if r.status == "active" else "",
             created_at=r.created_at.isoformat(),
         )
         for r in rows
