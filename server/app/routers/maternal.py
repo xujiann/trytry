@@ -9,7 +9,7 @@ from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 from .. import clock
 from ..datetypes import DateStr, OptionalDateStr, before_birth_problem, legacy_date
-from ..concurrency import append_text, appended_text, insert_if_absent, insert_or_conflict
+from ..concurrency import append_text, appended_text, insert_if_absent, insert_or_conflict, serialized_on
 from ..numtypes import INT4_MAX
 from ..texttypes import NON_BLANK
 from ..visibility import assert_org_writable, scope_patient_list
@@ -178,36 +178,40 @@ def add_visit(record_id: int, body: VisitCreate, db: Session = Depends(get_db)):
     record = db.get(MaternalRecord, record_id)
     if record is None:
         raise HTTPException(status_code=404, detail="孕产妇档案不存在")
-    # 已结案的不再收访视（P2-124），与分娩登记同一道口子：一孕一册之后同一位妇女名下有上一胎结案的旧档案，
-    # 按旧档案号记的产检会挂到上一胎名下（页面上结案的档案本就没有访视按钮）
-    if record.status == "closed":
-        raise HTTPException(status_code=409, detail="档案已结案，不可记录访视")
-    # 访视日期与这一胎登记了的分娩日期对得上（P2-1020，与 P2-233「晚于这一胎分娩的不可能是这一胎的产前筛查」同一条规矩）：
-    # 原先不看——分娩 09-20 之后记一条 08-20 的「产后访视」照收、随即就能结案；分娩之后记「产前检查 40 周 150/95」照收，
-    # 已分娩的档案被标成高危「妊娠期高血压可能」。没填访视日期的按今天算：补录孕期的检查要填当时的日期
-    delivered = _delivered_on(db, record_id)
-    if delivered is not None:
-        day = body.visit_date or clock.today().isoformat()
-        if body.visit_type == "postpartum" and day < delivered:
-            raise HTTPException(status_code=409, detail=f"产后访视日期 {day} 早于这一胎的分娩日期 {delivered}")
-        if body.visit_type == "prenatal" and day > delivered:
-            raise HTTPException(status_code=409, detail=f"产前检查日期 {day} 晚于这一胎的分娩日期 {delivered}，"
-                                                        "不是这一胎的产前检查：补录孕期的检查请填当时的检查日期")
-    if body.visit_type == "postpartum" and record.status == "registered":
-        record.status = "delivered"
-    visit = MaternalVisit(record_id=record_id, **body.model_dump())
-    # 产检时收缩压≥140 自动标记高危
-    if body.bp:
-        try:
-            sbp = float(body.bp.split("/")[0])
-            if sbp >= 140:
-                # 首次标高危 + 追加风险因素压在一条条件 UPDATE 里：判定不留在 Python 侧，
-                # 与同时落下的产前筛查风险因素两笔都留下，而不是后写的盖掉先写的。
-                _mark_high_risk(db, MaternalRecord, record_id, "risk_factors", "妊娠期高血压可能")
-        except ValueError:
-            pass
-    db.add(visit)
-    db.commit()
+    # 判定与写入圈在以这份档案为界的临界区里（P2-1020 跟进）：下面按分娩日判访视、`add_delivery` 按已记访视判分娩日，
+    # 读的都是别的行——不圈起来，同时落下的一条访视与一次分娩登记在 PG 上各自读到「没对方」、都放行，倒挂照样进库
+    with serialized_on(db, MaternalRecord, record_id):
+        db.refresh(record)
+        # 已结案的不再收访视（P2-124），与分娩登记同一道口子：一孕一册之后同一位妇女名下有上一胎结案的旧档案，
+        # 按旧档案号记的产检会挂到上一胎名下（页面上结案的档案本就没有访视按钮）
+        if record.status == "closed":
+            raise HTTPException(status_code=409, detail="档案已结案，不可记录访视")
+        # 访视日期与这一胎登记了的分娩日期对得上（P2-1020，与 P2-233「晚于这一胎分娩的不可能是这一胎的产前筛查」同一条规矩）：
+        # 原先不看——分娩 09-20 之后记一条 08-20 的「产后访视」照收、随即就能结案；分娩之后记「产前检查 40 周 150/95」照收，
+        # 已分娩的档案被标成高危「妊娠期高血压可能」。没填访视日期的按今天算：补录孕期的检查要填当时的日期
+        delivered = _delivered_on(db, record_id)
+        if delivered is not None:
+            day = body.visit_date or clock.today().isoformat()
+            if body.visit_type == "postpartum" and day < delivered:
+                raise HTTPException(status_code=409, detail=f"产后访视日期 {day} 早于这一胎的分娩日期 {delivered}")
+            if body.visit_type == "prenatal" and day > delivered:
+                raise HTTPException(status_code=409, detail=f"产前检查日期 {day} 晚于这一胎的分娩日期 {delivered}，"
+                                                            "不是这一胎的产前检查：补录孕期的检查请填当时的检查日期")
+        if body.visit_type == "postpartum" and record.status == "registered":
+            record.status = "delivered"
+        visit = MaternalVisit(record_id=record_id, **body.model_dump())
+        # 产检时收缩压≥140 自动标记高危
+        if body.bp:
+            try:
+                sbp = float(body.bp.split("/")[0])
+                if sbp >= 140:
+                    # 首次标高危 + 追加风险因素压在一条条件 UPDATE 里：判定不留在 Python 侧，
+                    # 与同时落下的产前筛查风险因素两笔都留下，而不是后写的盖掉先写的。
+                    _mark_high_risk(db, MaternalRecord, record_id, "risk_factors", "妊娠期高血压可能")
+            except ValueError:
+                pass
+        db.add(visit)
+        db.commit()
     return {"id": visit.id, "record_id": record_id, "high_risk": record.high_risk, "status": record.status}
 
 
@@ -357,29 +361,32 @@ def add_delivery(record_id: int, body: DeliveryCreate, db: Session = Depends(get
         raise HTTPException(status_code=404, detail="孕产妇档案不存在")
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="机构不存在")
-    if record.status == "closed":
-        raise HTTPException(status_code=409, detail="档案已结案，不可登记分娩")
-    if db.query(DeliveryRecord).filter(DeliveryRecord.record_id == record_id).first():
-        raise HTTPException(status_code=409, detail="该档案已有分娩记录")
-    # 分娩日期与已记的访视对得上（P2-1020）：只比填了访视日期的——没填的按录入那天算，事后集中补录的产检会把分娩挡住
-    for visit_type, visit_date in (
-        db.query(MaternalVisit.visit_type, MaternalVisit.visit_date)
-        .filter(MaternalVisit.record_id == record_id, MaternalVisit.visit_date != "")
-        .all()
-    ):
-        day = legacy_date(visit_date)
-        if day and visit_type == "postpartum" and day < body.delivery_date:
-            raise HTTPException(status_code=409, detail=f"分娩日期 {body.delivery_date} 晚于已记的产后访视 {day}")
-        if day and visit_type == "prenatal" and day > body.delivery_date:
-            raise HTTPException(status_code=409, detail=f"分娩日期 {body.delivery_date} 早于已记的产前检查 {day}")
-    delivery = DeliveryRecord(record_id=record_id, **body.model_dump())
-    record.status = "delivered"
-    # 上面那句"已有分娩记录"预检是 check-then-act：两路并发都查不到就都会插，
-    # 静默写出两条，而查询侧 `.first()` 无序，此后取到哪条全看运气。真正的闸门是
-    # `uq_delivery_record`（一档一分娩，多胎由 newborn_count 表达），抢输的一路在这里
-    # 撞约束 → 回滚 → 拿到与顺序请求逐字相同的 409。回滚同时也退掉上一句的
-    # status='delivered'（同一 session、同一事务），无需额外补偿。
-    insert_or_conflict(db, delivery, "该档案已有分娩记录")
+    # 与 `add_visit` 同一个临界区（P2-1020 跟进）：分娩日按已记的访视判、访视按分娩日判，两边读的都是别的行
+    with serialized_on(db, MaternalRecord, record_id):
+        db.refresh(record)
+        if record.status == "closed":
+            raise HTTPException(status_code=409, detail="档案已结案，不可登记分娩")
+        if db.query(DeliveryRecord).filter(DeliveryRecord.record_id == record_id).first():
+            raise HTTPException(status_code=409, detail="该档案已有分娩记录")
+        # 分娩日期与已记的访视对得上（P2-1020）：只比填了访视日期的——没填的按录入那天算，事后集中补录的产检会把分娩挡住
+        for visit_type, visit_date in (
+            db.query(MaternalVisit.visit_type, MaternalVisit.visit_date)
+            .filter(MaternalVisit.record_id == record_id, MaternalVisit.visit_date != "")
+            .all()
+        ):
+            day = legacy_date(visit_date)
+            if day and visit_type == "postpartum" and day < body.delivery_date:
+                raise HTTPException(status_code=409, detail=f"分娩日期 {body.delivery_date} 晚于已记的产后访视 {day}")
+            if day and visit_type == "prenatal" and day > body.delivery_date:
+                raise HTTPException(status_code=409, detail=f"分娩日期 {body.delivery_date} 早于已记的产前检查 {day}")
+        delivery = DeliveryRecord(record_id=record_id, **body.model_dump())
+        record.status = "delivered"
+        # 上面那句"已有分娩记录"预检是 check-then-act：两路并发都查不到就都会插，
+        # 静默写出两条，而查询侧 `.first()` 无序，此后取到哪条全看运气。真正的闸门是
+        # `uq_delivery_record`（一档一分娩，多胎由 newborn_count 表达），抢输的一路在这里
+        # 撞约束 → 回滚 → 拿到与顺序请求逐字相同的 409。回滚同时也退掉上一句的
+        # status='delivered'（同一 session、同一事务），无需额外补偿。
+        insert_or_conflict(db, delivery, "该档案已有分娩记录")
     return {
         "id": delivery.id,
         "record_id": record_id,
