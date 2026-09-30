@@ -55,6 +55,25 @@ def test_填了值的照收(cond):
     assert validate_conditions([cond])[0]["value"] == cond.get("value")
 
 
+@pytest.mark.parametrize("cond", [
+    {"field": "diagnosis_name", "op": "contains", "value": "\u200b"},
+    {"field": "gender", "op": "==", "value": "\ufeff"},
+    {"field": "diagnosis_name", "op": "!=", "value": " \u2060\x01 "},
+    {"field": "diagnosis", "op": "in", "value": ["I10", "\u200b"]},
+], ids=["包含零宽空格", "等于BOM", "不等于空白夹词连接符与控制字符", "属于含零宽元素"])
+def test_只有看不见的字符的比较值_与留空同样报错(cond):
+    """P2-1148 跟进：只有零宽空格、BOM、控制字符的比较值原先按 `strip()` 判不算空、照存——「包含」两侧过 `text_key`
+    后它归一成空、按原样比永不命中（P2-1147），「等于」同样永不命中，与留空是同一个坏配置。判空改用必填文本同一个判据
+    `texttypes.is_blank_text`；夹着零宽字符、但有看得见的字的照收（见下一条）。"""
+    with pytest.raises(RuleError):
+        validate_conditions([cond])   # 修前照收
+
+
+def test_夹着零宽字符但有字的比较值_照收():
+    (cond,) = validate_conditions([{"field": "diagnosis_name", "op": "contains", "value": "高\u200b血压"}])
+    assert cond["value"] == "高\u200b血压"   # 存进去的字节不变，求值时两侧过 text_key
+
+
 def test_病种建档与改规则_空条件422_不升版(client, admin):
     """修前：建病种 201；改高血压排除规则 PATCH 200、v1 → v2，成人 I10 登记筛查从 suspect 变 excluded。"""
     created = client.post(f"{B}/programs", headers=admin, json={

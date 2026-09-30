@@ -35,7 +35,7 @@ import math
 from typing import Any
 
 from ..numtypes import non_finite_path
-from ..texttypes import text_key
+from ..texttypes import is_blank_text, text_key
 
 #: 规则可引用的字段及其中文名，供管理端下拉与文档生成使用。
 FIELD_SOURCES: dict[str, str] = {
@@ -154,8 +154,12 @@ def _check_comparison_value(field: str, op: str, value) -> None:
 
 
 def _blank(value) -> bool:
-    """比较值留空：没写（None）或去掉两端空白后是空串（P2-1117）。等值按去掉首尾空白的文本比（`_same`），空白串即空串。"""
-    return value is None or (isinstance(value, str) and not value.strip())
+    """比较值留空：没写（None）或一个看得见的字符都没有（P2-1117）。等值按去掉首尾空白的文本比（`_same`），空白串即空串。
+
+    「看得见」与必填文本同一个判据（`texttypes.is_blank_text`，P2-1148 跟进）：只有零宽空格、BOM、控制字符的比较值原先
+    按 `strip()` 判不算空、照存——「包含」两侧过 `text_key` 后它归一成空、按原样比永不命中（P2-1147），「等于」同样永不
+    命中，与留空是同一个坏配置，也不报错。"""
+    return value is None or (isinstance(value, str) and is_blank_text(value))
 
 
 def as_validated(conditions: list[dict]) -> list[dict]:
