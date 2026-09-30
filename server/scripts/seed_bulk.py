@@ -214,15 +214,24 @@ class BulkSeeder:
         done = self.db.query(Admission).filter(Admission.doctor_name == DOCTOR_MARK).count()
         started = time.monotonic()
         pts, orgs = self._patient_ids, self.orgs
+        # 同一患者同时只能有一条在院（uq_admission_patient_admitted，P2-1090）：住院数多于患者数时患者按模复用，原先
+        # 每逢 i % 5 == 0 就灌一条「在院」——同一个人两条在院撞唯一索引、整批回滚，「幂等可续跑」重跑停在原地。
+        # 已经在院的（库里的、本轮灌过的），这一次按出院灌
+        in_hospital = {pid for (pid,) in self.db.query(Admission.patient_id).filter(Admission.status == "admitted")}
         while done < total:
             n = min(self.batch, total - done)
             rows = []
             for i in range(done, done + n):
                 site = orgs[i % len(orgs)]
+                patient_id = pts[i % len(pts)]
                 admitted = _ts(self.base_ts, i)
-                discharged = admitted + timedelta(days=1 + i % 15) if i % 5 else None  # 20% 在院
+                discharged = admitted + timedelta(days=1 + i % 15) if i % 5 else None  # 约 20% 在院
+                if discharged is None and patient_id in in_hospital:
+                    discharged = admitted + timedelta(days=1 + i % 15)
+                if discharged is None:
+                    in_hospital.add(patient_id)
                 rows.append({
-                    "patient_id": pts[i % len(pts)],
+                    "patient_id": patient_id,
                     "org_id": site["org_id"],
                     "ward_id": site["ward_id"],
                     "bed_id": site["bed_id"],
