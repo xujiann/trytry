@@ -315,8 +315,11 @@ def _call_back(client, admin, patient_id, record_id, **result):
     return resp.json()
 
 
-def test_呼叫结果两次回写_结果串与证据都追加_截断500(client, admin, followup_record):
-    """`record_call_result`：结果串以空格相接、`strip()[:500]` 截断；证据列表逐条追加。"""
+def test_呼叫结果两次回写_结果串与证据都追加_超出列宽留最新的(client, admin, followup_record):
+    """`record_call_result`：结果串以空格相接、超出列宽（512）时留最新的（P2-1045：原先 `strip()[:500]` 截掉的是这次写的）；
+    证据列表逐条追加。"""
+    from app.spd.routers.followup import FOLLOWUP_RESULT_MAX
+
     pid, rid = followup_record["patient"]["id"], followup_record["record"]["id"]
 
     _call_back(client, admin, pid, rid, record_url="http://cdn/rec-1.mp3", result="已接通")
@@ -330,7 +333,8 @@ def test_呼叫结果两次回写_结果串与证据都追加_截断500(client, 
 
     _call_back(client, admin, pid, rid, result="长" * 510)  # 不带录音：证据不追加
     third = _followup_record(client, admin, rid, pid)
-    assert third["result"] == ("已接通 再次接通 " + "长" * 510)[:500] and len(third["result"]) == 500
+    assert third["result"] == ("已接通 再次接通 " + "长" * 510)[-FOLLOWUP_RESULT_MAX:]
+    assert len(third["result"]) == FOLLOWUP_RESULT_MAX and third["result"].endswith("长" * 510)   # 这次写的整段留下
     assert third["evidence"] == ["http://cdn/rec-1.mp3", "http://cdn/rec-2.mp3"]
 
 
