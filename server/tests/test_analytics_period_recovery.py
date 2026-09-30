@@ -32,3 +32,13 @@ def test_切换时先让后端判_合法才记住():
     store = handler.index('localStorage.setItem("medplat_ana_period", value)')
     assert check < store and "return; }" in handler[check:store]   # 被拒就不存
     assert 'setMsg("#ana-period-msg"' in handler and 'id="ana-period-msg"' in body
+
+
+def test_就医流向按所选期间取_标题写明期间():
+    """P2-1082：就医流向原先不带 start / end，卡片是建库以来的累计，标题又不写期间；接口的 end 不含当天，传次月 1 日。"""
+    body = _render_analytics()
+    load = body[body.index("const load = (p) =>"):body.index("let period =")]
+    assert "api(`/api/analytics/patient-flow?${flowRange(p)}`)" in load   # 修前 api("/api/analytics/patient-flow")
+    assert "panel(`就医流向（${period}）`" in body
+    helper = body[body.index("const flowRange = (p) =>"):body.index("const load = (p) =>")]
+    assert "m === 12 ? `${y + 1}-01`" in helper and "start=" in helper and "end=" in helper

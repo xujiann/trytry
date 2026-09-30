@@ -744,8 +744,15 @@ async function renderMaterials() {
 async function renderAnalytics() {
   $("#page-desc").textContent = "县域就诊率与就医流向 / 运行效率 / 自定义绩效公式与综合报告";
   const thisMonth = localToday().slice(0, 7);
+  // 就医流向按所选期间取（P2-1082）：原先不带 start / end，卡片是建库以来的累计，标题又不写期间——选 2026-09 看到的
+  // 县域就诊率混着去年的县外就诊。接口的 end 不含当天，传次月 1 日
+  const flowRange = (p) => {
+    const [y, m] = p.split("-").map(Number);
+    const next = m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, "0")}`;
+    return `start=${encodeURIComponent(`${p}-01`)}&end=${encodeURIComponent(`${next}-01`)}`;
+  };
   const load = (p) => Promise.all([
-    api("/api/analytics/patient-flow"), api(`/api/analytics/efficiency?period=${encodeURIComponent(p)}`),
+    api(`/api/analytics/patient-flow?${flowRange(p)}`), api(`/api/analytics/efficiency?period=${encodeURIComponent(p)}`),
     api("/api/analytics/formulas"), api("/api/analytics/formula-variables")]);
   let period = localStorage.getItem("medplat_ana_period") || thisMonth;
   let loaded;
@@ -766,7 +773,7 @@ async function renderAnalytics() {
     ${panel("期间", `
       <form class="inline" id="ana-period"><input name="period" value="${esc(period)}" placeholder="YYYY-MM"><button>切换</button></form>
       <p class="msg" id="ana-period-msg"></p>`)}
-    ${panel("就医流向", `
+    ${panel(`就医流向（${period}）`, `
       <div class="cards">
         <div class="card"><span class="k">县域就诊率</span><b>${flow.county_visit_rate_pct}%</b></div>
         <div class="card"><span class="k">外转率</span><b>${flow.outbound_rate_pct}%</b></div>
