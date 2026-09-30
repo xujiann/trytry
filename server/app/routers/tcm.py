@@ -160,7 +160,10 @@ def identify_constitution(body: ConstitutionBody):
     valid = {k: v for k, v in scores.items() if k in CONSTITUTIONS and k != "balanced"}
     if not valid:
         raise HTTPException(status_code=422, detail="缺少有效的体质维度得分")
-    top_key, top_score = max(valid.items(), key=lambda kv: kv[1])
+    # 最高分并列时与兼夹体质同一个次序（分降序、再按编码，P2-966）：原先 `max` 取请求里先出现的那个键——气虚 50、阳虚 50，
+    # 先写气虚判气虚质、方剂补中益气汤，只换一下键序就判阳虚质、金匮肾气丸；网页按表单的固定次序拼 scores，等于排在前面的
+    # 体质胜出。并列的另一种照旧列进兼夹体质
+    top_key, top_score = min(valid.items(), key=lambda kv: (-kv[1], kv[0]))
     key = top_key if top_score >= CONSTITUTION_JUDGE_THRESHOLD else "balanced"
     tendencies = sorted(
         k
