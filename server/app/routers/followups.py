@@ -189,9 +189,9 @@ def create_followup(body: FollowupIn, db: Session = Depends(get_db), user: User 
     # 来源号要是这位患者的这类单据（P2-1018）：原先来源号是谁的、是什么都不查——给甲补建出院随访、来源号填成乙这次住院，
     # 201；乙出院时派生按（类别，来源号）去重，看到甲名下那条就不派了，乙名下一条出院随访都没有。不填（0）的照旧
     if body.source_id:
-        source_model = _SOURCE_MODELS[body.category]
-        source = db.get(source_model, body.source_id)
-        if source is None or source.patient_id != body.patient_id:
+        # 四类来源表各不相同（模型 docstring：不做外键），按表取到的行只读它的 patient_id；取不到（None）同样不是这位患者的
+        source = db.get(_SOURCE_MODELS[body.category], body.source_id)
+        if getattr(source, "patient_id", None) != body.patient_id:
             raise HTTPException(status_code=422,
                                 detail=f"来源号 {body.source_id} 不是这位患者的{_SOURCE_NAMES[body.category]}")
     payload = body.model_dump()
