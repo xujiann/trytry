@@ -448,9 +448,12 @@ def _efficiency_rows(db: Session, period: str, scope: list[int] | None) -> list[
     org_names = {o.id: o.name for o in db.query(Organization).all()}
     if scope is not None:
         org_names = {oid: name for oid, name in org_names.items() if oid in set(scope)}
+    # 实际开放床位数是期末存量：只设上界（P2-1074，与在管慢病人数 P2-766 同一个取法）——床位只增不减，原先查上个月也数着
+    # 今天新加的床，加床之后往月的使用率、周转次数跟着掉，期末综合绩效报告的公式变量同样取自这里
     bed_counts = row_dict(
         db.query(Ward.org_id, func.count(Bed.id))
         .join(Bed, Bed.ward_id == Ward.id)
+        .filter(Bed.created_at < end_dt)
         .group_by(Ward.org_id)
         .order_by(Ward.org_id)
         .all()

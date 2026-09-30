@@ -57,6 +57,15 @@ def stats_world(client):
     assert ward.status_code == 201, ward.text
     bed = client.post("/api/inpatient/beds", json={"ward_id": ward.json()["id"], "bed_no": "P037-01"}, headers=admin)
     assert bed.status_code == 201, bed.text
+    # 这张床 8 月就开着：运行效率的床位数按期末存量取（P2-1074），今天建的床数不进 8 月，甲院在 8 月就没有一行
+    from datetime import datetime
+
+    from app.database import SessionLocal
+    from app.models import Bed
+
+    with SessionLocal() as db:
+        db.get(Bed, bed.json()["id"]).created_at = datetime(2026, 7, 1)
+        db.commit()
     return {"orgs": orgs, "admin": admin,
             "h": {f"{role}_{key}": _login(client, f"p037_{role}_{key}")
                   for key in ("b", "c") for role in ("doctor", "operator")}}

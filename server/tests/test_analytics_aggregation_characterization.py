@@ -67,12 +67,14 @@ def world(client):
         ward_b = Ward(org_id=b.id, name="特征化B病区")
         db.add_all([ward_a, ward_b])
         db.flush()
+        # 床位在统计期之前就开着：实际开放床位数按期末存量取（P2-1074），缺省的 created_at 是跑用例那天，数不进 5 月
+        opened = datetime(2026, 1, 1)
         beds = [
-            Bed(ward_id=ward_a.id, bed_no="A1"),
-            Bed(ward_id=ward_a.id, bed_no="A2"),
-            Bed(ward_id=ward_a.id, bed_no="A3"),
-            Bed(ward_id=ward_b.id, bed_no="B1"),
-            Bed(ward_id=ward_b.id, bed_no="B2"),
+            Bed(ward_id=ward_a.id, bed_no="A1", created_at=opened),
+            Bed(ward_id=ward_a.id, bed_no="A2", created_at=opened),
+            Bed(ward_id=ward_a.id, bed_no="A3", created_at=opened),
+            Bed(ward_id=ward_b.id, bed_no="B1", created_at=opened),
+            Bed(ward_id=ward_b.id, bed_no="B2", created_at=opened),
         ]
         db.add_all(beds)
         db.flush()
