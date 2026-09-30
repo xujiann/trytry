@@ -7,6 +7,7 @@
 import csv
 import io
 import re
+from datetime import datetime
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
@@ -16,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from ..clock import now_aware
 from ..database import get_db
-from ..deps import require_month, require_roles
+from ..deps import month_bounds, require_month, require_roles, row_dict
 from ..models import (
     Admission,
     ChronicPatient,
@@ -274,17 +275,21 @@ def export_operations_csv(
     scores = {c["org_id"]: c["score"] for c in scorecard_payload["scorecards"]}
     level_names = {"county": "县级", "township": "乡级", "village": "村级", "city": "市级"}
 
-    def month_of(dt) -> str:
-        return dt.strftime("%Y-%m") if dt else ""
-
     # 门急诊人次不含住院：办入院会同时建一条 encounter_type="inpatient" 的就诊记录，原先一并数进「门急诊人次」，
     # 与右边一列「住院人次」重复计了同一批入院（P2-153）。口径与成本核算的门诊人次同一条（cost.py）
-    encounters = (
-        db.query(Encounter.org_id, Encounter.created_at)
-        .filter(Encounter.encounter_type != "inpatient")
-        .all()
+    # 就诊、住院各一条 GROUP BY org_id，给了 period 就在库里按 [月初, 次月初) 筛（P2-1150）：原先两句 `.all()` 把全部就诊、
+    # 全部住院读进内存，再对每家机构整表扫一遍、逐行比 `strftime("%Y-%m") == period`——耗时按「机构数 × 全部就诊」涨。
+    # 区间与原先的比法同一个口径（落库的 naive UTC 时刻所在的月份）；不带 period 照旧是累计
+    encounter_query = db.query(Encounter.org_id, func.count(Encounter.id)).filter(
+        Encounter.encounter_type != "inpatient"
     )
-    admissions = db.query(Admission.org_id, Admission.admitted_at).all()
+    admission_query = db.query(Admission.org_id, func.count(Admission.id))
+    if period:
+        start, end = (datetime.combine(day, datetime.min.time()) for day in month_bounds(period))
+        encounter_query = encounter_query.filter(Encounter.created_at >= start, Encounter.created_at < end)
+        admission_query = admission_query.filter(Admission.admitted_at >= start, Admission.admitted_at < end)
+    encounters = row_dict(encounter_query.group_by(Encounter.org_id).order_by(Encounter.org_id).all())
+    admissions = row_dict(admission_query.group_by(Admission.org_id).order_by(Admission.org_id).all())
     finance_query = db.query(
         FinanceEntry.org_id, FinanceEntry.category, func.coalesce(func.sum(FinanceEntry.amount), 0.0)
     )
@@ -298,16 +303,8 @@ def export_operations_csv(
 
     rows = []
     for org in orgs:
-        enc_count = sum(
-            1
-            for org_id, at in encounters
-            if org_id == org.id and (period is None or month_of(at) == period)
-        )
-        adm_count = sum(
-            1
-            for org_id, at in admissions
-            if org_id == org.id and (period is None or month_of(at) == period)
-        )
+        enc_count = encounters.get(org.id, 0)
+        adm_count = admissions.get(org.id, 0)
         income = float(finance.get(org.id, {}).get("income", 0.0) or 0)
         expense = float(finance.get(org.id, {}).get("expense", 0.0) or 0)
         rows.append(
