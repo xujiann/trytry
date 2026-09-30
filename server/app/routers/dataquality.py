@@ -37,7 +37,7 @@ from ..models import (
     PrescriptionItem,
     QcRule,
 )
-from ..texttypes import NON_BLANK
+from ..texttypes import NON_BLANK, is_blank_text
 
 router = APIRouter(
     prefix="/api/dataquality", tags=["数据质控"], dependencies=[Depends(get_current_user)]
@@ -113,7 +113,9 @@ def _fields_query(db: Session, model, *fields: str):
 
 
 def _is_blank(value) -> bool:
-    return value is None or (isinstance(value, str) and value.strip() == "")
+    """没填：None，或文字里一个看得见的字符都没有。与必填文本的 `NON_BLANK` 同一个判据（`is_blank_text`，P2-1148）：
+    原先按 `strip()` 判，只有零宽空格 / BOM / 控制字符的姓名（入站、存量进得了库）QC002 查不出来。"""
+    return value is None or (isinstance(value, str) and is_blank_text(value))
 
 
 # ---------------------------------------------------------------------------

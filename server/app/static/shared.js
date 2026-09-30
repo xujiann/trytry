@@ -114,8 +114,8 @@ function readCookie(name) {
  * 字段名（`loc` 去掉 body/query/path 这一层来源），多条用"；"连接。字符串原样返回；
  * 空的或认不出的形状回落到调用方给的兜底文案——宁可笼统，也不要 `[object Object]`。
  *
- * 必填文本只填了空格（P1-109，后端 `texttypes.NON_BLANK`）pydantic 的原话是
- * "String should match pattern '\S'"，必填文本留空（`min_length=1`，P1-110）的原话是
+ * 必填文本只填了空格（P1-109，后端 `texttypes.NON_BLANK`；只有零宽空格、BOM、控制字符这类看不见的字符同一条，P2-1148）
+ * pydantic 的原话是 "String should match pattern '[^\s\p{Cc}\p{Cf}]'"，必填文本留空（`min_length=1`，P1-110）的原话是
  * "String should have at least 1 character"——按错误类型与约束认出来换成人话。
  * 写超了长度（`max_length`）原先照样是英文 "String should have at most 512 characters"，批量选多了是
  * "List should have at most 500 items after validation, not 501"（P2-606）——同样按类型换成「最多 N 个字 / 项」。
@@ -143,7 +143,7 @@ function errorText(detail, fallback) {
     const origins = ["body", "query", "path", "header", "cookie"];
     const parts = detail.map((e) => {
       const ctx = (e && e.ctx) || {};
-      const blank = e && e.type === "string_pattern_mismatch" && ctx.pattern === "\\S";
+      const blank = e && e.type === "string_pattern_mismatch" && ctx.pattern === "[^\\s\\p{Cc}\\p{Cf}]";
       const empty = e && e.type === "string_too_short" && ctx.min_length === 1;
       const tooLong = e && e.type === "string_too_long" && ctx.max_length != null;
       const tooMany = e && e.type === "too_long" && ctx.max_length != null;

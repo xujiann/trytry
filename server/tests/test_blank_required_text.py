@@ -7,11 +7,14 @@
 修法：`app/texttypes.NON_BLANK`（`\\S`，至少一个非空白字符）挂到请求字段的 `pattern` 上。pydantic 的 `pattern`
 按 search 语义匹配，合法值一个字节不变（前后带空格的照原样收下、照原样落库），只挡全是空白的；422 的 `detail`
 仍是 FastAPI 的标准数组形状（`string_pattern_mismatch`），前端 `errorText` 认出这条 pattern 换成「不能只填空格」。
+P2-1148 起 `NON_BLANK` 是 `[^\\s\\p{Cc}\\p{Cf}]`：只有零宽空格、BOM、控制字符这类看不见的字符的，与纯空白同样挡
+（回归见 `tests/test_required_text_invisible_chars.py`）；判 pattern 挡不挡得住改用 pydantic 自己的正则引擎（`_search`）。
 
 闸门（派生、零基线）：
 
 1. **请求侧**：路由请求体（顺嵌套子模型）里带 `min_length` 的文本字段，声明的 pattern 必须挡得住同长度的纯空白
-   （半角空格、全角空格、制表符各试一遍）。修前量出 282 个字段：修 268，认证与核验入参 14 个按设计（`BY_DESIGN`）。
+   （半角空格、全角空格、制表符各试一遍，P2-1148 起再试零宽空格、BOM、控制字符）。修前量出 282 个字段：修 268，
+   认证与核验入参 14 个按设计（`BY_DESIGN`）。
 2. **出参侧**：`response_model`（顺嵌套）的字段不许带 `NON_BLANK`——修之前存进去的纯空白行会让整个清单 500
    （P1-63 / P2-40 同族）。继承到它的 37 个出参字段（27 个出参模型）已在出参按原约束覆盖，不带它。
 3. **第二层（P1-110，见文件后半）**：没写 `min_length`、却没有默认值（必须带上这一键）的文本字段，空串照收——
@@ -19,15 +22,16 @@
 """
 from __future__ import annotations
 
+import functools
 import json
 import pathlib
-import re
 import types
 import typing
 
 import pytest
 import test_api_contract_governance as contract
 from pydantic import BaseModel, Field
+from pydantic_core import SchemaValidator, core_schema
 
 from app.texttypes import NON_BLANK
 
@@ -58,8 +62,9 @@ BY_DESIGN = {
     "routers.credentials:OneCodeResolve.code": _AUTH + "（一码通解析到人）",
 }
 
-#: 各试一遍的空白字符：半角空格、全角空格（U+3000，中文输入法最常见）、制表符
-_BLANKS = (" ", "　", "\t")
+#: 各试一遍的空白字符：半角空格、全角空格（U+3000，中文输入法最常见）、制表符；P2-1148 起再加三种看不见的字符：
+#: 零宽空格 U+200B、BOM U+FEFF（从网页 / 微信 / 富文本编辑器复制出来常带）、控制字符 \x01
+_BLANKS = (" ", "　", "\t", "\u200b", "\ufeff", "\x01")
 
 
 # ================================================================ 判据
@@ -84,6 +89,17 @@ def _patterns(info) -> list[str]:
     return [p if isinstance(p, str) else p.pattern for p in found if p is not None]
 
 
+@functools.cache
+def _pattern_validator(pattern: str) -> SchemaValidator:
+    return SchemaValidator(core_schema.str_schema(pattern=pattern))
+
+
+def _search(pattern: str, value: str) -> bool:
+    """`pattern` 在 `value` 里搜不搜得到，用请求校验同一个正则引擎（pydantic 的 Rust regex）判：`NON_BLANK` 写的是
+    Unicode 类别 `\\p{Cc}` / `\\p{Cf}`（P2-1148），Python 的 `re` 不认；两个引擎对 `\\s`、`$` 的口径也不全一样。"""
+    return _pattern_validator(pattern).isinstance_python(value)
+
+
 def _is_text(info) -> bool:
     ann = info.annotation
     if typing.get_origin(ann) is typing.Annotated:
@@ -99,7 +115,7 @@ def accepts_blank(info) -> bool:
     if min_len < 1:
         return False
     patterns = _patterns(info)
-    return any(all(re.search(p, ch * min_len) for p in patterns) for ch in _BLANKS)
+    return any(all(_search(p, ch * min_len) for p in patterns) for ch in _BLANKS)
 
 
 def _owner_key(cls: type, field: str) -> str:
@@ -330,7 +346,7 @@ def accepts_empty_required(cls: type, field: str, info) -> bool:
         return False
     if max((m.min_length for m in _metas(info) if getattr(m, "min_length", None)), default=0) >= 1:
         return False
-    return all(re.search(p, "") for p in _patterns(info))
+    return all(_search(p, "") for p in _patterns(info))
 
 
 def empty_accepting_required_fields(models: typing.Iterable[type] | None = None) -> set[str]:
