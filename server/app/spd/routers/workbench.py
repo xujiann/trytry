@@ -50,7 +50,7 @@ from ..models import (
 )
 from ..reporting import latest_plan_period_scores, score_in_orgs
 from ..service import (FOLLOWUP_OPEN_STATUSES, MIGRATION_VOID_STATUSES, REVISIT_OPEN_STATUSES,
-                       TASK_OPEN_STATUSES, candidate_undistributed,
+                       TASK_OPEN_STATUSES, _age_of, candidate_undistributed,
                        followup_abnormal, followup_overdue, referral_last_moved_at, sweep_overdue_on_read,
                        task_overdue, task_unclaimed)
 
@@ -930,18 +930,15 @@ def region_stats(
     )
     age_buckets = {"0-17": 0, "18-44": 0, "45-59": 0, "60-74": 0, "75+": 0, "未知": 0}
     gender = {"男": 0, "女": 0, "未知": 0}
-    today = clock.today()
     for patient_id, patient_gender, birth_date in rows:
         if patient_id is None:
             age_buckets["未知"] += 1
             continue
         gender[patient_gender if patient_gender in gender else "未知"] += 1
-        try:
-            born = date.fromisoformat(birth_date)
-            age = today.year - born.year - (
-                (today.month, today.day) < (born.month, born.day)
-            )
-        except (ValueError, TypeError):
+        # 与规则事实同一个算法（P2-939）：原先这里自己算，出生日期在将来（P2-713 之前建档 / HL7 入站存下的）算成负数、
+        # 落进「0-17」；按 P2-713 当「不知道」
+        age = _age_of(birth_date)
+        if age is None:
             age_buckets["未知"] += 1
             continue
         key = ("0-17" if age < 18 else "18-44" if age < 45 else "45-59" if age < 60
