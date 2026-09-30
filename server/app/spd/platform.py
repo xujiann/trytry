@@ -155,13 +155,19 @@ def diagnosis_codes(db: Session, patient_id: int) -> list[str]:
     取全部历史而不是最近一次：慢病的纳入依据是"曾被确诊"，
     按最近一次判定会让一个来看感冒的高血压患者掉出目标池。
     父目一并给出（`I10.x` → 也产出 `I10`），否则病种规则要把亚目列全。
+    四位亚目同样给出（P2-1077）：国临版的扩展码 `E11.201` → 也产出 `E11.2` 与 `E11`——原先只补三位类目，按亚目写的规则
+    （如糖尿病肾病 `E11.2`）碰到国临版编码永不命中；小数点后是占位符 `x`（`I10.x00`）的没有亚目，只产出类目。
     """
     codes: list[str] = []
     for enc in db.query(Encounter).filter(Encounter.patient_id == patient_id).all():
         code = getattr(enc, "diagnosis_code", "")
         if code:
+            code = str(code)
+            head, _, tail = code.partition(".")
             codes.append(code)
-            codes.append(str(code).split(".")[0])
+            if tail[:1].isdigit():
+                codes.append(f"{head}.{tail[0]}")
+            codes.append(head)
     return list(dict.fromkeys(codes))
 
 
