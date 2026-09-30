@@ -3033,9 +3033,14 @@ async function renderSpdAssess() {
           options: [{ value: "1", label: "上架" }, { value: "0", label: "下架" }] },
       ]);
       if (!form) return;
-      return postAction(`/api/spd/goods/${goodsEdit.dataset.goodsEdit}`, {
-        name: form.name, points: form.points, stock: form.stock, active: form.active === "1",
-      }, "#spd-goods-msg", "PATCH");
+      // 只送改过的字段（P2-920，与缺药阈值 P1-146 同形）：原先四格原样 PATCH——页面加载时的库存整值写回，这期间兑换占掉的
+      // 件数被「还」回库存、造成超兑。改了库存时带上页面看到的数，库存刚变过的后端 409「请刷新后再改」
+      const d = goodsEdit.dataset;
+      const body = { active: form.active === "1" };
+      if (form.name !== d.name) body.name = form.name;
+      if (String(form.points) !== String(d.points)) body.points = form.points;
+      if (String(form.stock) !== String(d.stock)) Object.assign(body, { stock: form.stock, stock_seen: Number(d.stock) });
+      return postAction(`/api/spd/goods/${d.goodsEdit}`, body, "#spd-goods-msg", "PATCH");
     }
   };
 }

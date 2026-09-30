@@ -1566,6 +1566,9 @@ class GoodsPatch(BaseModel):
     stock: int = Field(default=UNSET, ge=0, le=100000)
     image_url: str = Field(default=UNSET, max_length=256)
     active: bool = Field(default=UNSET)
+    # 改库存时带上页面看到的库存（P2-920）：库存还是那个数才改，否则 409——兑换是条件扣减（`take_amount`），改档原先把
+    # 页面加载时的库存整值写回，这期间兑换占掉的件数被「还」回库存、造成超兑。不带的旧调用照旧直接改
+    stock_seen: int | None = Field(default=None, ge=0, le=100000)
 
 
 @router.patch("/goods/{goods_id}", response_model=GoodsUpdatedOut,
@@ -1574,9 +1577,18 @@ def update_goods(goods_id: int, body: GoodsPatch, db: Session = Depends(get_db))
     goods = db.get(SpdGoods, goods_id)
     if goods is None:
         raise HTTPException(status_code=404, detail="商品不存在")
-    for key, value in body.model_dump(exclude_unset=True).items():
+    changes = body.model_dump(exclude_unset=True)
+    seen = changes.pop("stock_seen", None)
+    if "stock" in changes and seen is not None:
+        moved = db.query(SpdGoods).filter(SpdGoods.id == goods_id, SpdGoods.stock == seen).update(
+            {SpdGoods.stock: changes.pop("stock")}, synchronize_session=False)
+        if not moved:
+            db.rollback()
+            raise HTTPException(status_code=409, detail="库存刚变过（有人兑换或别人改过），请刷新后再改")
+    for key, value in changes.items():
         setattr(goods, key, value)
     db.commit()
+    db.refresh(goods)
     return {"id": goods.id, "stock": goods.stock, "active": goods.active}
 
 
