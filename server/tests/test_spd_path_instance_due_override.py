@@ -85,6 +85,23 @@ def test_调整之后才加的覆盖_下一节点照样生效_没覆盖的按模
     assert _task_on(instance, "n2")[1] == _in_days(1)   # 修前 14 天
 
 
+def test_路径明细的时限按实例覆盖显示(client, admin, world):
+    """明细「时限(天)」原先回模板的节点时限（P2-922，第二十五批「配置改动的生效时点」扫描 J1-3a）：覆盖成 2 天的，
+    明细照写 7，派出的任务却是 2 天后到期——看明细的人按 7 天排活。"""
+    started = client.post(f"{B}/path-instances", headers=admin, json={
+        "enrollment_id": _enrollment(client, admin, world), "template_id": world["template"],
+        "overrides": {"n1": {"due_days": 2}}})
+    assert started.status_code == 201, started.text
+    instance = started.json()["id"]
+    detail = client.get(f"{B}/path-instances/{instance}", headers=admin).json()
+    assert {n["key"]: n["due_days"] for n in detail["nodes"]} == {"n1": 2, "n2": 14, "n3": 30}   # 修前 n1 = 7
+    patched = client.patch(f"{B}/path-instances/{instance}", headers=admin,
+                           json={"overrides": {"n1": {"due_days": 2}, "n3": {"due_days": 0}}})
+    assert patched.status_code == 200, patched.text
+    detail = client.get(f"{B}/path-instances/{instance}", headers=admin).json()
+    assert {n["key"]: n["due_days"] for n in detail["nodes"]} == {"n1": 2, "n2": 14, "n3": 0}   # 0 天照实显示
+
+
 @pytest.mark.parametrize("overrides", [
     {"n1": {"due_days": -1}}, {"n1": {"due_days": "3"}}, {"n1": {"due_days": True}}, {"n1": 5}, {"n1": {}},
 ], ids=["负数", "字符串", "布尔", "不是字典", "空"])

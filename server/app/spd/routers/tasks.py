@@ -430,7 +430,8 @@ def get_path_instance(
         {
             "key": n.key, "name": n.name, "stage": n.stage, "seq": n.seq, "dept": n.dept,
             "exec_role": n.exec_role, "service_type": n.service_type,
-            "due_days": n.due_days, "timeout_action": n.timeout_action,
+            # 按这条实例的时限（P2-922）：原先回模板的——个性化覆盖成 2 天的，明细照写 7，与派出的任务截止日对不上
+            "due_days": node_due_days(instance, n), "timeout_action": n.timeout_action,
             "require_form": n.require_form, "require_evidence": n.require_evidence,
             "is_current": n.key == instance.current_node_key,
             "tasks": [
