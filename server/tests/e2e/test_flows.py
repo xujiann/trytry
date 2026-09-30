@@ -3455,6 +3455,33 @@ def test_查房下拉改成乙_不点切换患者_病程写进乙(page, base_url
     assert _note_contents(admin_read, a["id"]) == []
 
 
+def test_医生端慢病随访录完_下拉仍是刚才那一份(page, base_url, seed, admin_call, admin_read):
+    """P2-1011：录完一条随访，档案下拉原先悄悄跳回分级最高的第一条（重画不带 selected），补一条就记进了别人的档案。"""
+    high, low = (admin_call("POST", "/api/patients", {"name": f"E2E随访{tag}", "id_card": card, "gender": "男"})
+                 for tag, card in (("三级", "320981199001011610"), ("一级", "320981199102021711")))
+    high_rec = admin_call("POST", "/api/chronic", {"patient_id": high["id"], "disease": "hypertension",
+                                                   "managed_by_org_id": seed["org"]["id"]})
+    admin_call("POST", f"/api/chronic/{high_rec['id']}/followups", {"sbp": 182, "dbp": 112})   # 定 3 级，排在前面
+    low_rec = admin_call("POST", "/api/chronic", {"patient_id": low["id"], "disease": "hypertension",
+                                                  "managed_by_org_id": seed["org"]["id"]})
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.goto(f"{base_url}/m/doctor")
+    page.fill("#lg-user", "admin")
+    page.fill("#lg-pass", "admin123")
+    page.click("#login-form button[type=submit]")
+    expect(page.locator("#workbench")).to_be_visible()
+    page.click('a.tab-btn[data-tab="chronic"]')
+    picker = page.locator("#fu-chronic")
+    picker.select_option(str(low_rec["id"]))
+    page.locator('#fu-metrics input[data-key="sbp"]').fill("128")
+    page.locator('#fu-metrics input[data-key="dbp"]').fill("80")
+    page.click("#fu-form button[type=submit]")
+    expect(page.locator("#fu-msg")).to_contain_text("已录入")
+    expect(picker.locator(f'option[value="{high_rec["id"]}"]')).to_have_count(1)   # 重画完了
+    expect(picker).to_have_value(str(low_rec["id"]))   # 修前跳回第一条
+    assert len(admin_read(f"/api/chronic/{low_rec['id']}/followups")) == 1
+
+
 def test_surgery_full_flow(page, base_url, seed):
     """手术麻醉（T2.3）：申请 → 审批 → 排班 → 术中记录，状态逐级推进。
 

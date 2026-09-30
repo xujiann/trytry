@@ -734,9 +734,12 @@ async function loadChronic() {
     ]);
     diseaseTypes = types;
     const byCode = Object.fromEntries(types.map((t) => [t.code, t]));
+    // 重画时留住选中的那一份、选项写上患者号（P2-1011）：原先录完一条就重画下拉、不带 selected，悄悄跳回分级最高的第一条，
+    // 指标框按那一份的病种重画——医生以为还是刚才那位，补一条就记进了别人的档案（同文件查房 loadRound 选中的还在就留着）
+    const picked = $("#fu-chronic").value;
     $("#fu-chronic").innerHTML = list.length
-      ? list.map((c) => `<option value="${c.id}" data-disease="${esc(c.disease)}">
-          档案${c.id} · ${esc((byCode[c.disease] || {}).name || c.disease)} · ${c.level}级</option>`).join("")
+      ? list.map((c) => `<option value="${c.id}" data-disease="${esc(c.disease)}"${String(c.id) === picked ? " selected" : ""}>
+          档案${c.id} · 患者${esc(c.patient_id)} · ${esc((byCode[c.disease] || {}).name || c.disease)} · ${c.level}级</option>`).join("")
       : '<option value="">暂无在管档案</option>';
     renderMetricInputs();
     $("#chronic-list").innerHTML = list.length
