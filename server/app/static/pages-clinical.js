@@ -3255,9 +3255,9 @@ async function renderBilling() {
     if (f.get("amount")) body.amount = Number(f.get("amount"));
     try {
       const order = await api("/api/billing/payments", { method: "POST", body: JSON.stringify(body) });
+      await route();   // 先重画再写回执（P2-1013）：原先写完即被重画冲掉，流水号 / 失败原因闪一下就没了
       setMsg("#pay-msg", order.status === "paid"
         ? `支付成功，流水号 ${order.trade_no}` : `支付失败：${order.fail_reason}`, order.status === "paid");
-      route();
     } catch (err) { setMsg("#pay-msg", err.message, false); }
   };
   // 金额留空的默认额按渠道取（P2-605，同 billing.create_payment 的 default_amount）：医保渠道记本单的统筹支付额，其余渠道
@@ -3274,8 +3274,8 @@ async function renderBilling() {
     const date = new FormData(e.target).get("date");
     try {
       const batch = await api(`/api/billing/reconciliation/run?date=${encodeURIComponent(date)}`, { method: "POST" });
+      await route();   // 先重画再写回执（P2-1013）：原先写完即被重画冲掉
       setMsg("#recon-msg", `对账完成：${batch.total_orders} 笔，差异 ${batch.unmatched} 笔（${batch.diff_amount} 元）`, batch.unmatched === 0);
-      route();
     } catch (err) { setMsg("#recon-msg", err.message, false); }
   };
   $("#page-body").onclick = async (e) => {
@@ -3326,8 +3326,8 @@ async function renderBilling() {
         const body = form.amount ? { amount: Number(form.amount) } : {};
         if (form.reason) body.reason = form.reason;
         const res = await api(`/api/billing/payments/${refund}/refund`, { method: "POST", body: JSON.stringify(body) });
+        await route();   // 先重画再写回执（P2-1013）：原先写完即被重画冲掉，退款单号闪一下就没了
         setMsg("#pay-msg", `退款成功 ${res.refund_amount} 元，退款单号 ${res.refund_no}`);
-        route();
       } else if (refunds) {
         // 逐笔退款流水（P2-730）：原先退款单号只在上面那条提示里闪一次，多次部分退款只剩累计额
         const rows = await api(`/api/billing/payments/${refunds}/refunds`);

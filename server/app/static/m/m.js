@@ -1339,9 +1339,11 @@ async function renderSpdMeasure(box, days = 90) {
       if (viewingPatientId !== null) body.patient_id = viewingPatientId;
       const r = await authApi("/api/portal/spd/measurements", {
         method: "POST", body: JSON.stringify(body) });
-      $("#spd-measure-msg").textContent =
-        r.level === "normal" ? "已保存，指标正常" : `已保存，指标${r.level === "high" ? "偏高" : "偏低"}，请关注`;
+      // 先重画再写回执（P2-1013）：原先写完「指标偏高，请关注」紧跟 loadSpd() 重画同一块，这句提醒当场被冲掉
       await loadSpd();
+      const msg = $("#spd-measure-msg");
+      if (msg) msg.textContent =
+        r.level === "normal" ? "已保存，指标正常" : `已保存，指标${r.level === "high" ? "偏高" : "偏低"}，请关注`;
     } catch (err) { $("#spd-measure-msg").textContent = err.message; }
   });
   const older = box.querySelector("[data-spd-older]");

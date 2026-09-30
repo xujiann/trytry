@@ -1373,8 +1373,8 @@ async function renderSpdTeam() {
       const r = await api("/api/spd/village-doctors/batch", { method: "POST", body: JSON.stringify({ items }) });
       // 后端按 user_id 报跳过原因（用户不存在 / 已建档 / 并发冲突），不是按行号
       const skipped = (r.skipped || []).map((k) => `用户 ${k.user_id ?? "?"}：${k.reason || ""}`).join("；");
+      await route();   // 先重画再写回执（P2-1013）：原先写完即被重画冲掉，跳过的是谁、为什么，页面上哪儿都看不到
       setMsg("#spd-vd-msg", `导入 ${r.created} 条${skipped ? `，跳过 ${r.skipped.length} 条：${skipped}` : ""}`);
-      route();
     } catch (err) { setMsg("#spd-vd-msg", err.message, false); }
   };
   $("#page-body").onclick = async (e) => {
@@ -2622,6 +2622,9 @@ async function renderSpdReferral() {
       const r = await api("/api/spd/referral-rules/check", { method: "POST", body: JSON.stringify({
         patient_id: Number(f.get("patient_id")), program_code: f.get("program_code") || "",
         auto_create: f.get("auto_create") === "true" }) });
+      // 开了单要刷新清单：先重画、再把命中明细写回来（P2-1013）——原先画完明细紧跟不等的 route()，勾了「命中即开上转单」
+      // 的那一次，命中了哪几条、哪个条件命中的，画完即被冲掉
+      if (r.case) await route();
       $("#spd-refcheck-box").innerHTML = `
         <p class="msg ${r.triggered ? "err" : "ok"}">${r.triggered
           ? `命中 ${r.hits.length} 条规则${r.case ? `，已开转诊单 #${r.case.id}` : "（未开单）"}`
@@ -2633,7 +2636,6 @@ async function renderSpdReferral() {
         <p class="desc">本次参与判定的事实：${Object.entries(r.facts || {})
           .map(([k, v]) => `${esc(k)}=${esc(v === null ? "—" : v)}`).join("，") || "（无）"}</p>`;
       setMsg("#spd-refcheck-msg", "");
-      if (r.case) route();
     } catch (err) { $("#spd-refcheck-box").innerHTML = ""; setMsg("#spd-refcheck-msg", err.message, false); }
   };
   $("#page-body").onclick = async (e) => {
@@ -3937,12 +3939,21 @@ async function renderSpdMember() {
     body.create_task = e.target.create_task.checked;
     return postAction("/api/spd/interventions", body, "#spd-intv-msg");
   };
-  $("#spd-edu-form").onsubmit = (e) => {
+  $("#spd-edu-form").onsubmit = async (e) => {
     e.preventDefault();
     const body = formJson(e.target, ["material_id"]);
     body.patient_ids = String(body.patient_ids || "").split(/[，,\s]+/)
       .filter(Boolean).map(Number);
-    return postAction("/api/spd/edu-pushes", body, "#spd-edu-msg");
+    // 回执说出来（P2-1013）：原先走 postAction，成功即重画、回执里的送达 / 失败条数整个丢掉——发给 20 人、5 人没送到
+    // （没手机号、没绑定档案），页面上看不出
+    try {
+      const r = await api("/api/spd/edu-pushes", { method: "POST", body: JSON.stringify(body) });
+      await route();
+      setMsg("#spd-edu-msg", body.send_at
+        ? `已登记「${r.material}」${r.pushed} 人的定时推送，到点发送`
+        : `已推送「${r.material}」${r.pushed} 人：送达 ${r.sent}，失败 ${r.failed}${r.failed ? "（原因见推送记录）" : ""}`,
+      !r.failed);
+    } catch (err) { setMsg("#spd-edu-msg", err.message, false); }
   };
   $("#spd-report-form").onsubmit = (e) => {
     e.preventDefault();

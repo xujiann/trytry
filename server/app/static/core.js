@@ -758,8 +758,8 @@ async function renderAppointments() {
         skip_dates: String(f.get("skip_dates") || "").split(/[，,\s]+/).filter(Boolean),
         skip_weekends: f.get("skip_weekends") === "true" }) });
       // 跳过数要说出来：幂等跳过与"什么都没生成"看起来一样，不报出来没人知道是补生成生效了
+      await route();   // 先重画再写回执（P2-1013）：原先写完即被重画冲掉，跳过数从来没人看得到
       setMsg("#apt-msg", `批量生成 ${r.created} 个号源，跳过已有 ${r.skipped} 个`);
-      route();
     } catch (err) { setMsg("#apt-msg", err.message, false); }
   };
   $("#doctor-form").onsubmit = async (e) => {
@@ -1616,8 +1616,8 @@ async function renderExams() {
           return api(`/api/exams/reports/${amend}`, { method: "PATCH", body: JSON.stringify(body) });
         } });
         if (!r) return;
+        await route();   // 先重画再写回执（P2-1013）：原先写完即被重画冲掉
         setMsg("#exam-msg", `报告 ${r.id} 已修订${r.critical ? `（仍为危急值，闭环状态 ${r.critical_status_name}）` : "（非危急值）"}`);
-        route();
         return;
       }
       if (claim) { await api(`/api/exams/${claim}/claim`, { method: "POST" }); route(); }
@@ -1792,8 +1792,10 @@ async function renderRx() {
       const base = p.status === "auto_passed" ? "系统审通过" : `转入药师审核：${p.review_comment}`;
       // 块2：肝肾功能提示为非拦截提醒，附在审方结论之后
       const tips = (p.advisories || []).length ? `｜${p.advisories.join("；")}` : "";
+      // 先重画再写回执（P2-1013，与 P2-914 同一写法）：原先写完紧跟不等的 route()，整页重画当场把这一行冲掉——肝肾功能
+      // 提示「只随本次响应返回、不入库」，页面这一行是它唯一的出口，从来没显示过
+      await route();
       setMsg("#rx-msg", base + tips, p.status === "auto_passed");
-      route();
     } catch (err) { setMsg("#rx-msg", err.message, false); }
   };
   $("#rule-form").onsubmit = async (e) => {
@@ -1818,8 +1820,8 @@ async function renderRx() {
     if (!Array.isArray(rows) || !rows.length) return setMsg("#rx-msg", "要一个非空的 JSON 数组", false);
     try {
       const r = await api("/api/prescriptions/rules/import", { method: "POST", body: JSON.stringify(rows) });
+      await route();   // 先重画再写回执（P2-1013）：原先写完即被重画冲掉
       setMsg("#rx-msg", `导入完成：新建 ${r.imported} 条，覆盖更新 ${r.updated} 条`, true);
-      route();
     } catch (err) { setMsg("#rx-msg", err.message, false); }
   };
   $("#page-body").onclick = async (e) => {
