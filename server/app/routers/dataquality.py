@@ -219,17 +219,41 @@ def _check_date_not_future(db: Session, rule: QcRule, model) -> list[tuple[int, 
     return hits
 
 
+def _followup_metric(row: FollowUp, key: str):
+    """与分级同一个读法（`chronic._metric_value`）：先取随访同名列，再取 metrics 里的同名键。"""
+    value = getattr(row, key, None)
+    return (row.metrics or {}).get(key) if value is None else value
+
+
+def _catalog_indicators(db: Session) -> dict[str, tuple[list[str], bool]]:
+    """病种目录里每个病种的分级指标与 require_all（写坏的规则当没写）。"""
+    out: dict[str, tuple[list[str], bool]] = {}
+    for code, rules in db.query(ChronicDiseaseType.code, ChronicDiseaseType.level_rules):
+        metrics = rules.get("metrics") if isinstance(rules, dict) else None
+        keys = [m["key"] for m in metrics or [] if isinstance(m, dict) and isinstance(m.get("key"), str) and m["key"]]
+        if keys:
+            out[code] = (list(dict.fromkeys(keys)), bool(rules.get("require_all", True)))
+    return out
+
+
 def _check_chronic_followup_indicator(db: Session, rule: QcRule, model) -> list[tuple[int, str]]:
-    """慢病随访须记录对应病种指标（按病种要求的指标字段判定）。"""
+    """慢病随访须记录对应病种指标。
+
+    要记哪些指标以病种目录的分级规则为准（P2-1049）：目录是「分级规则与随访周期的唯一数据源」，规则配置里手抄的一份把
+    冠心病 / 脑卒中写成收缩压、舒张压，目录按每周心绞痛次数、改良 Rankin 评分定级——按目录录的被点名「缺少指标：sbp、dbp」，
+    只录了血压的反倒过了质控、却定不了级；移动端这两个病种本就没有血压格。取值与定级同一个读法（随访同名列，再取 metrics），
+    require_all=false 的病种记了任一项即可。目录里没写分级指标的病种退回规则配置里的那份，再没有的至少记一项。
+    """
     mapping: dict[str, list[str]] = rule.config.get("disease_indicators", {})
+    catalog = _catalog_indicators(db)
     diseases = row_dict(db.query(ChronicPatient.id, ChronicPatient.disease).all())
     hits = []
     for row in _scan(db.query(FollowUp), FollowUp):
         disease = diseases.get(row.chronic_id, "")
-        required = mapping.get(disease)
+        required, require_all = catalog.get(disease) or (mapping.get(disease) or [], True)
         if required:
-            missing = [f for f in required if getattr(row, f, None) is None]
-            if missing:
+            missing = [f for f in required if _followup_metric(row, f) is None]
+            if missing and (require_all or len(missing) == len(required)):
                 hits.append((row.id, f"{disease} 随访缺少指标：{'、'.join(missing)}"))
             continue
         # 目录未列明指标要求的病种：至少记录一项指标（含通用 metrics）
