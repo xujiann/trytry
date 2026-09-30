@@ -244,10 +244,19 @@ def run_due_sources_counted(db: Session) -> tuple[int, int, str]:
     # 状态为「停用」（stopped，改档可设）的也不跑（P2-315）：原先只看 active，手工停掉的数据源到点照跑，
     # 跑完又把状态翻回「正常 / 异常」——停用这一档设了等于没设
     sources = db.query(SpdDataSource).filter(SpdDataSource.active.is_(True), SpdDataSource.status != "stopped").all()
+    # 到没到期只认采集器自己跑的那一次（P2-938，与 `lookback_since` 同一取法，P2-530）：原先按 `last_sync_at` 判，数据源页
+    # 「记一次同步」（手工登记）也写它——接口方每个周期回报一次，采集器就永远不到期，监控页照显示「正常」
+    last_run: dict[int, datetime] = {
+        source_id: started for source_id, started in db.query(SpdSyncLog.source_id, func.max(SpdSyncLog.started_at))
+        .filter(SpdSyncLog.manual.is_(False), SpdSyncLog.source_id.in_([s.id for s in sources] or [0]))
+        .group_by(SpdSyncLog.source_id)
+        .order_by(SpdSyncLog.source_id)
+        .all()
+    }
     due = [
         s for s in sources
-        if s.last_sync_at is None
-        or (now - s.last_sync_at) >= timedelta(minutes=max(s.freq_minutes, 1))
+        if last_run.get(s.id) is None
+        or (now - last_run[s.id]) >= timedelta(minutes=max(s.freq_minutes, 1))
     ]
     failed = 0
     for source in due:
