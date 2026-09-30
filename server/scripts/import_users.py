@@ -30,7 +30,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.database import Base, SessionLocal, engine  # noqa: E402
+from app.database import SessionLocal, create_all_for_scripts  # noqa: E402
 from app.deps import ROLE_NAMES  # noqa: E402  内置六角色（key→名称）
 from app.models import Organization, Role, User  # noqa: E402
 from app.security import hash_password, validate_password_strength  # noqa: E402
@@ -77,7 +77,7 @@ def run_import(
 ) -> ImportReport:
     """执行导入并返回报告。角色对内置六角色 + roles 表已启用自定义角色校验。"""
     report = ImportReport(dry_run=dry_run)
-    Base.metadata.create_all(bind=engine)
+    create_all_for_scripts(dry_run)  # 只在开发环境、非 dry-run 时建表（P2-1089，ADR-0002）
     db = SessionLocal()
     try:
         # 集合预载：机构名→id、已存在用户名、合法角色（一次查询各一趟，行内零 SELECT）

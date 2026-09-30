@@ -28,7 +28,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.database import Base, SessionLocal, engine  # noqa: E402
+from app.database import SessionLocal, create_all_for_scripts  # noqa: E402
 from app.models import ChargeItem, CodeEntry, CodeSystem  # noqa: E402
 
 CATEGORIES = {"drug", "exam", "treatment", "bed", "other"}
@@ -77,7 +77,7 @@ def _parse_price(raw: str) -> float | None:
 def run_import(csv_path: str | Path, dry_run: bool = False) -> ImportReport:
     """执行导入并返回报告。dry_run=True 时全程校验但事务回滚不落库。"""
     report = ImportReport(dry_run=dry_run)
-    Base.metadata.create_all(bind=engine)
+    create_all_for_scripts(dry_run)  # 只在开发环境、非 dry-run 时建表（P2-1089，ADR-0002）
     db = SessionLocal()
     try:
         # 集合预载：已有目录编码 + charge 字典编码（行内零 SELECT）

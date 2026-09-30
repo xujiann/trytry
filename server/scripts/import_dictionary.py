@@ -30,7 +30,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.database import Base, SessionLocal, engine  # noqa: E402
+from app.database import SessionLocal, create_all_for_scripts  # noqa: E402
 from app.models import CodeEntry, CodeSystem  # noqa: E402
 from app.routers.dictionaries import SYSTEM_CODES  # noqa: E402
 
@@ -84,7 +84,7 @@ def run_import(
         raise ValueError(f"未知字典类型: {system_code}（可选：{'/'.join(SYSTEM_CODES)}）")
     csv_path = Path(csv_path)
     report = ImportReport(system=system_code, dry_run=dry_run)
-    Base.metadata.create_all(bind=engine)
+    create_all_for_scripts(dry_run)  # 只在开发环境、非 dry-run 时建表（P2-1089，ADR-0002）
     db = SessionLocal()
     try:
         system = db.query(CodeSystem).filter(CodeSystem.code == system_code).first()

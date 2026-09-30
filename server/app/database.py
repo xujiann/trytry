@@ -65,6 +65,18 @@ class Base(DeclarativeBase):
     pass
 
 
+def create_all_for_scripts(dry_run: bool = False) -> None:
+    """运维导入脚本「空库直跑」的建表：只在开发环境、且不是 dry-run 时建（P2-1089，与 `main.lifespan` 同一个 ADR-0002 守卫）。
+
+    原先四个导入脚本无条件 `create_all`，dry-run 也照做——DDL 在 dry-run 的事务之外先执行、自动提交：发版窗口里用新代码
+    对还没迁移的库做一次导入预检，新版本的表就被建出来，随后发布流程的 `alembic upgrade heads` 撞「表已存在」、实例起不来。
+    生产库的结构只走迁移；dry-run 说的是「不落库」，建表也算落库。
+    """
+    if settings.is_production or dry_run:
+        return
+    Base.metadata.create_all(bind=engine)
+
+
 def get_db():
     db = SessionLocal()
     try:

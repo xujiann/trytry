@@ -72,7 +72,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app import clock  # noqa: E402
-from app.database import Base, SessionLocal, engine  # noqa: E402
+from app.database import SessionLocal, create_all_for_scripts  # noqa: E402
 from app.datetypes import check_date  # noqa: E402
 from app.numtypes import INT4_MAX  # noqa: E402
 from app.models import (  # noqa: E402
@@ -918,7 +918,7 @@ def run_import(
     结束后（有错且指定 errors_csv 时）落盘错误明细。
     """
     report = ImportReport(entity=entity, dry_run=dry_run)
-    Base.metadata.create_all(bind=engine)  # 空库直跑（生产环境应先 alembic upgrade heads）
+    create_all_for_scripts(dry_run)  # 只在开发环境、非 dry-run 时建表（P2-1089，ADR-0002）
     db = SessionLocal()
     fieldnames: list[str] = []
     try:
