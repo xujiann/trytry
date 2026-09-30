@@ -4,7 +4,7 @@ from typing import cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import and_, case, func, update
+from sqlalchemy import String, and_, case, func, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -384,7 +384,7 @@ def submit_report(request_id: int, body: ExamReportCreate, db: Session = Depends
         db.add(
             CriticalAction(
                 report_id=report.id,
-                action=(
+                action=_critical_action_text(
                     f"危急值报告发布，已通知申请机构(org={request.from_org_id})"
                     f"在线用户与监管角色（定向推送）：{report.conclusion}"
                 ),
@@ -555,7 +555,7 @@ def resolve_critical(
     db.add(
         CriticalAction(
             report_id=report.id,
-            action=f"处置反馈：{body.note}" if body.note else "处置反馈完成",
+            action=_critical_action_text(f"处置反馈：{body.note}") if body.note else "处置反馈完成",
             actor=user.full_name or user.username,
         )
     )
@@ -730,6 +730,15 @@ class ReportTemplateOut(BaseModel):
     content: str
 
 
+#: `critical_actions.action` 的列宽（P1-232）：留痕里拼的是「前缀 + 报告结论」或「处置反馈：+ 反馈」，结论上限 1024、反馈 512，
+#: 列宽 512——结论长的危急值报告在 PG 上撞列宽即 500（开发库照存）：出不了报告、改判不了危急值、外部回传被兜成 422。
+#: 结论全文本来就在 exam_reports.conclusion 与修订史里，留痕只是一份副本：按列宽截断、末尾标「…」（P1-164 同一口径）
+CRITICAL_ACTION_MAX = cast(String, CriticalAction.__table__.c.action.type).length or 512
+
+
+def _critical_action_text(text: str) -> str:
+    return text if len(text) <= CRITICAL_ACTION_MAX else text[:CRITICAL_ACTION_MAX - 1] + "…"
+
 #: `exam_reports.critical_status` → 中文（§13「状态文案取自后端」，P2-72）：措辞与管理端危急值页（`CRIT_STATUS`）、指标下钻导出一致。
 #: 医生移动端（`m/doctor.js` 的 `CRITICAL_TAGS`）按接收方的视角另有一套说法（待确认 / 已接收，待处置 / 已闭环），同一个状态，不共用。
 #: 空串不在表里：非危急报告没有闭环状态，文案也是空串；存量危急报告（迁移前）的空串等同 notified（M-1 整改，确认接收两态都收），
@@ -884,8 +893,9 @@ def amend_report(
         db.add(
             CriticalAction(
                 report_id=report.id,
-                action=f"报告修订，危急值闭环状态复位为已通知，已重新通知申请机构"
-                       f"(org={req.from_org_id if req is not None else '未知'})：{report.conclusion}",
+                action=_critical_action_text(
+                    f"报告修订，危急值闭环状态复位为已通知，已重新通知申请机构"
+                    f"(org={req.from_org_id if req is not None else '未知'})：{report.conclusion}"),
                 actor=actor,
             )
         )

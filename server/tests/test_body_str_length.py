@@ -1020,3 +1020,47 @@ def test_手术名很长_术中记录照收_术后随访标题截断(client, adm
     with SessionLocal() as db:
         (task,) = db.query(FollowupTask).filter_by(category="surgery", source_id=rid).all()
         assert task.title == ("术后随访：" + "术" * 256)[:FOLLOWUP_TITLE_MAX]
+
+
+# 危急值处置留痕拼的是「前缀 + 报告结论」「处置反馈：+ 反馈」：结论上限 1024、反馈 512，留痕列宽 512——结论长的危急值报告
+# 在生产库上出不了（整单回滚、一条通知都没发）、普通报告改判为危急值的修订永远 500、RIS / LIS 回传被兜成 422（P1-232，第三十批
+# 「服务端拼出来的文本写进 String(N)」扫描 D1-1）。结论全文本来就在报告与修订史里，留痕按列宽截断。
+def test_结论很长的危急值_照常出报告改判与反馈_留痕截断(client, admin, world):
+    from app.database import SessionLocal
+    from app.models import CriticalAction
+    from app.routers.exams import CRITICAL_ACTION_MAX
+
+    assert CriticalAction.__table__.c.action.type.length == CRITICAL_ACTION_MAX
+
+    def order(code):
+        got = client.post("/api/exams", headers=admin, json={
+            "patient_id": world["patient"], "from_org_id": world["township"], "center_type": "lab",
+            "item_code": code, "item_name": "P1232 生化"})
+        assert got.status_code == 201, got.text
+        return got.json()["id"]
+
+    def actions(report_id):
+        with SessionLocal() as db:
+            return [a for (a,) in db.query(CriticalAction.action).filter_by(report_id=report_id).order_by(CriticalAction.id)]
+
+    report = client.post(f"/api/exams/{order('P1232-A')}/report", headers=admin, json={
+        "conclusion": "危" * 1024, "critical": True})
+    assert report.status_code == 201, (report.status_code, report.text[:200])   # 修前生产库 500
+    rid = report.json()["id"]
+    assert client.post(f"/api/exams/reports/{rid}/acknowledge", headers=admin).status_code == 200
+    resolved = client.post(f"/api/exams/reports/{rid}/resolve", headers=admin, json={"note": "处" * 512})
+    assert resolved.status_code == 200, (resolved.status_code, resolved.text[:200])   # 修前生产库 500
+    first, _, feedback = actions(rid)
+    assert first.startswith("危急值报告发布") and len(first) == CRITICAL_ACTION_MAX and first.endswith("…")
+    assert feedback.startswith("处置反馈：处") and len(feedback) == CRITICAL_ACTION_MAX
+
+    plain = client.post(f"/api/exams/{order('P1232-B')}/report", headers=admin, json={"conclusion": "常" * 900})
+    assert plain.status_code == 201, plain.text
+    amended = client.patch(f"/api/exams/reports/{plain.json()['id']}", headers=admin, json={"critical": True})
+    assert amended.status_code == 200, (amended.status_code, amended.text[:200])   # 修前生产库 500：改判永远改不成
+    (reset,) = actions(plain.json()["id"])
+    assert reset.startswith("报告修订，危急值闭环状态复位为已通知") and len(reset) == CRITICAL_ACTION_MAX
+    short = client.post(f"/api/exams/{order('P1232-C')}/report", headers=admin, json={
+        "conclusion": "血钾 7.1 mmol/L", "critical": True})
+    assert actions(short.json()["id"])[0].endswith("：血钾 7.1 mmol/L")   # 装得下的照原样，不加省略号
+
