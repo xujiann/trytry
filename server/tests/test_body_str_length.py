@@ -1064,3 +1064,38 @@ def test_结论很长的危急值_照常出报告改判与反馈_留痕截断(cl
         "conclusion": "血钾 7.1 mmol/L", "critical": True})
     assert actions(short.json()["id"])[0].endswith("：血钾 7.1 mmol/L")   # 装得下的照原样，不加省略号
 
+
+# 慢专病统一任务的标题多是拼出来的：「随访异常处置：{处置措施}」「干预执行：{干预目标}」，处置措施来自问卷异常规则（不设长度）、
+# 干预目标上限 256，任务标题列宽 128——生产库上重度异常的随访执行（结果、作答、分级、处置任务整笔回滚）与批量下发干预 500
+# （P2-1044，第三十批「服务端拼出来的文本写进 String(N)」扫描 D1-2）。汇合点 spawn_task 按列宽截断。
+def test_慢专病任务标题拼出来超列宽_随访执行与批量干预照常_标题截断(client, admin, world):
+    from app import clock
+    from app.database import SessionLocal
+    from app.spd.models import SpdFollowupRecord, SpdTask
+    from app.spd.service import SPD_TASK_TITLE_MAX
+
+    assert SpdTask.__table__.c.title.type.length == SPD_TASK_TITLE_MAX
+    action = "处" * 200
+    questionnaire = client.post("/api/spd/questionnaires", headers=admin, json={
+        "code": "p21044_q", "name": "P21044 问卷", "scene": "inpatient",
+        "items": [{"key": "pain", "title": "疼痛", "type": "number"}],
+        "abnormal_rules": [{"when": {"field": "pain", "op": ">=", "value": 7}, "level": "high", "action": action}]})
+    assert questionnaire.status_code == 201, questionnaire.text
+    with SessionLocal() as db:
+        record = SpdFollowupRecord(patient_id=world["patient"], program_code="hypertension", questionnaire_code="p21044_q",
+                                   org_id=world["township"], planned_at=clock.today().isoformat(), status="planned")
+        db.add(record)
+        db.commit()
+        record_id = record.id
+    done = client.post(f"/api/spd/followup-records/{record_id}/execute", headers=admin, json={"answers": {"pain": 9}})
+    assert done.status_code == 200, (done.status_code, done.text[:200])   # 修前生产库 500：重度异常的随访记不上
+    assert done.json()["action"] == action   # 回执里的处置措施照原样
+    goal = "干" * 256
+    batch = client.post("/api/spd/interventions", headers=admin, json={
+        "patient_ids": [world["patient"]], "program_code": "hypertension", "goal": goal, "content": "限盐"})
+    assert batch.status_code == 201, (batch.status_code, batch.text[:200])   # 修前生产库 500
+    with SessionLocal() as db:
+        titles = {t for (t,) in db.query(SpdTask.title).filter(SpdTask.patient_id == world["patient"])}
+    assert ("随访异常处置：" + action)[:SPD_TASK_TITLE_MAX] in titles
+    assert ("干预执行：" + goal)[:SPD_TASK_TITLE_MAX] in titles
+

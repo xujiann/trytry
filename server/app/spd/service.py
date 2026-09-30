@@ -14,7 +14,7 @@ import math
 from datetime import date, timedelta
 from typing import Any, cast
 
-from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy import String, and_, func, or_, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
@@ -555,6 +555,12 @@ def referral_last_moved_at():
     return func.coalesce(last_step, SpdReferralCase.created_at)
 
 
+#: 统一任务标题的列宽（P2-1044）：标题多是拼出来的——「随访异常处置：{处置措施}」「自助随访异常处置：{处置措施}」
+#: 「干预执行：{干预目标}」「{路径名}·{节点名}」，各段各自在上限内、拼起来就超：开发库照存，生产库撞列宽即 500，重度异常的
+#: 随访执行、居民自助作答、批量下发干预整笔回滚。这里是「所有任务都从这里出」的汇合点，按列宽截断（P1-164 同一口径）
+SPD_TASK_TITLE_MAX = cast(String, SpdTask.__table__.c.title.type).length or 128
+
+
 def spawn_task(
     db: Session,
     *,
@@ -591,7 +597,7 @@ def spawn_task(
         instance_id=instance.id if instance else None,
         node_key=node.key if node else "",
         task_type=task_type,
-        title=title,
+        title=title[:SPD_TASK_TITLE_MAX],
         org_id=org_id or (enrollment.org_id if enrollment else None),
         team_id=team_id or (enrollment.team_id if enrollment else None),
         assignee_id=usable_or_none(db, assignee_id or (enrollment.doctor_user_id if enrollment else None),
