@@ -10,6 +10,7 @@ from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
+from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
 from .. import clock
@@ -295,25 +296,36 @@ def cancel_followup(task_id: int, db: Session = Depends(get_db), user: User = De
 
 @router.get("/stats", response_model=list[FollowupCategoryStatsOut])
 def followup_stats(today: str | None = None, db: Session = Depends(get_db)):
-    """随访完成情况：按类别统计待随访/已完成/超期与完成率。"""
+    """随访完成情况：按类别统计待随访/已完成/超期与完成率。
+
+    在库里按类别、状态 GROUP BY，超期数用 `SUM(CASE WHEN 待随访 AND 到期日 < 截止日)`（P2-1151）：原先
+    `db.query(FollowupTask).all()` 把随访任务整表载入 ORM 再在内存里分组——每次进随访中心都调，任务到数十万条时一次约
+    8 s、0.5 GB（扫描外推）。同功能的慢专病统计（spd/routers/followup.py）本来就在库里分组；超期的比法与 `/overdue`
+    同一条（到期日字符串严格小于截止日）。判定一字不改。
+    """
     cutoff = resolve_business_date(today).isoformat()
-    rows = db.query(FollowupTask).all()
+    overdue = func.sum(case(((FollowupTask.status == "pending") & (FollowupTask.due_date < cutoff), 1), else_=0))
+    rows = (
+        db.query(FollowupTask.category, FollowupTask.status, func.count(FollowupTask.id), overdue)
+        .group_by(FollowupTask.category, FollowupTask.status)
+        .order_by(FollowupTask.category, FollowupTask.status)
+        .all()
+    )
     stats: dict[str, dict] = {}
-    for t in rows:
+    for category, status, count, overdue_count in rows:
         entry = stats.setdefault(
-            t.category,
+            category,
             {
-                "category": t.category,
-                "category_name": CATEGORY_TITLES.get(t.category, t.category),
+                "category": category,
+                "category_name": CATEGORY_TITLES.get(category, category),
                 "pending": 0,
                 "done": 0,
                 "cancelled": 0,
                 "overdue": 0,
             },
         )
-        entry[t.status] += 1
-        if t.status == "pending" and t.due_date < cutoff:
-            entry["overdue"] += 1
+        entry[status] += count
+        entry["overdue"] += overdue_count
     for entry in stats.values():
         # 完成率分母排除已取消：取消的任务不该拉低随访绩效
         denominator = entry["pending"] + entry["done"]
