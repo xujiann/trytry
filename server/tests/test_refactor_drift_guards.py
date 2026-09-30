@@ -944,6 +944,7 @@ SNAPSHOT_ENDPOINTS = {
     "POST /api/spd/tasks/{task_id}/claim",
     "POST /api/spd/tasks/{task_id}/complete",
     "POST /api/spd/tasks/{task_id}/escalate",
+    "POST /api/spd/tasks/{task_id}/evidence",   # P2-972：医护端上传佐证改走服务端锁内追加
     "POST /api/spd/tasks/{task_id}/review",
     "POST /api/spd/tasks/{task_id}/submit",
     "POST /api/spd/tasks/{task_id}/urge",

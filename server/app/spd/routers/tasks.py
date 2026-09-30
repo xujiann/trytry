@@ -1109,6 +1109,42 @@ def submit_task(
     return _task_out(task)
 
 
+class EvidenceAddIn(BaseModel):
+    attachment_id: int = Field(ge=1)
+
+
+@router.post("/tasks/{task_id}/evidence", response_model=TaskOut,
+             dependencies=[Depends(require_roles(*SERVICE_ROLES))])
+def add_task_evidence(
+    task_id: int, body: EvidenceAddIn, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """把一份已上传的附件记进任务的佐证清单（医护端「上传佐证」，P2-972）。
+
+    原先页面侧读改写：传成附件 → 取任务 → 旧清单加新附件 → 连同取到的办理结果以草稿整体提交（上面的 `submit_task`
+    整体替换结果与佐证）。两位医护交错上传，清单里只剩后写的那个附件；上传佐证还把别人刚保存的办理结果改回取任务时的
+    旧值。与居民端（`portal.upload_task_evidence`，P2-303）同一个写法：锁住任务这一行、重读、再追加，已在清单里的不重复记，
+    不碰办理结果。与原先走的保存草稿一样把待接收 / 已接收 / 已退回的翻成办理中；待审核、已结束的 409（P2-758 / P2-789：
+    审核人看的佐证清单不能被悄悄换掉），不属于这个任务的附件 422（与提交同一个校验）。
+    """
+    task = _load_task(db, task_id, user)
+    with serialized_on(db, SpdTask, task.id):
+        db.refresh(task)
+        if task.status not in TASK_COMPLETABLE_STATUSES:
+            db.rollback()
+            raise HTTPException(status_code=409, detail=AWAITING_REVIEW if task.status == "submitted"
+                                else "该任务已结束")
+        problems = valid_task_evidence(db, task.id, [body.attachment_id])
+        if problems:
+            db.rollback()
+            raise HTTPException(status_code=422, detail="；".join(problems))
+        if str(body.attachment_id) not in {str(e) for e in task.evidence or []}:
+            task.evidence = [*(task.evidence or []), body.attachment_id]
+        _submit_move(db, task, "doing")
+        db.commit()
+    return _task_out(task)
+
+
 def _submit_move(db: Session, task: SpdTask, to_status: str) -> None:
     """提交 / 草稿的条件翻转：只从能直接办结的状态翻（P2-758）。锁外读到办理中、这时别人刚提交审核的，同样 409、
     不覆盖——回话按库里的现状说：待审核的说须由审核人审，其余说已结束（与 `_finish_task` 同一个判法）。"""

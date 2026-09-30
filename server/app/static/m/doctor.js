@@ -242,8 +242,9 @@ async function loadSpdTodo(box) {
     await spdPost(`/api/spd/tasks/${b.dataset.spdClaim}/claim`);
   }));
   box.querySelectorAll("[data-spd-evidence]").forEach((b) => b.addEventListener("click", () => {
-    // 佐证 = 挂在该任务名下的附件（owner_type=spd_task）。上传后以「保存草稿」把附件编号写进任务的佐证清单
-    // （要带上已有的，后端整体替换）——与管理端「上传佐证」同一走法，办结时后端再核一遍
+    // 佐证 = 挂在该任务名下的附件（owner_type=spd_task）。上传后由后端把附件编号追加进任务的佐证清单——与管理端「上传佐证」
+    // 同一走法，办结时后端再核一遍。追加在服务端锁内做（P2-972）：原先页面取任务、带着取到的办理结果以草稿整体写回，
+    // 交错上传丢佐证、改回别人刚保存的办理结果
     const input = document.createElement("input");
     input.type = "file";
     input.accept = "image/*,.pdf";
@@ -252,11 +253,9 @@ async function loadSpdTodo(box) {
       const taskId = b.dataset.spdEvidence;
       try {
         const att = await uploadAttachment("spd_task", taskId, input.files[0]);
-        const t = await api(`/api/spd/tasks/${taskId}`);
-        const ids = [...(t.evidence || []).map(Number).filter(Boolean), att.id];
-        await api(`/api/spd/tasks/${taskId}/submit`, { method: "POST",
-          body: JSON.stringify({ result: t.result || {}, evidence: ids, draft: true }) });
-        $("#spd-msg").textContent = `佐证已上传（共 ${ids.length} 份），办结时一并核验`;
+        const t = await api(`/api/spd/tasks/${taskId}/evidence`, { method: "POST",
+          body: JSON.stringify({ attachment_id: att.id }) });
+        $("#spd-msg").textContent = `佐证已上传（共 ${(t.evidence || []).length} 份），办结时一并核验`;
         await loadSpdTab();
       } catch (err) {
         $("#spd-msg").textContent = err.message;

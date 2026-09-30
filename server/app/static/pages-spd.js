@@ -2443,8 +2443,9 @@ async function renderSpdPath() {
       return;
     }
     if (evidence) {
-      // 佐证 = 挂在该任务名下的附件（owner_type=spd_task）。上传后用"保存草稿"把附件 id
-      // 写进任务的 evidence 清单（要带上已有的，后端是整体替换），最终提交时后端再核一遍。
+      // 佐证 = 挂在该任务名下的附件（owner_type=spd_task）。上传后由后端把附件编号追加进任务的佐证清单，最终提交时后端再核一遍。
+      // 追加在服务端锁内做（P2-972）：原先页面取任务、旧清单加新附件、连同取到的办理结果以草稿整体提交——两位医护交错上传
+      // 只剩后写的那个，还把别人刚保存的办理结果改回旧值
       const taskId = evidence.dataset.taskEvidence;
       const input = document.createElement("input");
       input.type = "file";
@@ -2452,11 +2453,9 @@ async function renderSpdPath() {
       input.onchange = async () => {
         try {
           const att = await uploadAttachment("spd_task", taskId, input);
-          const t = await api(`/api/spd/tasks/${taskId}`);
-          const ids = [...(t.evidence || []).map(Number).filter(Boolean), att.id];
-          await api(`/api/spd/tasks/${taskId}/submit`, { method: "POST",
-            body: JSON.stringify({ result: t.result || {}, evidence: ids, draft: true }) });
-          setMsg("#spd-task-msg", `佐证 #${att.id} 已挂到任务 #${taskId}（共 ${ids.length} 份），提交时会一并核验`);
+          const t = await api(`/api/spd/tasks/${taskId}/evidence`, { method: "POST",
+            body: JSON.stringify({ attachment_id: att.id }) });
+          setMsg("#spd-task-msg", `佐证 #${att.id} 已挂到任务 #${taskId}（共 ${(t.evidence || []).length} 份），提交时会一并核验`);
           await drawTasks(lastTaskQuery);
         } catch (err) { setMsg("#spd-task-msg", err.message, false); }
       };
