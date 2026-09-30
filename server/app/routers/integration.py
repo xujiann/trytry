@@ -21,7 +21,9 @@ import base64
 import contextlib
 import json
 import logging
+import os
 import re
+import secrets
 from pathlib import Path
 from typing import Any, cast
 
@@ -1563,10 +1565,17 @@ def run_fhir_batch_export(db: Session) -> tuple[int, str]:
       前置机按 manifest 拉取；
     - 修订过的检查报告再导一次（P2-102）：`DiagnosticReport_amended_*.ndjson`，资源 `status="amended"`、内容是修订后
       的当前版本，manifest 行带 `"kind": "amended"`、id 区间是修订史的主键，水位另记一个 key；
+    - **落盘先于推进水位**（P2-1114）：NDJSON 先写进同目录的临时文件（独占创建）、fsync、`os.replace` 换名，manifest
+      追加后 fsync，然后才提交水位。水位一推进，这批行就不会再导——原先写完不 fsync 就提交，文件与 manifest 还在页缓存
+      里时掉电，重启后文件缺失或为空、manifest 少行，这批数据永远到不了省平台。与归档任务「落盘先于删行」同一口径
+      （`jobs._fsync`）；落盘失败照实抛出，水位不动，下一轮重导；
     - **待办（不假装）**：映射表其余资源（Prescription→MedicationRequest、
       Referral→ServiceRequest、Consultation、CarePlan、Appointment 等）尚未
       纳入批量导出，扩展时在本函数追加资源类型并配套新水位 key。
     """
+    # 惰性导入：模块级只有 jobs → routers 一个方向（jobs 那头也是惰性导入本函数）
+    from ..jobs import _fsync
+
     out_dir = _fhir_out_dir()
     stamp = now_naive().strftime("%Y%m%d%H%M%S")
     total = 0
@@ -1578,9 +1587,19 @@ def run_fhir_batch_export(db: Session) -> tuple[int, str]:
         if not rows:
             return
         filename = f"{resource_type}_{kind + '_' if kind else ''}{stamp}_{rows[0][0]}.ndjson"
-        with (out_dir / filename).open("w", encoding="utf-8") as f:
-            for _row_id, resource in rows:
-                f.write(json.dumps(resource, ensure_ascii=False) + "\n")
+        # 落盘先于推进水位（P2-1114）：临时文件写完 fsync 再换名，前置机按文件名只会看到完整的文件；别把 _fsync 挪到
+        # _wm_set 之后。临时文件随机后缀、独占创建：调度锁失效窗口里两路同秒导出，也不会写进同一个临时文件
+        tmp = out_dir / f".{filename}.{secrets.token_hex(4)}.tmp"
+        fh = tmp.open("x", encoding="utf-8")
+        try:
+            with fh:
+                for _row_id, resource in rows:
+                    fh.write(json.dumps(resource, ensure_ascii=False) + "\n")
+                _fsync(fh)
+            os.replace(tmp, out_dir / filename)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
         with (out_dir / "manifest.jsonl").open("a", encoding="utf-8") as f:
             f.write(
                 json.dumps(
@@ -1597,6 +1616,7 @@ def run_fhir_batch_export(db: Session) -> tuple[int, str]:
                 )
                 + "\n"
             )
+            _fsync(f)  # manifest 是前置机拉取的账本：这一行落盘之前不能推进水位（P2-1114）
         _wm_set(db, FHIR_EXPORT_WM_KEYS[resource_type + ("Amended" if kind == "amended" else "")], rows[-1][0])
         total += len(rows)
         parts.append(f"{resource_type}{'（修订）' if kind else ''} {len(rows)} 条")
