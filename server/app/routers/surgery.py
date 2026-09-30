@@ -313,19 +313,6 @@ def _canonical_date(model):
     return model.scheduled_date.like("____-__-__")
 
 
-def _occupies(s: "SurgerySchedule", body: "ScheduleIn") -> bool:
-    """这条已排的占不占新排的时段：同一天，且 `已排 start < 新 end`、`已排 end > 新 start`。
-
-    存量行按日历读（P2-894）：P1-61 / P2-46 之前日期、时刻都不卡形状，「2026-10-5」等值比不上「2026-10-05」、
-    「０８:００」按字符串比排在一切半角时刻之后——同一手术间同一时段又排进一台（与 P1-117 同一个后果）。时刻认不出
-    的按占满当天算：宁可拦下让人核对，也不把两台排进同一手术间。
-    """
-    if legacy_date(s.scheduled_date) != body.scheduled_date:
-        return False
-    start, end = legacy_time(s.start_time), legacy_time(s.end_time)
-    return start is None or end is None or (start < body.end_time and end > body.start_time)
-
-
 class ScheduleIn(BaseModel):
     room_id: int
     scheduled_date: DateStr
@@ -370,7 +357,9 @@ def schedule_surgery(
         raise HTTPException(status_code=422, detail="结束时间须晚于开始时间")
 
     with serialized_on(db, OperatingRoom, room.id):
-        # 同手术间当天的，加上日期不是规范写法的存量行（P2-894），逐条按日历读了再判重叠
+        # 同手术间当天的，加上日期不是规范写法的存量行，逐条按日历读了再判重叠（P2-894）：P1-61 / P2-46 之前日期、时刻
+        # 都不卡形状，「2026-10-5」等值比不上「2026-10-05」、「０８:００」按字符串比排在一切半角时刻之后——同一手术间同一
+        # 时段又排进一台（与 P1-117 同一个后果）。时刻认不出的按占满当天算：宁可拦下让人核对，也不把两台排进同一手术间
         candidates = (
             db.query(SurgerySchedule)
             .filter(
@@ -380,12 +369,14 @@ def schedule_surgery(
             .order_by(SurgerySchedule.start_time, SurgerySchedule.id)
             .all()
         )
-        conflict = next((s for s in candidates if _occupies(s, body)), None)
-        if conflict is not None:
-            raise HTTPException(
-                status_code=409,
-                detail=f"手术间在 {conflict.start_time}-{conflict.end_time} 已被占用",
-            )
+        for taken in candidates:
+            start, end = legacy_time(taken.start_time), legacy_time(taken.end_time)
+            if legacy_date(taken.scheduled_date) == body.scheduled_date and (
+                    start is None or end is None or (start < body.end_time and end > body.start_time)):
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"手术间在 {taken.start_time}-{taken.end_time} 已被占用",
+                )
 
         # D-1：排班记录、申请状态、患者通知必须同进同出。此处原先分两次 commit，
         # 第二次之前中断就会留下"排班已落库、申请仍是 approved"的死结——重排被唯一
@@ -436,18 +427,20 @@ def list_schedules(
     # 日期不是规范写法的存量行（P1-61 之前存下的「2026-9-5」「2026/10/05」）按日历读了再筛再排（P2-894）：原先按字符串比，
     # 「2026-9-5」同一年里比任何规范日期都「晚」，早过去的旧排班一直挂在「今天及以后」；查某一天也漏掉同一天的旧写法
     today = clock.today().isoformat()
+    if room_id is not None:
+        query = query.filter(SurgerySchedule.room_id == room_id)
+    # 规范写法的按字符串筛、排、取前 300；日期不是规范写法的存量行（P1-61 之前）数量有限，另取出来按日历读了再并进来
+    # 重排（最终的前 300 里规范写法的那些必在规范写法的前 300 里，结果不变）
     if scheduled_date:
         # 等值匹配：`2026-9-1` 会让"这天没有手术排班"，不报错（P1-58）
         scheduled_date = require_date(scheduled_date, field="scheduled_date")
-        query = query.filter(or_(SurgerySchedule.scheduled_date == scheduled_date, ~_canonical_date(SurgerySchedule)))
+        canonical = query.filter(SurgerySchedule.scheduled_date == scheduled_date)
     else:
-        query = query.filter(or_(SurgerySchedule.scheduled_date >= today, ~_canonical_date(SurgerySchedule)))
-    if room_id is not None:
-        query = query.filter(SurgerySchedule.room_id == room_id)
-    found = []
-    for s, r, room in query.order_by(
+        canonical = query.filter(SurgerySchedule.scheduled_date >= today)
+    found = [(s.scheduled_date, s, r, room) for s, r, room in canonical.filter(_canonical_date(SurgerySchedule)).order_by(
         SurgerySchedule.scheduled_date, SurgerySchedule.room_id, SurgerySchedule.start_time
-    ).all():
+    ).limit(300).all()]
+    for s, r, room in query.filter(~_canonical_date(SurgerySchedule)).order_by(SurgerySchedule.id).all():
         day = legacy_date(s.scheduled_date)
         if day is not None and (day == scheduled_date if scheduled_date else day >= today):
             found.append((day, s, r, room))
