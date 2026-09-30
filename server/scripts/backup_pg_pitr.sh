@@ -16,6 +16,9 @@
 #   0 1 * * 0  scripts/backup_pg_pitr.sh full
 #   0 1 * * 1-6 scripts/backup_pg_pitr.sh diff
 # RPO 由 WAL 归档保证（archive_timeout 兜底），不靠备份频率。
+# 用 `sh 脚本` 调用（运维手册与 crontab 的写法）时 sh 无视 shebang：Debian 系的 /bin/sh 是 dash，下一行的 pipefail
+# 它执行不了、当场退出，备份 / 恢复一次都没跑成（P1-234）。不是 bash 就换 bash 重新执行自己
+[ -n "${BASH_VERSION:-}" ] || exec bash "$0" "$@"
 set -euo pipefail
 
 MODE="${1:-}"

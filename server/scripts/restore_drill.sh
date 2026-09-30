@@ -5,6 +5,9 @@
 # 这个脚本的意义就是把"那时候"提前到平时，且不碰生产数据。
 #
 # 用法：scripts/restore_drill.sh <备份包路径>
+# 用 `sh 脚本` 调用（运维手册与 crontab 的写法）时 sh 无视 shebang：Debian 系的 /bin/sh 是 dash，下一行的 pipefail
+# 它执行不了、当场退出，备份 / 恢复一次都没跑成（P1-234）。不是 bash 就换 bash 重新执行自己
+[ -n "${BASH_VERSION:-}" ] || exec bash "$0" "$@"
 set -euo pipefail
 
 ARCHIVE="${1:?用法：scripts/restore_drill.sh <备份包路径>}"

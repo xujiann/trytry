@@ -14,6 +14,9 @@
 # 这一点写在这里而不是留给使用者猜——"以为备份了其实恢复不了"是备份最常见的坑。
 #
 # 用法：scripts/spd_backup.sh [输出目录]（默认 ./backups）
+# 用 `sh 脚本` 调用（运维手册与 crontab 的写法）时 sh 无视 shebang：Debian 系的 /bin/sh 是 dash，下一行的 pipefail
+# 它执行不了、当场退出，备份 / 恢复一次都没跑成（P1-234）。不是 bash 就换 bash 重新执行自己
+[ -n "${BASH_VERSION:-}" ] || exec bash "$0" "$@"
 set -euo pipefail
 
 OUT_DIR="${1:-./backups}"
@@ -56,7 +59,9 @@ PYDUMP
     ;;
   postgresql*)
     # -t 支持通配；--data-only 与 --schema-only 视用途选择，这里连结构一起导
-    pg_dump "$DB_URL" -t "${PREFIX}*" -f "$OUT"
+    # libpq 不认 SQLAlchemy 的驱动后缀（运维手册写的 postgresql+psycopg2://，Alembic 与本脚本共用）：原样交给它，整串被当成
+    # 库名、去连本机默认 socket（P1-234）——去掉驱动后缀再交
+    pg_dump "postgresql://${DB_URL#*://}" -t "${PREFIX}*" -f "$OUT"
     ;;
   *)
     echo "不认识的数据库类型，请按 docs/信创适配与备份容灾.md 补充导出命令" >&2

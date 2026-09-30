@@ -8,6 +8,9 @@
 # 恢复时比对；不一致就明确告警，不静默恢复。
 #
 # 用法：scripts/backup.sh [输出目录]（默认 ./backups）
+# 用 `sh 脚本` 调用（运维手册与 crontab 的写法）时 sh 无视 shebang：Debian 系的 /bin/sh 是 dash，下一行的 pipefail
+# 它执行不了、当场退出，备份 / 恢复一次都没跑成（P1-234）。不是 bash 就换 bash 重新执行自己
+[ -n "${BASH_VERSION:-}" ] || exec bash "$0" "$@"
 set -euo pipefail
 
 OUT_DIR="${1:-./backups}"
@@ -47,7 +50,9 @@ PYBACKUP
     ;;
   postgresql*)
     # -Fc 自定义格式：支持并行恢复，且体积小
-    pg_dump -Fc "$DB_URL" -f "$WORK/database.dump"
+    # libpq 不认 SQLAlchemy 的驱动后缀（运维手册写的 postgresql+psycopg2://，Alembic 与本脚本共用）：原样交给它，整串被当成
+    # 库名、去连本机默认 socket（P1-234）——去掉驱动后缀再交
+    pg_dump -Fc "postgresql://${DB_URL#*://}" -f "$WORK/database.dump"
     ;;
   *)
     echo "不认识的数据库类型，请按 docs/信创适配与备份容灾.md 补充对应导出命令" >&2

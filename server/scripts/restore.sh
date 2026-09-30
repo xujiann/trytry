@@ -5,6 +5,9 @@
 # 审计哈希链会全部验不过，而那时人们通常会误以为是"审计被篡改了"。
 #
 # 用法：scripts/restore.sh <备份包路径> [--force]
+# 用 `sh 脚本` 调用（运维手册与 crontab 的写法）时 sh 无视 shebang：Debian 系的 /bin/sh 是 dash，下一行的 pipefail
+# 它执行不了、当场退出，备份 / 恢复一次都没跑成（P1-234）。不是 bash 就换 bash 重新执行自己
+[ -n "${BASH_VERSION:-}" ] || exec bash "$0" "$@"
 set -euo pipefail
 
 ARCHIVE="${1:?用法：scripts/restore.sh <备份包路径> [--force]}"
@@ -55,7 +58,9 @@ case "$DB_URL" in
     cp "$WORK/database.sqlite" "$DB_PATH"
     ;;
   postgresql*)
-    pg_restore --clean --if-exists -d "$DB_URL" "$WORK/database.dump"
+    # libpq 不认 SQLAlchemy 的驱动后缀（运维手册写的 postgresql+psycopg2://，Alembic 与本脚本共用）：原样交给它，整串被当成
+    # 库名、去连本机默认 socket（P1-234）——去掉驱动后缀再交
+    pg_restore --clean --if-exists -d "postgresql://${DB_URL#*://}" "$WORK/database.dump"
     ;;
 esac
 

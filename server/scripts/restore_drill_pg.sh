@@ -15,6 +15,9 @@
 # 无 PG 环境（缺 pgbackrest 或 pg_ctl）或传 --dry-run 时进入 dry-run：
 # 只打印将执行的步骤并成功退出，供在办公机上评审流程；真实演练必须在
 # 装有 pgBackRest 仓库访问权的 PG 机器上跑。
+# 用 `sh 脚本` 调用（运维手册与 crontab 的写法）时 sh 无视 shebang：Debian 系的 /bin/sh 是 dash，下一行的 pipefail
+# 它执行不了、当场退出，备份 / 恢复一次都没跑成（P1-234）。不是 bash 就换 bash 重新执行自己
+[ -n "${BASH_VERSION:-}" ] || exec bash "$0" "$@"
 set -euo pipefail
 
 DRY_RUN=0
@@ -67,7 +70,7 @@ echo "-- [3/5] 迁移版本校验：alembic current 必须能连上并给出版�
 run env MEDPLAT_DATABASE_URL="$DRILL_DB_URL" alembic -c "$(dirname "$0")/../alembic.ini" current
 
 echo "-- [4/5] 健康查询：核心表可读、行数非负（抽查患者/用户/审计）"
-run psql "$DRILL_DB_URL" -At \
+run psql "postgresql://${DRILL_DB_URL#*://}" -At \
   -c "SELECT 'users', count(*) FROM users;" \
   -c "SELECT 'patients', count(*) FROM patients;" \
   -c "SELECT 'audit_logs', count(*) FROM audit_logs;"
