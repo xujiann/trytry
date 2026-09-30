@@ -157,6 +157,55 @@ def _seed_step(db, name: str, step) -> None:
         )
 
 
+#: 库里还没跑到的迁移 head（P2-1141）：生产那一支启动时比对一次，`/api/health` 据此回 503。开发 / 测试走 create_all、
+#: 不比对，恒为空；停机时清掉，同一进程里再起一次（测试就是这样）不带上一次的结论。
+_unapplied_heads: list[str] = []
+
+
+def _unapplied_migration_heads() -> list[str]:
+    """本版迁移脚本的 heads（平台链 + spd 链）里、库还没跑到的那几个；缺了就在 ERROR 日志里点名（P2-1141）。
+
+    生产不 `create_all`（ADR-0002），结构全靠起服务前的 `alembic upgrade heads`（`start.sh`；多实例时是发布流程第 2 步）。
+    漏跑——多实例设了 `MEDPLAT_MIGRATE_ON_START=0` 却忘了单独那一步、裸机没配 `ExecStartPre`、升级漏跑一版——实例照样
+    起来：种子块逐个报 ERROR 跳过，`/api/health` 只探 `SELECT 1`、照回 200 ok，负载均衡照常放流量，业务请求全 500。
+    ADR-0002 写下的缓解「启动健康检查」此前没接上。不拒启、迁移机制不动：比对出缺口就点名进日志，health 回 503，
+    让探针把这个实例摘掉。
+
+    只判「库落后」：只回代码不回库是 `docs/发布流程.md` 的首选回滚，旧代码跑在新库上——库里有本版不认识的版本，本版的
+    head 多半是它的祖先，判不出来就不判缺。所以一个 head 只在两种情形下算缺：库里有认得的版本落在它上游（落后），或
+    库里没有一个不认识的版本（这条链没跑到，含空库、没有 `alembic_version` 表）。
+
+    比对本身不能拖垮启动：查不动（库连不上、迁移脚本不在）只记 WARNING、按不缺处理——库连不上时 health 的 `SELECT 1`
+    自会回 503。
+    """
+    try:
+        from alembic.config import Config
+        from alembic.runtime.migration import MigrationContext
+        from alembic.script import ScriptDirectory
+
+        script = ScriptDirectory.from_config(Config(str(Path(__file__).resolve().parents[1] / "alembic.ini")))
+        revisions = {rev.revision: rev for rev in script.walk_revisions()}
+        with engine.connect() as conn:
+            applied = set(MigrationContext.configure(conn).get_current_heads())
+        unknown = applied - revisions.keys()
+        missing = [
+            head for head in script.get_heads()
+            if head not in applied
+            and (applied & {rev.revision for rev in script.iterate_revisions(head, "base")} or not unknown)
+        ]
+    except Exception:  # noqa: BLE001 - 比对是旁路，失败不能拖垮启动
+        _seed_logger.warning("启动期未能比对数据库的迁移版本，本次不判（库连不上时 /api/health 照样回 503）", exc_info=True)
+        return []
+    if missing:
+        _seed_logger.error(
+            "数据库未迁移到当前版本：缺迁移 head %s（库里是 %s）。先 alembic upgrade heads（复数），再重启本实例——"
+            "在此之前 /api/health 回 503，碰到缺表缺列的种子块与业务请求都会报错",
+            "、".join(f"{head}（{'spd 链' if 'spd' in revisions[head].branch_labels else '平台链'}）" for head in missing),
+            "、".join(sorted(applied)) or "空，一次迁移都没跑过",
+        )
+    return missing
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     # ADR-0002：生产环境停用 create_all，结构变更统一走 alembic（部署产物在启动前
@@ -165,6 +214,8 @@ async def lifespan(_: FastAPI):
     # 零配置起库。
     if not settings.is_production:
         Base.metadata.create_all(bind=engine)
+    # 生产那一支比对库里的迁移版本（P2-1141，见 `_unapplied_migration_heads`）；开发 / 测试 create_all 建库，不比对
+    _unapplied_heads[:] = _unapplied_migration_heads() if settings.is_production else []
     # 多实例串行化（见 _seed_step 上方注释）：锁挂在专用连接上，覆盖整个种子阶段
     seed_lock_conn = None
     if engine.dialect.name == "postgresql":  # pragma: no cover - 需真实 PG
@@ -398,6 +449,7 @@ async def lifespan(_: FastAPI):
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task
+        _unapplied_heads.clear()   # 比对结论只属于这一次启动（P2-1141）
 
 
 app = FastAPI(
@@ -870,10 +922,13 @@ class HealthOut(BaseModel):
     status: str        # ok / degraded
     service: str
     version: str
-    database: str      # ok / error
+    database: str      # ok / error（只管连通：连得上、却没迁移到当前版本的，看 reason）
+    # 为什么不健康，目前只写「数据库未迁移到当前版本」这一种（P2-1141）；没有原因时不出这个键
+    # （response_model_exclude_none），200 与库不通的 503 响应字节都与原先一致
+    reason: str | None = None
 
 
-@app.get("/api/health", tags=["平台"], response_model=HealthOut)
+@app.get("/api/health", tags=["平台"], response_model=HealthOut, response_model_exclude_none=True)
 def health(response: Response):
     """健康检查：附带数据库连通性探测。
 
@@ -885,6 +940,11 @@ def health(response: Response):
 
     响应体逐字节不变（`status` 仍是 "degraded"，字段不增不减），改的只有状态码；
     `start.sh` 的启动等待循环不用 raise_for_status，只判"HTTP 通不通"，不受影响。
+
+    **库没迁移到当前版本同样回 503**（P2-1141）：生产启动时比对出的缺口（`_unapplied_migration_heads`）。
+    连得上库、表却缺着，`SELECT 1` 照样成功，原先回 200 ok——实例留在轮询里，业务请求全 500。
+    `status` 记 degraded、`database` 照实记连通，另写 `reason`；缺哪个 head 只进启动日志，不在这个免登录的接口上回显。
+    比对只在启动时做一次：补跑迁移后要重启实例，启动时跳过的种子块也靠重启补种。
     """
     db_status = "ok"
     try:
@@ -892,14 +952,16 @@ def health(response: Response):
             conn.execute(text("SELECT 1"))
     except Exception:  # noqa: BLE001 - 任何数据库异常均判定为不可用
         db_status = "error"
-    if db_status != "ok":
+    if db_status != "ok" or _unapplied_heads:
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
     payload = {
-        "status": "ok" if db_status == "ok" else "degraded",
+        "status": "ok" if db_status == "ok" and not _unapplied_heads else "degraded",
         "service": "medplat",
         "version": app.version,
         "database": db_status,
     }
+    if _unapplied_heads:
+        payload["reason"] = "数据库未迁移到当前版本：先 alembic upgrade heads，再重启本实例（缺哪个迁移 head 见启动日志）"
     return payload
 
 
