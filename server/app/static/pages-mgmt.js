@@ -83,7 +83,8 @@ async function renderClinicalDocs() {
          <td>${esc(n.doctor_name)}</td><td>${esc(n.content)}</td></tr>`)}`)}
     ${panel(`护理记录（${nursing.length}）`, `
       <form class="inline" id="nursing-form">
-        <select name="nursing_level">${Object.entries(NURSING_LEVELS).map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}</select>
+        <select name="nursing_level">${Object.entries(NURSING_LEVELS).map(([k, v]) =>
+          `<option value="${k}"${k === INPATIENT_NURSING_DEFAULT ? " selected" : ""}>${v}</option>`).join("")}</select>
         <input name="nurse_name" placeholder="护士">
         <select name="inpatient_order_id"><option value="">关联医嘱（执行某条医嘱时选，可空）</option>${
           activeOrders.map((o) => `<option value="${o.id}">#${o.id} ${o.order_type === "long" ? "长期" : "临时"} ${

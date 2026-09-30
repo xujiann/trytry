@@ -1361,3 +1361,6 @@ $("#logout").onclick = logout;
 const NOTE_TYPES = { first: "首次病程", daily: "日常病程", ward_round: "上级查房",
   rescue: "抢救记录", consultation: "会诊记录", discharge: "出院记录" };
 const NURSING_LEVELS = { special: "特级护理", level1: "一级护理", level2: "二级护理", level3: "三级护理" };
+// 住院护理记录的缺省级别与接口（`clinical_docs.NursingIn`）、表列缺省同一个（P2-988）：下拉原先按键序、没有预选，护士不动
+// 就送首项「特级护理」，二级、三级护理的患者在护理记录上一律成了特级；门急诊那张表单本就预选了它自己接口的缺省
+const INPATIENT_NURSING_DEFAULT = "level2";
