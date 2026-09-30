@@ -513,9 +513,12 @@ class MaterialStatsOut(BaseModel):
 
 @router.get("/material-stats", response_model=MaterialStatsOut)
 def material_stats(db: Session = Depends(get_db)):
-    """课件点播排行（前 20）与总点播量。"""
+    """课件点播排行（前 20）与总点播量。
+
+    点播量并列按课件编号（P2-965）：原先没有尾键——25 个课件只有 4 个被点过，榜单 20 行里 16 行是 0 次，而 21 个 0 次的
+    里列哪 16 个由库的返回次序决定（每点播一次就 UPDATE 一次，PG 上这个次序跟着变）。零次的照旧列在后面（按编号）。"""
     materials = (
-        db.query(CourseMaterial).order_by(CourseMaterial.play_count.desc()).limit(20).all()
+        db.query(CourseMaterial).order_by(CourseMaterial.play_count.desc(), CourseMaterial.id).limit(20).all()
     )
     total_plays = db.query(func.coalesce(func.sum(CourseMaterial.play_count), 0)).scalar() or 0
     return {
