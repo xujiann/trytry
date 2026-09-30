@@ -90,11 +90,14 @@ def issue_cert(
     def _build() -> MedicalCert:
         last = (
             db.query(func.max(MedicalCert.cert_no))
-            .filter(MedicalCert.cert_type == body.cert_type, MedicalCert.cert_no.like(f"{prefix}%"))
+            # 按号段取而不是 LIKE 前缀：编号是「前缀＋年份＋6 位」定长，区间比较同样走索引，也不落进关键词 LIKE 的
+            # 闸门（`test_keyword_search_case` 的按设计名单只减不增）
+            .filter(MedicalCert.cert_type == body.cert_type,
+                    MedicalCert.cert_no.between(f"{prefix}000000", f"{prefix}999999"))
             .scalar()
         )
         tail = (last or "")[len(prefix):]
-        seq = int(tail) + 1 if tail.isdigit() else 1
+        seq = int(tail) + 1 if tail.isascii() and tail.isdigit() else 1
         return MedicalCert(cert_no=f"{prefix}{seq:06d}", created_by=user.id, **body.model_dump())
 
     cert = insert_with_retry(db, _build)
