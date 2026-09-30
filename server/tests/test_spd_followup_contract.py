@@ -484,8 +484,8 @@ def test_自动匹配两条分支键集不同(client, auth, world):
     assert world["auto_empty"] == {"matched": 0, "created": 0,
                                    "note": "没有配置了诊断关键词的可用方案"}
     assert world["auto_keys"] == ["scanned", "matched", "created"]
-    # 机构 7 日内就诊 3 条（患者一门诊+住院、患者二门诊），只有患者二命中
-    assert world["auto"] == {"scanned": 3, "matched": 1, "created": 1}
+    # 机构 7 日内就诊 3 条（患者一门诊+住院、患者二门诊），门诊场景不扫住院类就诊（P2-918）→ 扫 2 条，只有患者二命中
+    assert world["auto"] == {"scanned": 2, "matched": 1, "created": 1}
 
 
 def test_随访统计完整精确(client, auth, world):

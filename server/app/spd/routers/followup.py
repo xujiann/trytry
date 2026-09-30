@@ -798,13 +798,13 @@ def auto_match_plans(
             for a in rows
         ]
     else:
-        encounters = (
-            db.query(Encounter)
-            .filter(Encounter.org_id == org_id, Encounter.created_at >= since)
-            .order_by(Encounter.id.desc())
-            .limit(body.limit)
-            .all()
-        )
+        query = db.query(Encounter).filter(Encounter.org_id == org_id, Encounter.created_at >= since)
+        if body.scene == "outpatient":
+            # 门诊场景不扫住院类就诊（P2-918，与门急诊文书 P2-264 同一句）：入院登记会建一条 `encounter_type="inpatient"`
+            # 的就诊，原先照扫——住院患者按入院日 +7 天被排上门诊随访（多半还在院），出院后住院方案再派一套。术后、体检
+            # 场景借用门诊就诊的口径另见 P2-91
+            query = query.filter(Encounter.encounter_type != "inpatient")
+        encounters = query.order_by(Encounter.id.desc()).limit(body.limit).all()
         candidates = [
             (e.patient_id, clock.to_local(e.created_at).date().isoformat(),
              f"{e.diagnosis_name or ''}{e.diagnosis_code or ''}")
