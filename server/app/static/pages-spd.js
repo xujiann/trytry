@@ -63,6 +63,15 @@ function spdPairs(obj, names) {
   return Object.entries(obj || {}).map(([k, v]) => [(names || {})[k] || k || "未填", v]);
 }
 
+/** 风险分层的柱按严重程度排（低 → 中 → 高 → 极高），库里的其他取值（未分级等）跟在后面（P2-967）：
+ * 后端按风险编码分组、键序是字母序，原样画出来是「高危、低危、中危、极高危」。 */
+function spdRiskPairs(obj) {
+  const src = obj || {};
+  const tiers = Object.keys(SPD_RISK);
+  const keys = [...tiers.filter((k) => k in src), ...Object.keys(src).filter((k) => !tiers.includes(k))];
+  return keys.map((k) => [SPD_RISK[k]?.[0] || k || "未填", src[k]]);
+}
+
 // activeOnly：筛查 / 自动识别 / 建档这类「开新业务」的表单只列启用的病种——停用的病种
 // 后端一概拒（P1-89）；筛选栏仍列全部，看历史要用
 /** 逗号 / 顿号 / 空白分隔的一串拆成数组（危险因素、并发症这类 list[str] 字段，P2-858）。 */
@@ -828,8 +837,7 @@ async function renderSpdHealthCommission() {
     ${panel("病种分布（在管）",
       barChart(spdPairs(region.by_program, names), { color: "#0b6e6e", unit: " 人" }))}
     ${panel("风险分层",
-      barChart(spdPairs(region.by_risk,
-        { low: "低危", mid: "中危", high: "高危", very_high: "极高危" }),
+      barChart(spdRiskPairs(region.by_risk),
         { color: "#b26a00", unit: " 人" }))}
     ${panel("年龄结构",
       barChart(Object.entries(region.age_distribution), { color: "#0a4d78", unit: " 人" }))}
@@ -896,8 +904,7 @@ async function renderSpdExpert() {
         <button>新建分中心</button>
       </form><p class="msg" id="spd-center-msg"></p>`)}
     ${panel("风险评估结果分布", `
-      ${barChart(spdPairs(wb.assessments.by_risk,
-        { low: "低危", mid: "中危", high: "高危", very_high: "极高危" }),
+      ${barChart(spdRiskPairs(wb.assessments.by_risk),
         { color: "#8d4bab", unit: " 人次" })}`)}`;
   // 牵头机构 / 覆盖机构 / 团队原先没有录入框（P2-433）：卫健委工作台按这两张清单数覆盖机构与团队，页面上建的中心恒为 0
   const idList = (v) => String(v || "").split(/[，,\s]+/).filter(Boolean).map(Number);
@@ -1261,8 +1268,7 @@ async function renderSpdTeam() {
         `<tr><td>${t.id}</td><td>${esc(t.name)}</td><td>${esc(t.level_name)}</td>
          <td>${t.org_id}</td><td>${esc((t.program_codes || []).join("、") || "—")}</td></tr>`))}
     ${panel("患者风险分层",
-      barChart(spdPairs(wb.patients.by_risk,
-        { low: "低危", mid: "中危", high: "高危", very_high: "极高危" }),
+      barChart(spdRiskPairs(wb.patients.by_risk),
         { color: "#b26a00", unit: " 人" }))}
     ${wb.packages ? panel("服务包执行",
       table(["已绑服务包", "项目总次数", "已消耗", "消费率"], [wb.packages], (p) =>
@@ -3714,8 +3720,7 @@ async function renderSpdMember() {
         <button>开展评估</button>
       </form><p class="msg" id="spd-assess-msg"></p>
       ${spdCards([["评估人数", assessStats.persons], ["评估人次", assessStats.times]])}
-      ${barChart(spdPairs(assessStats.by_risk,
-        Object.fromEntries(Object.entries(SPD_RISK).map(([k, v]) => [k, v[0]]))),
+      ${barChart(spdRiskPairs(assessStats.by_risk),
         { unit: " 人次" })}
       <form class="inline" id="spd-assess-query" style="margin-top:8px">
         <input name="patient_id" type="number" placeholder="患者ID（可空）">
