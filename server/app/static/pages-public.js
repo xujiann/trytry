@@ -831,6 +831,18 @@ async function renderPrintTemplates() {
         <label style="font-size:13px"><input type="checkbox" name="show_qr" checked> 显示验真二维码</label>
         <button>保存模板</button></form>
       <p class="msg" id="tpl-msg"></p>`)}`;
+  // 选单据类型时回填这一类的现值（P2-993，与 P2-313 / P2-960「按现值预填」同一条规矩）：原先抬头、页脚空白、二维码恒勾选，
+  // 保存时三项整条送出、后端整条覆盖——只想改一句页脚，抬头就被清空、关掉的验真二维码又打开了
+  const tplForm = $("#tpl-form");
+  const fillTemplate = () => {
+    const t = templates.find((x) => x.doc_type === tplForm.doc_type.value);
+    if (!t) return;
+    tplForm.header_org_name.value = t.header_org_name || "";
+    tplForm.footer_note.value = t.footer_note || "";
+    tplForm.show_qr.checked = !!t.show_qr;
+  };
+  tplForm.doc_type.onchange = fillTemplate;
+  fillTemplate();
   $("#tpl-form").onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
