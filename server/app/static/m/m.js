@@ -954,8 +954,10 @@ function bindReferralDetails(box) {
           ? [`转出：${d.from_org || "—"}　转入：${d.to_org || "—"}`, d.down_to_org ? `下转至：${d.down_to_org}` : ""]
             .filter(Boolean).join("\n") + "\n"
           : "";
+        // 环节名不等于结论（P2-1022）：县级医院那一格通过与退回共用「县级医院接收」，环节名里没带出结论的补上动作名
         alert(orgs + ((d.steps || []).map((s) =>
-          `${s.created_at.slice(0, 16).replace("T", " ")} ${s.step}${s.opinion ? "：" + s.opinion : ""}`
+          `${s.created_at.slice(0, 16).replace("T", " ")} ${s.step}${
+            s.action_name && !s.step.includes(s.action_name) ? `（${s.action_name}）` : ""}${s.opinion ? "：" + s.opinion : ""}`
         ).join("\n") || "暂无环节记录"));
       } catch (err) {
         alert(`查看失败：${err.message}`);

@@ -50,7 +50,7 @@ from ..models import (
 )
 from ..rules import is_suspect_risk, score_scale
 from ..service import (CONSULT_ROLES, FOLLOWUP_OPEN_STATUSES, MEASUREMENT_SOURCE_NAMES, MEDIA_TYPE_NAMES, PACKAGE_BINDING_STATUS_NAMES,
-                       REFERRAL_STATUS_LABELS, TASK_COMPLETABLE_STATUSES, TASK_OPEN_STATUSES, actively_enrolled, answers_problem, referral_ends,
+                       REFERRAL_ACTION_NAMES, REFERRAL_STATUS_LABELS, TASK_COMPLETABLE_STATUSES, TASK_OPEN_STATUSES, actively_enrolled, answers_problem, referral_ends,
                        close_followup_record, enrollment_for, judge_measurement, mark_intervention_done,
                        measure_program_for, measure_value_problem, move_task,
                        exclusion_problem, feedback_appended, scale_program_mismatch, scale_unusable,
@@ -1456,6 +1456,8 @@ class SpdReferralStepOut(BaseModel):
     action: str
     opinion: str
     created_at: str
+    # 动作的中文名（P2-1022）：卡片写「已退回」，全过程里原先只印环节名「县级医院接收」，两处说法相反
+    action_name: str
 
 
 class SpdReferralDetailOut(BaseModel):
@@ -1503,7 +1505,7 @@ def my_referral_detail(
         "materials": case.materials or [],
         "steps": [
             {"step": s.step, "action": s.action, "opinion": s.opinion,
-             "created_at": s.created_at.isoformat()}
+             "created_at": s.created_at.isoformat(), "action_name": REFERRAL_ACTION_NAMES.get(s.action, s.action)}
             for s in steps
         ],
         "from_org": names.get(case.initiator_org_id, ""),

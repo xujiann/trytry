@@ -2649,7 +2649,7 @@ async function renderSpdReferral() {
         const c = await api(`/api/spd/referrals/${detail.dataset.refDetail}`);
         $("#spd-ref-detail").innerHTML = panel(`转诊单 #${c.id} 全轨迹 · ${c.patient_name}`,
           table(["环节", "动作", "经办人", "机构", "意见", "时间"], c.steps, (s) =>
-            `<tr><td>${esc(s.step)}</td><td>${esc(s.action)}</td><td>${s.actor_id ?? "—"}</td>
+            `<tr><td>${esc(s.step)}</td><td>${esc(s.action_name || s.action)}</td><td>${s.actor_id ?? "—"}</td>
              <td>${s.org_id ?? "—"}</td><td>${esc(s.opinion) || "—"}</td>
              <td>${esc((s.created_at || "").replace("T", " ").slice(0, 19))}</td></tr>`));
       } catch (err) { setMsg("#spd-ref-msg", err.message, false); }

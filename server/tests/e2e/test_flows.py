@@ -1922,6 +1922,24 @@ def test_统一支付的金额占位按渠道写明留空时收哪一份(page, b
     expect(amount).to_have_attribute("placeholder", "金额(元，空=押金冲抵后应补缴的自付额)")
 
 
+def test_慢专病转诊全轨迹_县级退回写退回(page, base_url, seed, admin_call):
+    """P2-1022：县级医院那一格通过与退回共用环节名「县级医院接收」，全轨迹的「动作」列原先原样印 pass / reject。"""
+    patient = admin_call("POST", "/api/patients", {"name": "E2E转诊退回", "id_card": "320981199405051022", "gender": "男"})
+    admin_call("POST", "/api/spd/enrollments", {
+        "patient_id": patient["id"], "program_code": "hypertension", "org_id": seed["org"]["id"]})
+    case = admin_call("POST", "/api/spd/referrals", {
+        "patient_id": patient["id"], "program_code": "hypertension", "reason": "E2E血压不达标"})
+    admin_call("POST", f"/api/spd/referrals/{case['id']}/review", {"action": "pass", "opinion": "同意上转"})
+    admin_call("POST", f"/api/spd/referrals/{case['id']}/review", {"action": "reject", "opinion": "E2E床位紧张"})
+    _login(page, base_url)
+    _open_page(page, "spdreferral", "逐级转诊闭环")
+    page.click(f'[data-ref-detail="{case["id"]}"]')
+    last = page.locator("#spd-ref-detail tr", has_text="E2E床位紧张")
+    expect(last).to_contain_text("县级医院接收")
+    expect(last).to_contain_text("退回")   # 修前印 reject
+    expect(page.locator("#spd-ref-detail tr", has_text="同意上转")).to_contain_text("通过")
+
+
 def test_统一支付选得到网关支付_受理回执写待回调_不报支付失败(page, base_url):
     """P2-1021：渠道下拉原先没有「网关支付」；网关受理（pending）的回执原先写「支付失败：」加空原因，付款链接 / 二维码串
     一并丢掉。e2e 服务没有真网关，下单应答由 Playwright 截下来按网关受理的形状回（后端这一形状见

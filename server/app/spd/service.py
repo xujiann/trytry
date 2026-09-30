@@ -504,6 +504,12 @@ def followup_abnormal():
 #: 县级医院接收那一格的环节名（`referral._NEXT` 照它写）：下转之后，上转去的是哪家从这一步的机构取回（P2-558）
 REFERRAL_ACCEPT_STEP = "县级医院接收"
 REFERRAL_DOWN_STEP = "下转"
+#: 轨迹每一步动作（`SpdReferralStep.action`）的中文名，与转诊页的按钮同名（P2-1022）。环节名不等于结论：县级医院那一格通过与
+#: 退回写的是同一个环节名「县级医院接收」（`referral_ends` 靠它取上转去的机构，存量不改），光看环节名分不出收了还是退了
+REFERRAL_ACTION_NAMES = {
+    "submit": "发起", "pass": "通过", "reject": "退回", "arrive": "到院", "down": "下转", "receive": "随访接收",
+    "withdraw": "撤回",
+}
 
 
 def referral_ends(db: Session, cases: list[SpdReferralCase]) -> dict[int, tuple[int | None, int | None]]:

@@ -50,7 +50,7 @@ CASE_KEYS = ["id", "patient_id", "patient_name", "program_code", "enrollment_id"
              "current_level", "target_org_id", "status", "reason", "trigger_rule_code",
              "trigger_evidence", "materials", "effective_visit", "stable_for_down",
              "created_at", "closed_at"]
-STEP_KEYS = ["id", "step", "action", "actor_id", "org_id", "opinion", "created_at"]
+STEP_KEYS = ["id", "step", "action", "actor_id", "org_id", "opinion", "created_at", "action_name"]   # 动作名 P2-1022 加
 COND = {"field": "bp_sys", "op": ">=", "value": 160, "label": "收缩压红线"}
 
 
@@ -327,17 +327,17 @@ def test_详情端点独有steps键且在末尾(client, auth, world):
     assert [list(s.keys()) for s in body["steps"]] == [STEP_KEYS] * 6
     v, t, c = world["village"]["id"], world["township"]["id"], world["county"]["id"]
     expected = [
-        ("发起", "submit", world["vdoc_id"], v, "血压持续不达标"),
-        ("卫生院审核", "pass", world["tdoc_id"], t, "同意上转"),
-        ("县级医院接收", "pass", world["cdoc_id"], c, "接收住院"),
-        ("到院", "arrive", world["cdoc_id"], c, "已到院"),
-        ("下转", "down", world["cdoc_id"], c, "情况稳定下转"),
-        ("随访接收", "receive", world["tdoc_id"], t, "已接收随访"),
+        ("发起", "submit", world["vdoc_id"], v, "血压持续不达标", "发起"),
+        ("卫生院审核", "pass", world["tdoc_id"], t, "同意上转", "通过"),
+        ("县级医院接收", "pass", world["cdoc_id"], c, "接收住院", "通过"),
+        ("到院", "arrive", world["cdoc_id"], c, "已到院", "到院"),
+        ("下转", "down", world["cdoc_id"], c, "情况稳定下转", "下转"),
+        ("随访接收", "receive", world["tdoc_id"], t, "已接收随访", "随访接收"),
     ]
     assert body["steps"] == [
         {"id": s["id"], "step": step, "action": action, "actor_id": actor,
-         "org_id": org, "opinion": opinion, "created_at": _ts(s["created_at"])}
-        for s, (step, action, actor, org, opinion) in zip(body["steps"], expected)
+         "org_id": org, "opinion": opinion, "created_at": _ts(s["created_at"]), "action_name": name}
+        for s, (step, action, actor, org, opinion, name) in zip(body["steps"], expected)
     ]
     assert body == {
         **_case1(world, status="closed", current_level="township",

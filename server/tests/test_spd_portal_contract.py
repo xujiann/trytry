@@ -317,7 +317,7 @@ def test_转诊列表与详情的键集合不同(client, auth, seeded):
                            "from_org", "to_org", "down_to_org"}   # 两端机构 P2-558 加
     assert "created_at" not in detail
     assert detail["materials"] == ["报告1"]
-    assert set(detail["steps"][0]) == {"step", "action", "opinion", "created_at"}
+    assert set(detail["steps"][0]) == {"step", "action", "opinion", "created_at", "action_name"}   # 动作名 P2-1022 加
 
 
 def test_咨询会话与消息的键集合(client, auth, seeded):

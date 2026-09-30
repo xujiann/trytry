@@ -41,7 +41,7 @@ from ..models import (
     SpdReferralStep,
 )
 from ..rules import RuleError, evaluate, validate_conditions
-from ..service import (REFERRAL_ACCEPT_STEP, REFERRAL_DOWN_STEP, award_points, build_facts, enrollment_for,
+from ..service import (REFERRAL_ACCEPT_STEP, REFERRAL_ACTION_NAMES, REFERRAL_DOWN_STEP, award_points, build_facts, enrollment_for,
                        referral_last_moved_at, spawn_task, unknown_code, unknown_program)
 from ...visibility import GLOBAL_ROLES, assert_patient_visible, visible_org_ids
 
@@ -131,6 +131,8 @@ class ReferralStepOut(BaseModel):
     org_id: int | None
     opinion: str
     created_at: str
+    # 动作的中文名（P2-1022）：县级医院那一格通过与退回共用环节名，页面原先原样印 pass / reject
+    action_name: str
 
 
 class ReferralCaseDetailOut(ReferralCaseOut):
@@ -383,7 +385,8 @@ def _case_out(db: Session, c: SpdReferralCase, steps: list[SpdReferralStep] | No
     if steps is not None:
         out["steps"] = [
             {"id": s.id, "step": s.step, "action": s.action, "actor_id": s.actor_id,
-             "org_id": s.org_id, "opinion": s.opinion, "created_at": s.created_at.isoformat()}
+             "org_id": s.org_id, "opinion": s.opinion, "created_at": s.created_at.isoformat(),
+             "action_name": REFERRAL_ACTION_NAMES.get(s.action, s.action)}
             for s in steps
         ]
     return out
