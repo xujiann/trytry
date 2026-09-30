@@ -225,7 +225,9 @@ def _case_card(case: InfectiousCase, org_names: dict, meta_by_code: dict) -> dic
         "org_id": case.org_id,
         "org_name": org_names.get(case.org_id, ""),
         "disease_code": case.disease_code,
-        "disease_name": case.disease_name,
+        # 目录内的病种印目录名（P2-943，与预警 P2-159 同一口径）：原先印报告人手填的写法——同是 J11，「流感」「甲流？」
+        # 「流行性感冒」照抄进法定报告卡与供手工网报的导出。目录外的照旧取报告里的写法；手填写法在病例列表（登记簿）里照看
+        "disease_name": meta[0] if meta is not None else case.disease_name,
         "category": case.category,
         "category_name": INFECTIOUS_CATEGORY_NAMES.get(case.category, "目录外"),
         "onset_date": case.onset_date,
@@ -326,13 +328,13 @@ def late_reports(db: Session = Depends(get_db)):
         report_hours, days_late, late = _timeliness(case, meta)   # 目录外病种、发病日期坏了的都判不了，不进清单
         if meta is None or not late:
             continue
-        _, category, _ = meta
+        name, category, _ = meta
         rows.append(
             {
                 "case_id": case.id,
                 "org_id": case.org_id,
                 "disease_code": case.disease_code,
-                "disease_name": case.disease_name,
+                "disease_name": name,   # 目录名，与报告卡同一口径（P2-943）；只有目录内病种进得了这张清单
                 "category": category,
                 "report_hours": report_hours,
                 "onset_date": case.onset_date,
