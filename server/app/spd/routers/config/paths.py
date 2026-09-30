@@ -361,6 +361,23 @@ class CopyIn(BaseModel):
     version: str = Field(default="", max_length=16)
 
 
+def _copy_version(db: Session, code: str, src_version: str) -> str:
+    """复制时不指定版本号，派生的新版本号取目标编码下的下一个空号（P2-992）。
+
+    原先一律取「源版本 + 1」：v1 复制出 v2 之后，再从 v1（或 v2）复制都推出已有的 v2（或 v3），撞「编码 + 版本」唯一约束
+    409，而界面上的「复制」只送 `{}`、没有填版本号的入口。v 加数字的按同编码已有的最大号 + 1（与证明编号「同段最大号 + 1」
+    P2-897 同形）；自定义版本号追加的 -r2 已占用就依次试 -r3、-r4……"""
+    taken = {version for (version,) in db.query(SpdPathTemplate.version).filter(SpdPathTemplate.code == code)}
+    if src_version.startswith("v") and src_version[1:].isascii() and src_version[1:].isdigit():
+        numbers = [int(v[1:]) for v in taken if v.startswith("v") and v[1:].isascii() and v[1:].isdigit()]
+        return f"v{max([int(src_version[1:]), *numbers]) + 1}"
+    candidate, n = _bump_version(src_version), 2
+    while candidate in taken:
+        n += 1
+        candidate = f"{src_version}-r{n}"
+    return candidate
+
+
 @router.post("/path-templates/{template_id}/copy", response_model=PathTemplateOut,
              response_model_exclude_unset=True, status_code=201,
              dependencies=[Depends(require_roles(*CONFIG_ROLES))])
@@ -380,13 +397,14 @@ def copy_path_template(
     # 「编码 + 版本」唯一约束，截了会撞别的版本，推不出来就请人指定。传了一串空格的按没传（原先照存成空白）
     name_width = cast(String, SpdPathTemplate.__table__.c.name.type).length or 64
     version_width = cast(String, SpdPathTemplate.__table__.c.version.type).length or 16
-    version = body.version.strip() or _bump_version(src.version)
+    target_code = body.code.strip() or src.code
+    version = body.version.strip() or _copy_version(db, target_code, src.version)
     if len(version) > version_width:
         raise HTTPException(status_code=422,
                             detail=f"由原版本号推出的新版本号超过 {version_width} 字（{version}），请指定新版本号")
     copy = SpdPathTemplate(
         program_id=src.program_id,
-        code=body.code.strip() or src.code,
+        code=target_code,
         name=body.name.strip() or f"{src.name[:name_width - len('(副本)')]}(副本)",
         scene=src.scene, risk_level=src.risk_level,
         version=version,
