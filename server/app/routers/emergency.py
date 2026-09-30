@@ -12,6 +12,7 @@ from ..models import EmergencyCase, EmergencyMilestone, EmergencyVital, Organiza
 from ..visibility import assert_patient_visible
 from ..schemas import PatientOut  # noqa: F401  (保持 schemas 导入路径一致性)
 from ..texttypes import NON_BLANK
+from ..vitals import bp_order_problem
 
 router = APIRouter(prefix="/api/emergency", tags=["智慧急救"], dependencies=[Depends(get_current_user)])
 
@@ -225,6 +226,9 @@ def report_vitals(case_id: int, body: VitalCreate, db: Session = Depends(get_db)
         raise HTTPException(status_code=404, detail="急救事件不存在")
     if case.status == "admitted":
         raise HTTPException(status_code=409, detail="已收治，转由院内记录")
+    problem = bp_order_problem(body.sbp, body.dbp)   # P2-1016：两项都测到时不许倒挂；心跳骤停记 0/0 照收
+    if problem:
+        raise HTTPException(status_code=422, detail=problem)
     vital = EmergencyVital(case_id=case_id, **body.model_dump())
     db.add(vital)
     db.commit()

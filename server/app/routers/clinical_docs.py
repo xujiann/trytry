@@ -31,6 +31,7 @@ from ..models import (
 )
 from ..numtypes import INT4_MAX
 from ..texttypes import NON_BLANK
+from ..vitals import bp_order_problem
 from ..visibility import assert_obj_org_writable, assert_org_visible, assert_patient_visible, scope_org_list
 
 router = APIRouter(prefix="/api/inpatient", tags=["住院临床文书"], dependencies=[Depends(get_current_user)])
@@ -436,6 +437,9 @@ def create_vital(
     # 体温单上多一个空点，文书完整性检查只数行数，一条空记录就消掉「缺体征记录」
     if all(getattr(body, name) is None for name in VITAL_VALUES):
         raise HTTPException(status_code=422, detail="一次体征记录至少要有一项测量值")
+    problem = bp_order_problem(body.sbp, body.dbp)   # P2-1016：70/150 原先照收，体温单上画出一条倒挂的血压
+    if problem:
+        raise HTTPException(status_code=422, detail=problem)
     admission = _admission_or_404(db, admission_id, user, resource="vital_sign")
     if admission.status != "admitted":
         raise HTTPException(status_code=409, detail="患者已出院，不可再记录体征")

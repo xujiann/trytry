@@ -29,6 +29,7 @@ from ..numtypes import non_finite_path
 from ..visibility import assert_org_writable, assert_patient_visible
 from ..schemas import ChronicCreate, ChronicOut, FollowUpCreate, FollowUpHistoryOut, FollowUpOut
 from ..texttypes import NON_BLANK
+from ..vitals import bp_order_problem
 
 router = APIRouter(prefix="/api/chronic", tags=["慢病管理"], dependencies=[Depends(get_current_user)])
 
@@ -407,7 +408,8 @@ def add_followup(
     # P0-26：原先只看角色——乙院按档案号就能给甲院管着的患者记随访，还顺带改掉分级与
     # 下次随访日。同文件风险评分与随访记录早就按患者可见性守着，写侧照同一口径。
     assert_patient_visible(db, user, chronic.patient_id, resource="chronic")
-    problem = _metrics_column_problem(body)
+    # 收缩压须高于舒张压（P2-1016）：取值与分级同一口径——列为空取 metrics 同名键（`_metric_value`）
+    problem = _metrics_column_problem(body) or bp_order_problem(_metric_value(body, "sbp"), _metric_value(body, "dbp"))
     if problem:
         raise HTTPException(status_code=422, detail=problem)
     payload = body.model_dump()

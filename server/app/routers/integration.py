@@ -60,6 +60,7 @@ from ..models import (
 from ..privacy import desensitize, mask_id_card, mask_phone
 from ..schemas import EncounterCreate, ExamReportCreate, FollowUpCreate, PatientOut
 from ..texttypes import NON_BLANK
+from ..vitals import bp_order_problem
 from .chronic import _evaluate_level
 from .encounters import create_encounter
 from .dataquality import id_card_invalid_reason
@@ -560,6 +561,10 @@ def _do_fhir_observation(resource: dict, db: Session):
         # `group` 是运行期按 LOINC 映射拼出来的字段字典，键名在类型上不可知；
         # pydantic 会做校验，缺字段/多字段都会在这里报 422，不会静默走下去。
         followup_in = FollowUpCreate(**cast(Any, group), guidance="HL7/FHIR 对接自动归档")
+        # 收缩压须高于舒张压（P2-1016，与界面录随访同一句）：设备把两项接反，原先照样定 3 级、改写档案分级
+        problem = bp_order_problem(followup_in.sbp, followup_in.dbp)
+        if problem:
+            raise HTTPException(status_code=422, detail=problem)
         followup = FollowUp(chronic_id=chronic.id, **followup_in.model_dump())
         new_level = _evaluate_level(db, chronic.disease, followup_in)
         if new_level is not None:
