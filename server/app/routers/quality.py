@@ -239,7 +239,10 @@ def adverse_event_stats(db: Session = Depends(get_db)):
 
 class RecordQcCreate(BaseModel):
     target_type: str = Field(pattern="^(encounter|case_summary)$")
-    target_id: int = Field(ge=INT4_MIN, le=INT4_MAX)
+    # 门急诊病历填就诊号；病案首页填 target_id（病案首页自己的编号）或 admission_id（住院号——打印件 BA 号、「病案首页（住院 N）」
+    # 各处给人看的都是它，P2-998），两者都给的要对得上
+    target_id: int | None = Field(default=None, ge=INT4_MIN, le=INT4_MAX)
+    admission_id: int | None = Field(default=None, ge=1, le=INT4_MAX)
     score: int = Field(ge=0, le=100)
     defects: str = Field(default="", max_length=1024)
 
@@ -269,11 +272,28 @@ class RecordQcOut(BaseModel):
 def create_record_qc(
     body: RecordQcCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
+    # 病案首页按住院号定位（P2-998）：原先只按病案首页自己的编号（case_summaries.id）取，而这个号在任何页面上都不出现——
+    # 首页按出院先后建，编号次序与住院号不同，照住院号 1 打的丙级挂到了住院号 2 那位患者的首页上。落库的对象号照旧是
+    # 病案首页编号，存量不动
+    if body.admission_id is not None:
+        if body.target_type != "case_summary":
+            raise HTTPException(status_code=422, detail="门急诊病历按就诊号抽检，不收住院号")
+        summary = db.query(CaseSummary).filter(CaseSummary.admission_id == body.admission_id).first()
+        if summary is None:
+            raise HTTPException(status_code=404, detail="该住院还没有病案首页")
+        if body.target_id is not None and body.target_id != summary.id:
+            raise HTTPException(status_code=422, detail="病案首页编号与住院号对不上")
+        target_id = summary.id
+    elif body.target_id is None:
+        raise HTTPException(status_code=422, detail="请填抽检对象：门急诊病历填就诊号，病案首页填住院号")
+    else:
+        target_id = body.target_id
     target_model = Encounter if body.target_type == "encounter" else CaseSummary
-    if db.get(target_model, body.target_id) is None:
+    if db.get(target_model, target_id) is None:
         raise HTTPException(status_code=404, detail="抽检对象不存在")
     qc = RecordQc(
-        **body.model_dump(), grade=_grade(body.score), qc_by=user.full_name or user.username
+        **body.model_dump(exclude={"target_id", "admission_id"}), target_id=target_id,
+        grade=_grade(body.score), qc_by=user.full_name or user.username
     )
     db.add(qc)
     db.commit()

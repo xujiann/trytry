@@ -3486,7 +3486,7 @@ async function renderQuality() {
         `<tr><td>${esc(d.name) || "（未署名）"}</td><td>${d.total}</td><td>${d.avg_score}</td>
          <td>${d.grade_a}</td><td>${d.grade_b}</td><td>${d.grade_c}</td></tr>`)}
       <h3 style="margin-top:12px">最近病历</h3>
-      ${table(["ID", "就诊", "医师", "主诉", "得分", "等级", "操作"], mrRecords.slice(0, 20), (r) =>
+      ${table(["病历ID", "就诊ID", "医师", "主诉", "得分", "等级", "操作"], mrRecords.slice(0, 20), (r) =>
         `<tr><td>${r.id}</td><td>${r.encounter_id}</td><td>${esc(r.doctor_name)}</td>
          <td>${esc(r.chief_complaint) || "（未填）"}</td><td>${r.qc_score}</td>
          <td><span class="tag ${MR_GRADE_COLOR[r.qc_grade] || ""}">${r.qc_grade}级</span></td>
@@ -3505,7 +3505,7 @@ async function renderQuality() {
     ${panel("病历质控抽检（人工评分）", `
       <form class="inline" id="qc-rec-form">
         <select name="target_type"><option value="encounter">门急诊病历</option><option value="case_summary">病案首页</option></select>
-        <input name="target_id" type="number" placeholder="对象ID" required>
+        <input name="target_id" type="number" placeholder="门急诊填就诊ID / 病案首页填住院号" style="min-width:220px" required>
         <input name="score" type="number" min="0" max="100" placeholder="评分0-100" required>
         <input name="defects" placeholder="缺陷项（分号分隔）" style="min-width:200px"><button>评分</button></form>`)}
     ${panel(`院感上报（已确认 ${infStats.confirmed} 例 · 待核实 ${infStats.pending_verify} 例）`, `
@@ -3564,7 +3564,14 @@ async function renderQuality() {
       drawQcResult(res.qc, `就诊 ${body.encounter_id} 环节质控`);
     } catch (err) { setMsg("#mr-msg", err.message, false); }
   };
-  $("#qc-rec-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/quality/record-qc", formJson(e.target, ["target_id", "score"]), "#qa-msg"); };
+  // 病案首页按住院号送（P2-998）：原先「对象ID」一格，病案首页一支按病案首页自己的编号查，而这个号在任何页面上都不出现，
+  // 照住院号打的分挂到了别人的首页上；门急诊一支是就诊号（「最近病历」表的第二列，第一列是病历号）
+  $("#qc-rec-form").onsubmit = (e) => {
+    e.preventDefault();
+    const body = formJson(e.target, ["target_id", "score"]);
+    if (body.target_type === "case_summary") { body.admission_id = body.target_id; delete body.target_id; }
+    postAction("/api/quality/record-qc", body, "#qa-msg");
+  };
   const drawRecordDetail = async (recordId) => {
     const d = await api(`/api/quality/records/${recordId}`);
     const r = d.record;
