@@ -1134,6 +1134,9 @@ def self_answer_followup(
         raise HTTPException(status_code=422, detail=problem)
     record.answers = body.answers
     record.channel = "self"
+    # 执行人记实际做的人（P2-936，与医护执行同一口径）：居民自己答的，没有医护执行人。原先仍挂着生成计划时指派的医护——
+    # 人员工作量、按执行人筛的完成率、质控抽查都算成他做的
+    record.executor_id = None
     # 与医护执行同一道闸：办结的判定与写入压在同一条 UPDATE 里（见
     # service.close_followup_record）。居民连点两次、或居民与医护同时办同一条随访时，
     # 抢输的一路 rowcount 为 0，拿到与预检一致的 409，异常处置任务只派一次。
