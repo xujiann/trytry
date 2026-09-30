@@ -72,3 +72,15 @@ def test_死亡日期早于出生日期_不签(client, admin, world):
     assert early.status_code == 422, early.text   # 修前 201
     assert "死亡日期" in early.json()["detail"]
     assert issue("2026-09-01").status_code == 201
+
+
+def test_出生日期在将来的档案_当不知道_不拿它当下界(client, admin):
+    """P2-940 跟进：儿童档案出生日期至今能填将来（P2-959）、又没有改档接口——敲错成 2062 年的那份档案，今天的访视、
+    新筛若照拿它当下界就一律 422，这份档案从此什么都记不进去。与 P2-713「将来的出生日期按写坏处理」同一口径，当「不知道」。"""
+    child = client.post("/api/maternal/children", headers=admin, json={
+        "name": "P2940 敲错年份", "gender": "女", "birth_date": "2062-05-01"})
+    assert child.status_code == 201, child.text   # 儿童档案出生日期能填将来，见 P2-959
+    visit = client.post(f"/api/maternal/children/{child.json()['id']}/visits", headers=admin, json={
+        "visit_type": "newborn", "visit_date": "2026-05-08"})
+    assert visit.status_code == 201, visit.text
+

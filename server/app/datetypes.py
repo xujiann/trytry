@@ -90,9 +90,14 @@ def before_birth_problem(event_date: str, birth_date: str | None, what: str) -> 
 
     P2-713 只管了出生日期本身不得晚于今天；接种、新生儿访视、新生儿筛查、死亡日期原先都不拿出生日期当下界——一年前
     的乙肝第 1 剂、出生前两个月的新生儿访视照收（接种登记没有逆操作，改不回来），早于出生的异常新筛还把孩子标成高危儿。
-    出生日期是库里存着的，按存量写法读（`legacy_date`）；事件日期是刚过入参闸门的 `YYYY-MM-DD`。"""
+    出生日期是库里存着的，按存量写法读（`legacy_date`）；事件日期是刚过入参闸门的 `YYYY-MM-DD`。
+
+    出生日期在将来的当「不知道」、不当下界（P2-940 跟进，与 P2-713「将来的出生日期按写坏处理」同一口径）：儿童档案的
+    出生日期至今能填将来（P2-959）、又没有改档接口，敲错成将来的那份档案，今天的访视、新筛若照拿它当下界就一律 422。"""
+    from . import clock   # 延迟导入：本模块是最底层的入参类型，别在导入期牵出别的模块
+
     born = legacy_date(birth_date)
-    if not event_date or born is None or event_date >= born:
+    if not event_date or born is None or born > clock.today().isoformat() or event_date >= born:
         return ""
     return f"{what}（{event_date}）早于出生日期（{born}）"
 
