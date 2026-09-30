@@ -53,8 +53,9 @@ def test_全部前端脚本剥完行数不变(path):
 def test_原先被整段抹掉的代码现在扫得到():
     spd = strip_comments((STATIC / "pages-spd.js").read_text(encoding="utf-8"))
     assert 'spdModal("办结任务"' in spd                          # 修前在「image/*」之后的五十几行里
-    doctor = strip_comments((STATIC / "m" / "doctor.js").read_text(encoding="utf-8"))
-    resident = strip_comments((STATIC / "m" / "m.js").read_text(encoding="utf-8"))
-    for src in (spd, doctor, resident):
-        start = src.index('"image/*,.pdf"')
-        assert src[start:start + 2000].count("\n") >= 20 and "=>" in src[start:start + 2000]
+    # 三处上传框原先写 `accept = "image/*,.pdf"`，字符串里的 `/*` 被当成注释开头、一路抹到下一个 `*/`。P2-1083 把这三处
+    # 改成了附件白名单的写法，文件里不再有这个字符串——同一个形状用一段等价的源码钉住
+    src = 'input.accept = "image/*,.pdf";\nconst done = () => spdModal("办结任务", []);\n/* 真注释 */\nnext();\n'
+    out = strip_comments(src)
+    assert 'spdModal("办结任务"' in out and "next();" in out and "真注释" not in out
+    assert out.count("\n") == src.count("\n")

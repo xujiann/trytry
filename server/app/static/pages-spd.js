@@ -2457,7 +2457,9 @@ async function renderSpdPath() {
       const taskId = evidence.dataset.taskEvidence;
       const input = document.createElement("input");
       input.type = "file";
-      input.accept = "image/*,.pdf";
+      // 与附件白名单同一串（P2-1083，attachments.ALLOWED_CONTENT_TYPES）：原先 image/* 让手机「高效格式」的 HEIC、扫描仪的
+      // TIFF / BMP 都选得上，传上去才 415，要凭证的任务卡在这里
+      input.accept = "image/png,image/jpeg,image/gif,image/webp,application/pdf";
       input.onchange = async () => {
         try {
           const att = await uploadAttachment("spd_task", taskId, input);
