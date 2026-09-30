@@ -440,11 +440,15 @@ if not c.get(f"/api/credentials?patient_id={patients[0]['id']}").json():
 
 # 门诊药费明细：门诊药占比的数据源，不开明细这个指标恒为 0。
 # 必须放在收费项目目录建好之后——计费明细要按 item_code 反查目录取价。
-_enc = c.get(f"/api/encounters?patient_id={patients[2]['id']}").json()
-if _enc and not c.get(f"/api/billing/details?encounter_id={_enc[0]['id']}").json():
+# 明细挂在种子自己那次门诊上（刘洋在河西镇卫生院的慢阻肺急性加重），判重也只看这一次（P2-1096）。原先取他「最近一次
+# 就诊」：首跑时恰是这一次；此后最近的是住院那次，重启时两条门诊计费各回 422 才没挂上——判重靠报错兜着；有人再给他
+# 开一次门诊，重启就给那次再挂两行
+_enc = _exists(c.get(f"/api/encounters?patient_id={patients[2]['id']}").json(),
+               lambda e: e["org_id"] == zhen2["id"] and e["diagnosis_name"] == "慢阻肺急性加重")
+if _enc and not c.get(f"/api/billing/details?encounter_id={_enc['id']}").json():
     for _code, _qty in [("DRUG-ABX", 6), ("BED-DAY", 1)]:
         c.post("/api/billing/details", json={"patient_id": patients[2]["id"],
-                                             "encounter_id": _enc[0]["id"],
+                                             "encounter_id": _enc["id"],
                                              "item_code": _code, "quantity": _qty})
 
 
@@ -511,9 +515,12 @@ if not _exists(_em_cases, lambda e: e["channel_type"] == "chest_pain" and e["loc
         ("arrive_scene", f"{d} 09:38"), ("arrive_hospital", f"{d} 09:58"), ("treatment", f"{d} 10:05"),
     ]:
         c.post(f"/api/emergency/cases/{em['id']}/milestones", json={"milestone": milestone, "occurred_at": at})
-    for _ in range(3):  # 出车→到场→到院
-        c.post(f"/api/emergency/cases/{em['id']}/advance")
+    # 车载体征在转运途中回传。事件状态是 已调度→转运中→已到院→已收治，收治之后接口不再收车载体征（「已收治，转由
+    # 院内记录」）；原先先推三步到已收治再传，回 409、体征一条没落（P2-1096）。先推到转运中传完，再到院、收治
+    c.post(f"/api/emergency/cases/{em['id']}/advance")   # 已调度 → 转运中
     c.post(f"/api/emergency/cases/{em['id']}/vitals", json={"heart_rate": 110, "sbp": 90, "dbp": 60, "spo2": 93, "note": "车载心电已回传"})
+    for _ in range(2):  # 转运中 → 已到院 → 已收治
+        c.post(f"/api/emergency/cases/{em['id']}/advance")
     # 抢救转归：抢救成功率的唯一数据源。限医师判定，admin 会被 403 挡下，
     # 所以这里换 doc_county 的会话——这正是"职责分离"该有的样子。
     c_doc_county = httpx.Client(base_url=BASE, timeout=30)
@@ -640,7 +647,11 @@ if not c.get(f"/api/cost/departments?period={period}&org_id={county['id']}").jso
             "from_dept_id": _depts[source]["id"], "to_dept_id": _depts[target]["id"], "ratio_pct": ratio})
 
 # ---------- 物资采购：一单走到验收 ----------
-if not c.get("/api/materials/purchases").json():
+# 审批限管理层且申请人不得自批（与手术审批同一口径），admin 提的单换院长会话审——原先 admin 自己审，回 403「不得审批
+# 本人提出的采购申请」，合同与验收跟着 409，单子永远停在待审批，末端自检又不看它（P2-1096）。判据改成"有没有走到
+# 验收的那张"：修之前跑过的演示库里那张待审批的照旧留着（只增不改，院长在页面上审得了它），这一遍另走一张到验收
+if not _exists(_all_pages(f"/api/materials/purchases?org_id={county['id']}&status=received"),
+               lambda p: p["item_name"] == "移动输液架"):
     _supplier = next((s for s in c.get("/api/pharmacy/suppliers").json() if s["name"] == "康泰医疗器械"),
                      None) or c.post("/api/pharmacy/suppliers",
                                      json={"name": "康泰医疗器械", "contact": "刘经理"}).json()
@@ -648,7 +659,7 @@ if not c.get("/api/materials/purchases").json():
         "org_id": county["id"], "dept_id": _depts["NK"]["id"], "item_name": "移动输液架",
         "spec": "不锈钢五轮", "unit": "个", "quantity": 30, "estimated_price": 185,
         "reason": "病区更新"}).json()
-    c.post(f"/api/materials/purchases/{_mp['id']}/approve", json={"approved": True})
+    c_dir.post(f"/api/materials/purchases/{_mp['id']}/approve", json={"approved": True})
     c.post(f"/api/materials/purchases/{_mp['id']}/contract", json={
         "supplier_id": _supplier["id"], "contract_no": "HT-2026-018", "contract_amount": 5550})
     c.post(f"/api/materials/purchases/{_mp['id']}/receive", json={
@@ -845,14 +856,18 @@ if not c.get("/api/spd/enrollments?limit=1").json():
             "patient_id": e["patient_id"], "scale_code": "assess_risk_common",
             "program_code": "hypertension", "answers": _high_answers})
 
-    # 逐级转诊闭环：发起→三级审核→到院→下转→随访接收
+    # 逐级转诊闭环：发起→分级审核→到院→下转→随访接收
     _ref = c.post("/api/spd/referrals", json={
         "patient_id": _spd_enrolls[0]["patient_id"], "program_code": "hypertension",
         "direction": "up", "target_org_id": county["id"],
         "reason": "血压控制不佳，申请上级评估"}).json()
+    # 审核一次推一格，审到「已接收」为止，不写死步数（P2-1096）：ADR-0005 把链收成村→乡→县，新单两步（卫生院审核→
+    # 县级医院接收）；这里原先照旧链审三次，第三次单子已是已接收，回 409「当前状态不需要审核」
     for _ in range(3):
-        c.post(f"/api/spd/referrals/{_ref['id']}/review",
-               json={"action": "pass", "opinion": "同意上转"})
+        _rv = c.post(f"/api/spd/referrals/{_ref['id']}/review",
+                     json={"action": "pass", "opinion": "同意上转"})
+        if _rv.status_code != 200 or _rv.json()["status"] == "accepted":
+            break
     c.post(f"/api/spd/referrals/{_ref['id']}/arrive",
            json={"effective_visit": True, "opinion": "已到院并完成专科评估"})
     c.post(f"/api/spd/referrals/{_ref['id']}/down",
@@ -932,6 +947,8 @@ _checks = [
     ("抗菌药物强度已可算", lambda: any(
         o["antibiotic_ddds"] > 0
         for o in c.get(f"/api/analytics/drug-use?period={period}").json()["orgs"])),
+    # 采购一单走到验收：审批被自批禁令挡下时，单子停在待审批，这里原先一条都不看（P2-1096）
+    ("物资采购已走到验收", lambda: _has_rows(c.get("/api/materials/purchases?status=received&limit=1"))),
     # ---- 慢专病链路终态：筛出来的被管起来、转出去的收回来、数字算得出来
     ("慢专病筛查已转化为在管", lambda: any(
         e["status"] == "active" for e in c.get("/api/spd/enrollments?limit=100").json())),

@@ -10,6 +10,12 @@
 自检也跑得到，不靠睡够一分钟。第二遍之前另落 500 张不相干的处方与影像申请（seed_bulk 灌过仿真数据的演示库就是这样），
 把种子自己那几张压到清单第一页之外：判重要按页取全，只看第一页照样再补一份。末了再补一遍"上一次号源建好、没约上
 就断了"的现场：号源撞 409 时查回已有的再约。
+
+后半段三处首跑即被拒、末端自检又看不见（P2-1096）：物资采购由 admin 自己审批，撞「申请人不得自批」403，合同与验收跟着
+409，单子永远停在待审批；急救事件先推三步到「已收治」才回传车载体征，409「已收治，转由院内记录」；慢专病转诊照
+ADR-0005 之前的三级链审三次，新单两步就到「已接收」，第三次 409。所以头一遍（空库）逐个响应记下来，一个被拒的都
+不许有。门诊药费明细原先按刘洋「最近一次就诊」判重：第二遍之前给他另开一次门诊（演示站上有人接诊过他就是这样），
+重跑就给这次再挂两行。
 """
 import runpy
 import sys
@@ -26,19 +32,23 @@ from app.main import app
 from app.models import (
     Appointment,
     AppointmentSlot,
+    BillDetail,
     Consultation,
     DrugStock,
+    EmergencyVital,
     Encounter,
     ExamReport,
     ExamRequest,
     FollowUp,
     InfectiousCase,
+    MaterialPurchase,
     MedicalWaste,
     Notification,
     Organization,
     Prescription,
     Patient,
     Referral,
+    SpdReferralStep,
     StockTransfer,
     User,
 )
@@ -57,7 +67,8 @@ def _metformin(db, org_name: str) -> int | None:
 
 
 def _snapshot() -> dict:
-    """前半段灌的每一样各数一遍。都不随日期变——哪怕两遍之间跨了午夜、跨了月，该是同一个数还是同一个数。"""
+    """前半段灌的每一样各数一遍，外加后半段修过的三样（P2-1096）。都不随日期变——哪怕两遍之间跨了午夜、跨了月，
+    该是同一个数还是同一个数。"""
     with SessionLocal() as db:
         return {
             "就诊": _count(db, Encounter),
@@ -76,6 +87,9 @@ def _snapshot() -> dict:
             "医废": _count(db, MedicalWaste),
             "镇卫生院二甲双胍库存": _metformin(db, "城东镇卫生院"),
             "县医院二甲双胍库存": _metformin(db, "县人民医院"),
+            "物资采购": _count(db, MaterialPurchase),
+            "急救车载体征": _count(db, EmergencyVital),
+            "门诊药费明细": _count(db, BillDetail, BillDetail.encounter_id.isnot(None)),
         }
 
 
@@ -99,29 +113,56 @@ def _bury_first_page() -> None:
         db.commit()
 
 
+def _open_another_visit() -> None:
+    """演示站上有人给刘洋另开了一次门诊（比种子那次新）：药费明细按"最近一次就诊"判重的话，重启就给这次再挂两行。"""
+    with SessionLocal() as db:
+        patient_id = db.query(Patient.id).filter(Patient.name == "刘洋").scalar()
+        org_id = db.query(Organization.id).filter(Organization.name == "河西镇卫生院").scalar()
+        db.add(Encounter(patient_id=patient_id, org_id=org_id, diagnosis_name="复诊"))
+        db.commit()
+
+
 def test_演示种子同一天跑两遍_第二遍不崩也不多灌(monkeypatch, capsys):
     reset_database()
     # 只借 lifespan 种一遍启动数据（admin 账号、各类目录）就退出：调度循环不在场，两遍之间没有别的写入
     with TestClient(app):
         pass
-    # 与 start.sh 真起服务时一样，脚本只看得到状态码——服务端异常回 500，不抛进脚本
-    monkeypatch.setattr(httpx, "Client", lambda *args, **kwargs: TestClient(app, raise_server_exceptions=False))
+    responses: list[tuple[str, str, int]] = []
+
+    def _client(*args, **kwargs):
+        # 与 start.sh 真起服务时一样，脚本只看得到状态码——服务端异常回 500，不抛进脚本；每个响应都记下来
+        client = TestClient(app, raise_server_exceptions=False)
+        client.event_hooks["response"].append(
+            lambda r: responses.append((r.request.method, r.request.url.path, r.status_code)))
+        return client
+
+    monkeypatch.setattr(httpx, "Client", _client)
     monkeypatch.setattr(sys, "argv", ["seed_demo.py", "http://testserver"])
     monkeypatch.setattr(portal, "SEND_COOLDOWN_SECONDS", 0)
 
     _run_seed()
+    # 空库头一遍一个请求都不该被拒：被拒就是某段演示流程静悄悄没走通，而脚本一路不看响应码（P2-1096）
+    assert [r for r in responses if r[2] >= 400] == []
     first = _snapshot()
     # 头一遍每样都真灌上了，下面的"两遍一样"才不是两个空库在比
     assert all(first.values()), first
+    assert first["急救车载体征"] == 1   # 转运途中回传的那一条真落了库
+    with SessionLocal() as db:
+        assert db.query(MaterialPurchase.status).filter(MaterialPurchase.item_name == "移动输液架").scalar() == "received"
+        # 慢专病转诊的两级审核都落了库（ADR-0005：卫生院审核 → 县级医院接收）；多审的那一次修前是 409，上面那句已拦
+        assert _count(db, SpdReferralStep, SpdReferralStep.action == "pass") == 2
     capsys.readouterr()
 
     _bury_first_page()
+    _open_another_visit()
     _run_seed()   # 修前：约号那一行 KeyError: 'id'，其后各段与末端自检都不跑
-    assert _snapshot() == {**first, "处方": first["处方"] + BURY, "检查申请": first["检查申请"] + BURY}
-    # 第二遍一直走到了末端自检，居民侧那条也在里头（验证码冷却没把居民会话挡在外面）
+    assert _snapshot() == {**first, "处方": first["处方"] + BURY, "检查申请": first["检查申请"] + BURY,
+                           "就诊": first["就诊"] + 1}
+    # 第二遍一直走到了末端自检，居民侧那条也在里头（验证码冷却没把居民会话挡在外面）；采购走没走到验收自检也看得见了
     out = capsys.readouterr().out
     assert "末端自检通过" in out
     assert "报告/手术已落居民消息" in out
+    assert "物资采购已走到验收" in out
 
     # 上一遍号源建好、约号之前就断了：再跑时号源撞 409，要查回已有的那个补约，不拿 409 的响应体取 id。
     # 只断言预约补上了——两遍之间若跨了午夜，号源日期跟着变、走的是新建那条路，号源数就不该拿来比
