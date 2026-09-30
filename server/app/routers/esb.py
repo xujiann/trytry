@@ -62,6 +62,8 @@ MSG_STATUS = {
 STEP_TYPES = {"transform": "转换", "route": "路由", "validate": "校验", "persist": "落库"}
 # 支持的转换格式 → 复用 integration.py 的入站解析实现
 TRANSFORM_FORMATS = {"hl7v2_patient": "HL7 v2 ADT 患者", "fhir_patient": "FHIR R4 Patient"}
+# persist 步骤认得的落库实体（`_run_step` 的分支，缺省 patient）：patient 拿前面 transform 的产物建档
+PERSIST_ENTITIES = {"patient": "患者档案", "exchange_log": "交换日志"}
 # 重试退避基数（秒）：第 n 次失败后 next_retry_at = now + BACKOFF_SECONDS * 2^(n-1)
 BACKOFF_SECONDS = 60
 # 出站投递的 HTTP 超时（秒）：投递失败走既有重试/死信机制，不必挂长
@@ -847,6 +849,40 @@ def _validate_steps(steps: list) -> None:
                 raise HTTPException(status_code=422, detail=f"第 {idx} 步 {key} 须为字符串")
 
 
+def _steps_problem(db: Session, steps: list) -> str:
+    """步骤的取值对不对得上运行期认得的：第一处问题的说明，没有问题返回空串（P2-1122，第三十二批扫描 B4-3）。
+
+    `_validate_steps` 只查形状：转换格式写成 `fhir`、落库实体写成 `patients`、路由到不存在的接入方、落库患者档案前面
+    没有 transform，原先都照存——编排写错是配置问题，却在运行期记成每条被执行消息的一次失败（`_record_failure`），
+    到重试上限转死信，死信不可再消费，修好编排也救不回来。四处取值就是 `_run_step` 运行期认的那几种；路由目标只查
+    存在，启用与否留到运行期判（停用是临时的，启用回来照常投）。建 / 改编排拦成 422，执行前对存量编排拦成 409。
+    存量编排可能连形状都不对（P1-176 之前存的），这里只挑认得出的取值看，形状问题照旧留给运行期。"""
+    transformed = False
+    for idx, step in enumerate(steps, start=1):
+        if not isinstance(step, dict):
+            continue
+        config = step.get("config")
+        if not isinstance(config, dict):
+            config = {}
+        if step.get("type") == "transform":
+            fmt = config.get("format", "")
+            if not isinstance(fmt, str) or fmt not in TRANSFORM_FORMATS:
+                return f"第 {idx} 步未知转换格式 {fmt or '(空)'}（须为 {'/'.join(TRANSFORM_FORMATS)}）"
+            transformed = True
+        elif step.get("type") == "persist":
+            entity = config.get("entity", "patient")
+            if not isinstance(entity, str) or entity not in PERSIST_ENTITIES:
+                return f"第 {idx} 步未知落库实体 {entity or '(空)'}（须为 {'/'.join(PERSIST_ENTITIES)}）"
+            if entity == "patient" and not transformed:
+                return f"第 {idx} 步落库患者档案须先经 transform 产出标准化数据（前面没有 transform 步骤）"
+        elif step.get("type") == "route":
+            target = config.get("target_endpoint", "")
+            known = isinstance(target, str) and db.query(EsbEndpoint.id).filter(EsbEndpoint.code == target).first()
+            if not known:
+                return f"第 {idx} 步路由目标接入方 {target or '(空)'} 不存在"
+    return ""
+
+
 def _flow_out(f: EsbFlow) -> dict:
     return {
         "id": f.id,
@@ -881,6 +917,9 @@ def create_flow(body: FlowCreate, db: Session = Depends(get_db)):
     if db.query(EsbFlow).filter(EsbFlow.code == body.code).first():
         raise HTTPException(status_code=409, detail="该流程编码已存在")
     _validate_steps(body.steps)
+    problem = _steps_problem(db, body.steps)   # 取值写错照存，跑一次记消息一次失败（P2-1122）
+    if problem:
+        raise HTTPException(status_code=422, detail=problem)
     flow = insert_or_conflict(db, EsbFlow(**body.model_dump()), "该流程编码已存在")
     return _flow_out(flow)
 
@@ -901,6 +940,9 @@ def update_flow(flow_id: int, body: FlowUpdate, db: Session = Depends(get_db)):
     payload = body.model_dump(exclude_unset=True)
     if payload.get("steps") is not None:
         _validate_steps(payload["steps"])
+        problem = _steps_problem(db, payload["steps"])   # 与建编排同一套（P2-1122）
+        if problem:
+            raise HTTPException(status_code=422, detail=problem)
     for field, value in payload.items():
         if value is not None:
             setattr(flow, field, value)
@@ -943,6 +985,11 @@ def run_flow(code: str, message_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="流程不存在")
     if not flow.active:
         raise HTTPException(status_code=409, detail="流程已停用")
+    # 存量里取值写错的编排（P2-1122 之前存的）执行也只会失败：拦在动消息之前——原先每执行一次记这条消息一次失败，
+    # 到上限转死信，修好编排也不可再消费。消息的状态与重试次数原样不动，改好编排再执行
+    problem = _steps_problem(db, flow.steps or [])
+    if problem:
+        raise HTTPException(status_code=409, detail=f"编排 {flow.code} 写得不对，执行也只会失败：{problem}——改好编排再执行")
     message = db.get(EsbMessage, message_id)
     if message is None:
         raise HTTPException(status_code=404, detail="消息不存在")

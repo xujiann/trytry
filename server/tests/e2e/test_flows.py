@@ -1380,7 +1380,9 @@ def test_编辑编排流程由框自己提交_步骤写错框不关(page, base_u
     form.locator("button[type=submit]").click()
     expect(form.locator("[data-modal-msg]")).to_contain_text("第 2 步")
     assert (saved()["name"], [s["type"] for s in saved()["steps"]]) == ("E2E框内提交编排", ["validate"])
-    _redrawn(page, lambda: _spd_modal(page, {"steps": '[{"type":"validate"},{"type":"persist"}]'}))
+    # 落库交换日志：缺省实体是患者档案，前面没有 transform 的 P2-1122 起 422（跑起来必失败）
+    _redrawn(page, lambda: _spd_modal(
+        page, {"steps": '[{"type":"validate"},{"type":"persist","config":{"entity":"exchange_log"}}]'}))
     assert (saved()["name"], [s["type"] for s in saved()["steps"]]) == ("E2E框内提交编排（改）", ["validate", "persist"])
 
 

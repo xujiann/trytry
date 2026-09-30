@@ -675,8 +675,9 @@ def test_第三层_收费项目改名为空串_422_照常改名照收(client, ad
 
 
 def test_第三层_ESB流程改成零步骤或空名_422(client, admin):
-    flow = client.post("/api/esb/flows", headers=admin,
-                       json={"code": "P198-F", "name": "口径流程", "steps": [{"type": "persist"}]})
+    # 落库交换日志：缺省实体是患者档案，前面没有 transform 的那种写法 P2-1122 起建编排即 422（跑起来必失败）
+    flow = client.post("/api/esb/flows", headers=admin, json={
+        "code": "P198-F", "name": "口径流程", "steps": [{"type": "persist", "config": {"entity": "exchange_log"}}]})
     assert flow.status_code == 201, flow.text
     url = f"/api/esb/flows/{flow.json()['id']}"
     assert client.patch(url, headers=admin, json={"steps": []}).status_code == 422
