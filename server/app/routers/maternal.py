@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field, FiniteFloat
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 from .. import clock
-from ..datetypes import DateStr, OptionalDateStr, legacy_date
+from ..datetypes import DateStr, OptionalDateStr, before_birth_problem, legacy_date
 from ..concurrency import append_text, appended_text, insert_if_absent, insert_or_conflict
 from ..numtypes import INT4_MAX
 from ..texttypes import NON_BLANK
@@ -284,8 +284,12 @@ class ChildVisitReceiptOut(BaseModel):
     dependencies=[Depends(require_roles("doctor", "public_health"))],  # H2/L5: 儿童随访
 )
 def add_child_visit(child_id: int, body: ChildVisitCreate, db: Session = Depends(get_db)):
-    if db.get(ChildRecord, child_id) is None:
+    child = db.get(ChildRecord, child_id)
+    if child is None:
         raise HTTPException(status_code=404, detail="儿童档案不存在")
+    before_birth = before_birth_problem(body.visit_date, child.birth_date, "访视日期")   # P2-940
+    if before_birth:
+        raise HTTPException(status_code=422, detail=before_birth)
     visit = ChildVisit(child_id=child_id, **body.model_dump())
     db.add(visit)
     db.commit()
@@ -412,6 +416,10 @@ def add_screening(child_id: int, body: ScreeningCreate, db: Session = Depends(ge
     child = db.get(ChildRecord, child_id)
     if child is None:
         raise HTTPException(status_code=404, detail="儿童档案不存在")
+    # 早于出生的筛查不收（P2-940）：原先照收，异常的还把孩子标成高危儿
+    before_birth = before_birth_problem(body.screen_date, child.birth_date, "筛查日期")
+    if before_birth:
+        raise HTTPException(status_code=422, detail=before_birth)
     screening = NewbornScreening(child_id=child_id, **body.model_dump())
     if body.result == "abnormal":
         _mark_high_risk(db, ChildRecord, child_id, "risk_note", f"{_SCREEN_ITEM_NAMES[body.item]}阳性/可疑")

@@ -11,7 +11,7 @@ from ..visibility import assert_org_writable, log_patient_access, scope_patient_
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_date, require_roles
 from ..models import ChildRecord, MedicalCert, Organization, Patient, User
-from ..datetypes import DateStr
+from ..datetypes import DateStr, before_birth_problem
 from ..texttypes import NON_BLANK
 from ..privacy import mask_id_card, mask_phone
 from .reports import _csv_response
@@ -71,8 +71,14 @@ def issue_cert(
         raise HTTPException(status_code=422, detail="死亡医学证明须关联患者档案")
     # 出生证明 / 缺陷登记的患者可空，填了同样要查（P2-396）：原先只有死亡那一支查——填错的编号撞外键，被下面
     # 取号重试当成「编号撞了」连试 12 次，回「编号分配连续冲突，请稍后重试」，怎么重试都是这一句
-    if body.patient_id is not None and db.get(Patient, body.patient_id) is None:
+    patient = db.get(Patient, body.patient_id) if body.patient_id is not None else None
+    if body.patient_id is not None and patient is None:
         raise HTTPException(status_code=404, detail="患者不存在")
+    # 死亡日期早于出生日期的不签（P2-940）：原先 1940 年生的人签发 1930 年死亡照收，死因报告卡照导出去网报
+    if body.cert_type == "death" and patient is not None:
+        before_birth = before_birth_problem(body.event_date, patient.birth_date, "死亡日期")
+        if before_birth:
+            raise HTTPException(status_code=422, detail=before_birth)
     if body.cert_type == "death" and not body.detail.strip():   # 一串空格不算填了（P2-309）
         raise HTTPException(status_code=422, detail="死亡医学证明须填写死因诊断")
     if body.cert_type == "defect" and not body.detail.strip():

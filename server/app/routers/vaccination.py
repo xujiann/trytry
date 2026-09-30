@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from .. import clock
 from ..clock import now_naive
 from ..concurrency import claim_quota
-from ..datetypes import OptionalDateStr
+from ..datetypes import OptionalDateStr, before_birth_problem
 from ..numtypes import INT4_MAX
 from ..texttypes import NON_BLANK, code_key
 from ..visibility import assert_org_writable, assert_patient_visible
@@ -87,13 +87,17 @@ class RecordOut(RecordCreate):
 )
 def vaccinate(body: RecordCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     assert_org_writable(db, user, body.org_id)
-    if db.get(Patient, body.patient_id) is None:
+    patient = db.get(Patient, body.patient_id)
+    if patient is None:
         raise HTTPException(status_code=404, detail="受种者不存在")
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="接种机构不存在")
     # 接种日期留空按今天：查禁忌、查批次效期用的是这个日期，落库的也得是这个日期（P2-196）——原先查按今天、
     # 存的却是空串：AEFI 发生率按期间数接种剂次时这一针不在任何期间里，接种证明的日期印成「—」
     vaccinated_date = body.vaccinated_date or clock.today().isoformat()
+    before_birth = before_birth_problem(vaccinated_date, patient.birth_date, "接种日期")   # P2-940
+    if before_birth:
+        raise HTTPException(status_code=422, detail=before_birth)
     # 接种禁忌硬拦截：只拦生效中的，已解除与已过期的不再拦
     forbidden = _effective_contraindications(db, body.patient_id, body.vaccine_code, vaccinated_date)
     if forbidden:

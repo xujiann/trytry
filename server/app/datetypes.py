@@ -85,6 +85,18 @@ def legacy_time(value: str | None) -> str | None:
     return f"{hour:02d}:{minute:02d}" if hour <= 23 and minute <= 59 else None
 
 
+def before_birth_problem(event_date: str, birth_date: str | None, what: str) -> str:
+    """事件日期早于出生日期时说出来（P2-940），不早、或出生日期不知道（空 / 读不成）返回空串。
+
+    P2-713 只管了出生日期本身不得晚于今天；接种、新生儿访视、新生儿筛查、死亡日期原先都不拿出生日期当下界——一年前
+    的乙肝第 1 剂、出生前两个月的新生儿访视照收（接种登记没有逆操作，改不回来），早于出生的异常新筛还把孩子标成高危儿。
+    出生日期是库里存着的，按存量写法读（`legacy_date`）；事件日期是刚过入参闸门的 `YYYY-MM-DD`。"""
+    born = legacy_date(birth_date)
+    if not event_date or born is None or event_date >= born:
+        return ""
+    return f"{what}（{event_date}）早于出生日期（{born}）"
+
+
 def _check(value: object, *, allow_blank: bool) -> object:
     if isinstance(value, date):
         return value.isoformat()
