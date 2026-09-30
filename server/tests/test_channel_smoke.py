@@ -86,3 +86,33 @@ def test_脚本不引Mock通道():
 def test_电子证照如实报无代码路径():
     r = channel_smoke.smoke_ehcert()
     assert r.status == channel_smoke.SKIP and "尚无" in r.evidence
+
+
+def test_应用不用的短信配置不报PASS_一条也不发(monkeypatch):
+    """P2-1092（第三十一批 C2-6）：冒烟原先直接 new 一个网关去发、只看 URL——配了网关却忘了切 provider（P2-835 的形态）、
+    或网关地址在县内专网（应用启动时出网校验不予启用），冒烟照样 PASS，应用却一条不发。改为先按应用的装配口径判。"""
+    import httpx
+
+    sent = []
+    monkeypatch.setattr(httpx, "post", lambda *a, **kw: sent.append(a) or None)
+    monkeypatch.setattr(settings, "sms_gateway_url", "https://sms.example.com/send")
+    monkeypatch.setattr(settings, "sms_provider", "console")
+    r = channel_smoke.smoke_sms("13800000000")
+    assert r.status == channel_smoke.FAIL and "不是 http" in r.evidence   # 修前 PASS
+    monkeypatch.setattr(settings, "sms_provider", "http")
+    monkeypatch.setattr(settings, "sms_gateway_url", "http://10.20.30.40/sms/send")
+    r = channel_smoke.smoke_sms("13800000000")
+    assert r.status == channel_smoke.FAIL and "出网校验" in r.evidence    # 修前 PASS
+    assert sent == []
+
+
+def test_内网的支付网关不报PASS(monkeypatch):
+    import httpx
+
+    called = []
+    monkeypatch.setattr(httpx, "get", lambda *a, **kw: called.append(a))
+    monkeypatch.setattr(settings, "payment_gateway_url", "http://192.168.1.20/pay")
+    monkeypatch.setattr(settings, "payment_gateway_key", "k")
+    r = channel_smoke.smoke_payment()
+    assert r.status == channel_smoke.FAIL and "出网校验" in r.evidence   # 修前 PASS（流水接口应答正常）
+    assert called == []

@@ -36,7 +36,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.config import settings  # noqa: E402
-from app.egress import signed_headers  # noqa: E402
+from app.egress import egress_url_problem, signed_headers  # noqa: E402
 
 _TIMEOUT = 10.0
 
@@ -59,6 +59,15 @@ def smoke_sms(sms_phone: str | None) -> Result:
             "短信网关", SKIP,
             "已配置网关但未提供 --sms-phone；发送即真短信（计费/打扰），拒绝擅发",
         )
+    # 应用自己用不用这个网关，先按应用的装配口径判（P2-1092，`sms._build_provider`）：原先直接 new 一个网关去发，只看 URL——
+    # 忘了切 MEDPLAT_SMS_PROVIDER（P2-835 的形态）或 URL 指到内网（应用启动时 [EGRESS] 不予启用），冒烟照样 PASS，
+    # 应用却一条不发、验证码一律 502，验收记录上写的是 PASS
+    if settings.sms_provider != "http":
+        return Result("短信网关", FAIL,
+                      f"配了网关地址，但 MEDPLAT_SMS_PROVIDER={settings.sms_provider!r} 不是 http：应用走控制台通道，一条也不发")
+    problem = egress_url_problem(settings.sms_gateway_url)
+    if problem:
+        return Result("短信网关", FAIL, f"网关地址过不了出网校验（{problem}）：应用启动时不予启用，验证码一律发不出")
     from app.sms import HttpGatewaySmsProvider
 
     provider = HttpGatewaySmsProvider(
@@ -105,6 +114,10 @@ def smoke_payment() -> Result:
     """支付网关：HMAC 签名拉当日流水——验 URL 与密钥，只读不动钱。"""
     if not settings.payment_gateway_url:
         return Result("支付网关", SKIP, "未配置 MEDPLAT_PAYMENT_GATEWAY_URL / _KEY")
+    # 与应用注册网关同一道出网校验（P2-1092，`billing.register_http_gateway`）：过不了的应用不注册，冒烟通了也不算数
+    problem = egress_url_problem(settings.payment_gateway_url)
+    if problem:
+        return Result("支付网关", FAIL, f"网关地址过不了出网校验（{problem}）：应用不注册这个网关，网关支付下单即拒")
     import httpx
 
     today = datetime.date.today().isoformat()
