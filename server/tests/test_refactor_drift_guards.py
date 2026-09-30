@@ -321,6 +321,7 @@ SNAPSHOT_ENDPOINTS = {
     "GET /api/portal/spd/consults/{consult_id}/messages",
     "GET /api/portal/spd/edu",
     "GET /api/portal/spd/followups",
+    "GET /api/portal/spd/health-prescriptions",   # P2-1051：居民端读健康处方
     "GET /api/portal/spd/home",
     "GET /api/portal/spd/interventions",
     "GET /api/portal/spd/journey",
