@@ -5,6 +5,7 @@
 - 5 类执行器：required / range / enum / cross_ref / logic（命名逻辑校验）
 - 启动时按 app/data/qc_rules_seed.py 幂等种子化 15 条规则（已存在编码不覆盖本地调整）
 """
+import logging
 from datetime import date, datetime
 from typing import Any
 
@@ -41,6 +42,7 @@ from ..texttypes import NON_BLANK
 router = APIRouter(
     prefix="/api/dataquality", tags=["数据质控"], dependencies=[Depends(get_current_user)]
 )
+logger = logging.getLogger("medplat.dataquality")
 
 RULE_TYPES = {
     "required": "必填项",
@@ -373,6 +375,11 @@ def _is_field(model, name) -> bool:
     return isinstance(name, str) and bool(name.strip()) and hasattr(model, name)
 
 
+def _is_scalar(value) -> bool:
+    """单个取值（文字 / 数 / true / false / null）：filter 按「列 = 取值」绑进 SQL，枚举取值要放进集合，列表与对象都不行。"""
+    return value is None or isinstance(value, (str, int, float, bool))
+
+
 def _column_type(model, name: str):
     """列的 Python 类型；不是列、或类型报不出来时返回 None（不查）。"""
     column = sa_inspect(model).columns.get(name)
@@ -419,6 +426,11 @@ def rule_config_problem(target_table: str, rule_type: str, config: dict) -> str:
         wrong = [key for key in row_filter if not _is_field(model, key)]
         if wrong:
             return f"filter 里的 {'、'.join(map(str, wrong))} 不是 {target_table} 的字段"
+        # 取值只收单个值（P2-1123）：想表达「属于这几种」写成列表很自然，可绑定参数不收列表——原先照存，之后汇总与
+        # 运行检查整体 500，质控页打不开，页上的停用按钮也就点不到
+        listed = [key for key, value in row_filter.items() if not _is_scalar(value)]
+        if listed:
+            return f"filter 里 {'、'.join(listed)} 的取值要写成单个值（按「字段 = 取值」过滤，不支持列表或对象）"
     for flag in ("skip_empty", "exclusive_min", "exclusive_max"):
         if flag in config and not isinstance(config[flag], bool):
             return f"{flag} 只能是 true / false"
@@ -441,8 +453,12 @@ def rule_config_problem(target_table: str, rule_type: str, config: dict) -> str:
         if _range_reversed(low, high):
             # 下限不大于上限（P2-712，与慢专病目标「下限不得大于上限」同一句）：min 300 / max 50 把每一行都判成违规
             return f"区间下限 {low} 大于上限 {high}，每一行都会判成违规"
-    if rule_type == "enum" and not isinstance(config.get("values", []), list):
-        return "values 要写成取值列表"
+    if rule_type == "enum":
+        values = config.get("values", [])
+        if not isinstance(values, list):
+            return "values 要写成取值列表"
+        if not all(_is_scalar(v) for v in values):   # 多套一层方括号：放不进集合，扫描即 500（P2-1123）
+            return "values 里每个取值都要写成单个值（文字或数），不能再套一层列表或对象"
     if rule_type == "cross_ref":
         if config.get("ref_code_system"):
             if not isinstance(config["ref_code_system"], str):
@@ -520,7 +536,7 @@ class ViolationOut(BaseModel):
 class SkippedRuleOut(BaseModel):
     rule_code: str
     rule_name: str
-    #: 配置哪里写坏了（`rule_config_problem` 的文案）
+    #: 配置哪里写坏了（`rule_config_problem` 的文案），或扫描时抛了什么错（`_scan_rule`，P2-1123）
     problem: str
 
 
@@ -547,6 +563,25 @@ def _usable_rules(rules: list[QcRule]) -> tuple[list[QcRule], list[dict]]:
     return usable, skipped
 
 
+def _scan_rule(db: Session, rule: QcRule, skipped: list[dict]) -> list[dict] | None:
+    """执行一条规则；扫描时抛错的跳过并点名（写明异常类）、返回 None，其余规则照常扫（P2-1123，口径同 P2-81）。
+
+    `rule_config_problem` 认不全的写法照样存得进去：filter 的取值写成列表、枚举取值多套一层方括号，原先建规则 201，
+    之后汇总与运行检查整体 500——质控页载入就取汇总，页打不开，页上的停用按钮也就点不到，只能直接调接口。那两种已在
+    写入口拦下，这里兜住还没认出来的（真 PG 上列与取值的类型对不上、枚举取值文字与数混写时拼违规说明排不了序之类）。
+    出错先回滚：真 PG 上一条语句出错整个事务作废，不回滚后面的规则一条也扫不了；汇总与运行检查都只读，回滚不丢东西。
+    错误全文进日志。"""
+    code, name = rule.code, rule.name
+    try:
+        return run_rule(db, rule)
+    except Exception as exc:  # noqa: BLE001 - 一条规则扫挂了不拖垮整次扫描
+        db.rollback()
+        logger.exception("数据质控规则 %s 扫描出错，本次跳过", code)
+        reason = exc.detail if isinstance(exc, HTTPException) else type(exc).__name__
+        skipped.append({"rule_code": code, "rule_name": name, "problem": f"扫描时出错（{reason}），这次没扫，请核对配置"})
+        return None
+
+
 @router.get("/run", response_model=RunChecksOut)
 def run_checks(
     response: Response,
@@ -563,7 +598,7 @@ def run_checks(
     for rule in rules:
         if severity and rule.severity != severity:
             continue
-        violations.extend(run_rule(db, rule))
+        violations.extend(_scan_rule(db, rule, skipped) or [])
     total = len(violations)
     limit = min(max(limit, 1), 1000)
     response.headers["X-Total-Count"] = str(total)
@@ -607,7 +642,9 @@ def summary(db: Session = Depends(get_db)):
     by_table: dict[str, int] = {}
     rules, skipped = _usable_rules(_active_rules(db))
     for rule in rules:
-        hits = run_rule(db, rule)
+        hits = _scan_rule(db, rule, skipped)
+        if hits is None:
+            continue
         by_rule.append(
             {
                 "rule_code": rule.code,
