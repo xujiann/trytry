@@ -316,6 +316,7 @@ async function renderAccessLogs() {
     // 所以标题与说明都按"全量/该患者全量"写，不能顺着上面的筛选条件说成"本次筛选的构成"。
     const q = patientId ? `?patient_id=${encodeURIComponent(patientId)}` : "";
     const st = await api(`/api/access-logs/stats${q}`);
+    if (!patientId) fillBases(st.by_basis);
     $("#al-stats").innerHTML = `
       <p class="desc">口径：按<b>依据</b>汇总的调阅构成，${patientId
         ? `只统计患者 ${esc(patientId)} 的记录——<b>聚焦到某个人本身也会留痕</b>（后端会把这次查询记进调阅日志）`
@@ -330,6 +331,16 @@ async function renderAccessLogs() {
       ${st.by_basis.length
         ? barChart(st.by_basis.map((b) => [b.basis_name, b.count]))
         : '<p class="empty">暂无调阅记录</p>'}`;
+  };
+  // 依据下拉（P2-1023，照 P2-826）：接口按依据编码等值比，表格显示的是中文名——原先是自由文本框、占位只提示了 11 个码里的两个，
+  // 照表格填「本机构就诊」「患者授权」查回空表，看着像没有这类调阅。选项取自全量调阅构成里出现过的依据，编码作值、后端给的
+  // 中文名（basis_name）作显示；没出现过的依据选了也是空表，不列。按患者聚焦的构成只是一个人的，不拿它收窄下拉
+  const fillBases = (bases) => {
+    const select = $('#al-search select[name="basis"]');
+    const picked = select.value;
+    select.innerHTML = '<option value="">全部依据</option>'
+      + bases.map((b) => `<option value="${esc(b.basis)}">${esc(b.basis_name)}</option>`).join("");
+    select.value = picked;
   };
   const draw = async (params = {}) => {
     const q = Object.entries(params).filter(([, v]) => v).map(([k, v]) =>
@@ -349,7 +360,7 @@ async function renderAccessLogs() {
         <input name="patient_id" placeholder="患者ID">
         <input name="username" placeholder="调阅人账号">
         <input name="org_id" type="number" placeholder="调阅人所属机构ID">
-        <input name="basis" placeholder="依据(encounter/referral/…)">
+        <select name="basis"><option value="">全部依据</option></select>
         <input name="start" placeholder="起 YYYY-MM-DD"><input name="end" placeholder="止 YYYY-MM-DD">
         <button>查询</button></form>
       <p class="desc">按患者查询会一并留痕——查"谁看过某人"本身也是在看这个人的隐私。</p>

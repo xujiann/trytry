@@ -1922,6 +1922,24 @@ def test_统一支付的金额占位按渠道写明留空时收哪一份(page, b
     expect(amount).to_have_attribute("placeholder", "金额(元，空=押金冲抵后应补缴的自付额)")
 
 
+def test_调阅留痕按依据筛_下拉写中文名查的是编码(page, base_url, seed, admin_read):
+    """P2-1023：「依据」原先是自由文本框，照表格填「全域角色」查回空表，只有填 global 才查得到。"""
+    admin_read(f"/api/access-logs?patient_id={seed['patient']['id']}")   # 按患者查调阅记录本身留痕，依据记「全域角色」
+    _login(page, base_url)
+    _open_page(page, "access-logs", "调阅留痕")
+    basis = page.locator('#al-search select[name="basis"]')
+    expect(basis.locator('option[value="global"]')).to_have_text("全域角色")   # 修前是文本框，没有这一项
+    basis.select_option("global")
+    with page.expect_response(lambda r: "/api/access-logs?" in r.url and "basis=global" in r.url) as got:
+        page.click("#al-search button")
+    assert got.value.ok
+    page.wait_for_function("""() => {
+        const tags = [...document.querySelectorAll('#al-table td .tag')].map((t) => t.textContent);
+        return tags.length > 0 && tags.every((t) => t === '全域角色');
+    }""")
+    expect(basis).to_have_value("global")   # 重填选项不丢已选的依据
+
+
 def test_慢专病转诊全轨迹_县级退回写退回(page, base_url, seed, admin_call):
     """P2-1022：县级医院那一格通过与退回共用环节名「县级医院接收」，全轨迹的「动作」列原先原样印 pass / reject。"""
     patient = admin_call("POST", "/api/patients", {"name": "E2E转诊退回", "id_card": "320981199405051022", "gender": "男"})
