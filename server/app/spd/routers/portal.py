@@ -53,8 +53,8 @@ from ..service import (CONSULT_ROLES, FOLLOWUP_OPEN_STATUSES, MEASUREMENT_SOURCE
                        REFERRAL_STATUS_LABELS, TASK_COMPLETABLE_STATUSES, TASK_OPEN_STATUSES, actively_enrolled, answers_problem, referral_ends,
                        close_followup_record, enrollment_for, judge_measurement, mark_intervention_done,
                        measure_program_for, measure_value_problem, move_task,
-                       scale_program_mismatch, scale_unusable, scale_version_problem, spawn_followup_abnormal_task,
-                       unknown_program)
+                       exclusion_problem, scale_program_mismatch, scale_unusable, scale_version_problem,
+                       spawn_followup_abnormal_task, unknown_program)
 from .followup import ABNORMAL_LEVEL_NAMES, FOLLOWUP_SCENE_NAMES
 from fastapi import File, Form, UploadFile
 
@@ -575,6 +575,8 @@ class SpdScreeningOut(BaseModel):
     answered: int | None = None
     total_items: int | None = None
     can_apply: bool | None = None
+    # 命中病种排除规则时才有（P2-935），放在最后：其余形状的字节不变
+    excluded_reason: str | None = None
 
 
 @router.post("/screenings", response_model=SpdScreeningOut,
@@ -622,21 +624,29 @@ def self_screening(
     # 这里先收敛成 str，风险等级判定与入库用同一个值。得分没落进任何分段就是「未分级」（空串），与筛查登记、
     # 量表评估同一个记法（P2-689）：原先补成「低危」，最高分落进分段缺口的居民被告知低危、不提示申请服务
     risk: str = str(graded["risk_level"])
+    # 排除规则与医护筛查同一口径先跑（P2-935）：原先只按量表出结论，15 岁的居民自查高危 → 可申请 → 受理，进了成人
+    # 高血压的目标池。纳入规则不跑——自查不进目标池，疑似照旧只看量表；命中排除的记「排除」、不提示申请，并说出是哪条
+    program = db.query(SpdProgram).filter(SpdProgram.code == body.program_code).first()
+    excluded = exclusion_problem(db, patient.id, program, {"score": graded["score"]} if scale else None,
+                                 answers=body.answers) if program is not None else ""
     record = SpdScreening(
         patient_id=patient.id, program_code=body.program_code, source="self",
         scale_code=body.scale_code, answers=body.answers, score=graded["score"],
         risk_level=risk,
-        result="suspect" if is_suspect_risk(risk) else "normal",
+        result="excluded" if excluded else "suspect" if is_suspect_risk(risk) else "normal",
         advice=graded["advice"],
     )
     db.add(record)
     db.commit()
-    return {
+    out = {
         "id": record.id, "score": record.score, "risk_level": record.risk_level,
         "result": record.result, "advice": record.advice,
         # 已在管这个病种的不提示申请（P2-559）：受理只是把人放进目标池，在管的人受理了什么也不发生，居民却看到「已受理」
-        "can_apply": is_suspect_risk(record.risk_level) and not actively_enrolled(db, patient.id, body.program_code),
+        "can_apply": record.result == "suspect" and not actively_enrolled(db, patient.id, body.program_code),
     }
+    if excluded:
+        out["excluded_reason"] = excluded
+    return out
 
 
 class ApplyIn(BaseModel):
@@ -665,6 +675,11 @@ def apply_service(
     # 申请是给「未纳管居民」的（模型注释）：在管的人申请了，医护受理也只是把人放进目标池——已纳管的什么都不发生
     if actively_enrolled(db, patient.id, body.program_code):
         raise HTTPException(status_code=409, detail="该病种已在专病管理中，无需申请")
+    # 命中病种排除规则的不收（P2-935，与自查、受理同一口径）：原先 15 岁的居民照样申请成人高血压管理、受理进目标池
+    program = db.query(SpdProgram).filter(SpdProgram.code == body.program_code).first()
+    excluded = exclusion_problem(db, patient.id, program) if program is not None else ""
+    if excluded:
+        raise HTTPException(status_code=409, detail=f"{excluded}，不能申请该病种的专病服务")
     pending = (
         db.query(SpdServiceApply)
         .filter(

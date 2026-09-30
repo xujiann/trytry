@@ -282,6 +282,20 @@ def match_program(
     return result
 
 
+def exclusion_problem(
+    db: Session, patient_id: int, program: SpdProgram, extra: dict | None = None, *, answers: dict | None = None,
+) -> str:
+    """这位患者命中这个病种的排除规则时说出来（P2-935），没命中返回空串。
+
+    医护筛查、批量识别、就诊触发都先跑排除规则、排除压过量表高危；复核只认「疑似」（P2-591：排除规则挡在门外的人——
+    比如未成年——不能经复核改回目标人群）。居民自查、服务申请、受理、复核这一路原先不跑：15 岁的居民自查高危、申请、
+    受理，目标池那一行从「排除」翻成「目标」，随后签约建档进了成人高血压管理。"""
+    matched = match_program(db, patient_id, program, extra, answers=answers)
+    if matched["result"] != "excluded":
+        return ""
+    return "按病种规则不纳入（" + "；".join(str(m.get("label") or m.get("field")) for m in matched["excluded_by"]) + "）"
+
+
 def target_for(db: Session, program_code: str, stage: str, metric: str) -> SpdTarget | None:
     """取某病种某指标的管理目标，三级回落：本阶段 → 不分阶段 → 该病种任一阶段。
 

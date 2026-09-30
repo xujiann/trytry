@@ -57,7 +57,8 @@ from ..models import (
 )
 from ..rules import RuleError, as_validated, evaluate, is_suspect_risk, score_scale
 from ..service import (MEASUREMENT_SOURCE_NAMES, TASK_OPEN_STATUSES, actively_enrolled, award_points, build_facts,
-                       candidate_undistributed, close_open_work, match_program, migration_void_reason, package_items_ok,
+                       candidate_undistributed, close_open_work, exclusion_problem, match_program, migration_void_reason,
+                       package_items_ok,
                        scale_program_mismatch, scale_unusable, scale_version_problem, unknown_program)
 
 # 筛查来源、分组范围文案（措辞照抄 SpdScreening.source / SpdGroup.scope 列注释——P2-74）
@@ -679,6 +680,16 @@ def review_screening(
             assert_org_writable(db, user, pool_org[0])
     if screening.result != "suspect":
         raise HTTPException(status_code=409, detail="只有结论为「疑似」的筛查需要复核")
+    if body.review_result == "confirmed":
+        # 确认前按现在的档案再跑一遍排除规则（P2-935）：修前落下的居民自查不跑规则、恒按问卷判疑似，确认即把「排除」的
+        # 池行翻成「目标」——P2-591 挡的是结论为排除的筛查，挡不住这一路；档案事实变了（补了出生日期）的同理
+        program = db.query(SpdProgram).filter(SpdProgram.code == screening.program_code).first()
+        excluded = exclusion_problem(
+            db, screening.patient_id, program, {"score": screening.score} if screening.scale_code else None,
+            answers=screening.answers,
+        ) if program is not None else ""
+        if excluded:
+            raise HTTPException(status_code=409, detail=f"{excluded}，不能确认为目标人群")
     # 已复核的不能再复核（P2-736）：判定与写同一条 UPDATE。原先直接覆写——A 确认并认领之后，B 在没刷新的页面上点「排除」
     # 照 200，目标池翻成 excluded（认领人仍是 A）、复核人改成 B；再送「待定」，池停在 excluded，两边对不上。同类的服务申请
     # 「该申请已处理」、同意书「不能重复审核」都挡着。「待定」不是定论，还能再复核
@@ -2157,6 +2168,12 @@ def handle_service_apply(
         problem = unknown_program(db, apply.program_code, active_only=True)
         if problem:
             raise HTTPException(status_code=409, detail=f"{problem}，只能驳回")
+        # 命中病种排除规则的只能驳回（P2-935，与复核 P2-591 同一口径）：原先受理把池里「排除」的那一行翻成「目标」——
+        # 原因栏照写着「未成年人不纳入成人高血压管理」，随后签约建档
+        program = db.query(SpdProgram).filter(SpdProgram.code == apply.program_code).first()
+        excluded = exclusion_problem(db, apply.patient_id, program) if program is not None else ""
+        if excluded:
+            raise HTTPException(status_code=409, detail=f"{excluded}，只能驳回")
     apply.status = body.status
     apply.handle_note = body.handle_note
     apply.handled_by = user.id

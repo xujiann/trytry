@@ -1797,8 +1797,10 @@ async function renderSpdScreen(box) {
       const r = await authApi("/api/portal/spd/screenings", {
         method: "POST", body: JSON.stringify(body) });
       // 含「极高危」（P2-372）；空串是得分没落进任何分段——未分级，建议栏写着原因（P2-689）
+      // 命中病种排除规则的说出是哪条（P2-935）：不提示申请，原先照样提示、受理进了成人管理
       $("#spd-screen-msg").textContent =
-        `风险等级：${r.risk_level ? (SPD_RISK_TAGS[r.risk_level] || [r.risk_level])[0] : "未分级"}。${r.advice}`;
+        `风险等级：${r.risk_level ? (SPD_RISK_TAGS[r.risk_level] || [r.risk_level])[0] : "未分级"}。${r.advice}`
+        + (r.excluded_reason ? `${r.excluded_reason}，不纳入本病种专病管理，如有不适请就医。` : "");
       if (r.can_apply && confirm("检测到中高风险，是否申请专病管理服务？")) {
         const applyBody = { program_code: scale.program_code, screening_id: r.id };
         if (viewingPatientId !== null) applyBody.patient_id = viewingPatientId;
