@@ -663,6 +663,20 @@ def review_screening(
     if screening is None:
         raise HTTPException(status_code=404, detail="筛查记录不存在")
     assert_org_writable(db, user, screening.org_id)
+    if screening.org_id is None:
+        # 居民自查不带机构（P1-229）：机构守卫对机构为空的放行、语义由各接口自定，这里原先没定——哪家的医生都能按编号复核，
+        # 顺手把别家目标池里这位患者翻成目标 / 排除。与筛查清单同一口径：看得到这位患者的才能复核（留痕）；池里那一行
+        # 归别家机构的，与改池状态、受理服务申请同一口径，只有那家能动它
+        assert_patient_visible(db, user, screening.patient_id, resource="spd_screening")
+        pool_org = (
+            db.query(SpdCandidate.org_id)
+            .filter(SpdCandidate.patient_id == screening.patient_id,
+                    SpdCandidate.program_code == screening.program_code,
+                    SpdCandidate.status != "enrolled")
+            .first()
+        )
+        if pool_org is not None:
+            assert_org_writable(db, user, pool_org[0])
     if screening.result != "suspect":
         raise HTTPException(status_code=409, detail="只有结论为「疑似」的筛查需要复核")
     # 已复核的不能再复核（P2-736）：判定与写同一条 UPDATE。原先直接覆写——A 确认并认领之后，B 在没刷新的页面上点「排除」
