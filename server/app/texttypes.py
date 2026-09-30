@@ -33,22 +33,32 @@ def split_list(value: str | None) -> list[str]:
     return [part.strip() for part in _LIST_SEPARATORS.split(value or "") if part.strip()]
 
 
+def _drop_format_chars(value: str) -> str:
+    """去掉 Unicode 类别为 Cf（格式字符）的码点：零宽空格 U+200B、零宽（不）连字 U+200C / U+200D、左右向标记与嵌入
+    U+200E / U+200F / U+202A–U+202E、词连接符等 U+2060–U+2064、BOM U+FEFF、软连字符 U+00AD……（P2-1145）。
+
+    两个比对键共用的第一步。这类字符看不见、不占位，NFKC 不动它们，`strip()` / `split()` 也不当空白；从网页、微信、
+    富文本编辑器复制出来的编码与诊断常带着它们。原先编码后面多一个 U+200B，就等于「规则库里没有」——超量、相互作用、
+    禁忌诊断、接种禁忌一律不判，处方系统审通过、接种照样登记。"""
+    return "".join(ch for ch in value if unicodedata.category(ch) != "Cf")
+
+
 def code_key(value: str | None) -> str:
-    """编码的比对键：全角转半角（NFKC）、去首尾空白、大写（P1-218）。
+    """编码的比对键：去掉格式字符（Cf，P2-1145）、全角转半角（NFKC）、去首尾空白、大写（P1-218）。
 
     **只用于比对，不改落库的值**（与上面 NON_BLANK「不替人 strip」同一个取舍：落库口径怎么定另是一件事）。药品编码、
     疫苗编码这类「按编码找规则 / 找禁忌」的地方，原样比对时 `b01aa03`、`B01AA03 `、`Ｂ０１ＡＡ０３` 都等于「规则库里没有」
     ——审方直接系统审通过、禁忌拦不住。比对两侧都过它，写法不同的同一个编码才认得出是同一个。"""
-    return unicodedata.normalize("NFKC", value or "").strip().upper()
+    return unicodedata.normalize("NFKC", _drop_format_chars(value or "")).strip().upper()
 
 
 def text_key(value: str | None) -> str:
-    """文字的比对键：全角转半角（NFKC）、不分大小写（casefold）、去掉全部空白（P2-792）。
+    """文字的比对键：去掉格式字符（Cf，P2-1145）、全角转半角（NFKC）、不分大小写（casefold）、去掉全部空白（P2-792）。
 
     给「关键词在不在这段文字里」的子串比对用：DRG 的主诊断 / 主手术关键词、审方规则的禁忌诊断。原先按原样比，手术写成
     `pci术` / `ＰＣＩ术`、诊断写成 `qt间期延长` / `ＱＴ间期延长` 都命中不了——经皮冠脉介入落进内科组，QT 延长的患者照开
     阿奇霉素、系统审通过。关键词与被查的文字两侧都过它；同 `code_key`，只用于比对，不改落库的值。"""
-    return "".join(unicodedata.normalize("NFKC", value or "").casefold().split())
+    return "".join(unicodedata.normalize("NFKC", _drop_format_chars(value or "")).casefold().split())
 
 
 def has_keyword(text: str | None, keywords) -> bool:
