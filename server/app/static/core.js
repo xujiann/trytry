@@ -1626,17 +1626,20 @@ async function renderExams() {
       }
       if (claim) { await api(`/api/exams/${claim}/claim`, { method: "POST" }); route(); }
       if (report) {
-        const form = await spdModal("出报告", [
+        // 框自己提交（P2-1091）：原先点确定就关框、再发请求——别人已出过报告 409、写超了 422，一整段所见随框一起没了。
+        // 所见改成多行框（后端上限 2048 字），与医生移动端出报告同一个写法
+        const done = await spdModal("出报告", [
           { name: "conclusion", label: "诊断结论", required: true },
-          { name: "finding", label: "影像所见 / 检查所见" },
+          { name: "finding", label: "影像所见 / 检查所见", type: "textarea" },
           { name: "critical", label: "是否危急值", type: "select", value: "0",
             options: [{ value: "0", label: "否" }, { value: "1", label: "是（进危急值闭环）" }] },
-        ]);
-        if (!form || !form.conclusion) return;
-        await api(`/api/exams/${report}/report`, { method: "POST",
-          body: JSON.stringify({ conclusion: form.conclusion, finding: form.finding || "",
-                                 critical: form.critical === "1" }) });
-        route();
+        ], { submit: (form) => {
+          if (!form.conclusion) throw new Error("诊断结论必填");
+          return api(`/api/exams/${report}/report`, { method: "POST",
+            body: JSON.stringify({ conclusion: form.conclusion, finding: form.finding || "",
+                                   critical: form.critical === "1" }) });
+        } });
+        if (done) route();
       }
     } catch (err) { setMsg("#exam-msg", err.message, false); }
   };

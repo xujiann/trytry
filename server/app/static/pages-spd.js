@@ -1674,11 +1674,15 @@ async function renderSpdPatients() {
       let scale;
       try { scale = await api(`/api/spd/scales/${brief.id}`); }
       catch (err) { return setMsg("#spd-screen-msg", err.message, false); }
-      const picked = await spdModal(`${scale.name} · 逐题作答（没答的题留空）`, spdQuestionFields(scale.items, "q_"));
-      if (!picked) return;
-      body.answers = spdCollectAnswers(scale.items, picked, "q_");
       // 带上作答的那一版（P2-921）：页面打开后发布了新版，后端按编码取新版评分、结论对不上题目，带上后改为 409 请刷新
       body.scale_id = scale.id;
+      // 框自己提交（P2-1091，同执行随访的逐题作答 P2-607）：原先点确定就关框、答完才发请求——患者号敲错 403、量表改版
+      // 409，一整套作答随框一起没了。失败留框、报错写在框里、答的都在
+      const done = await spdModal(`${scale.name} · 逐题作答（没答的题留空）`, spdQuestionFields(scale.items, "q_"), {
+        submit: (picked) => api("/api/spd/screenings", { method: "POST", body: JSON.stringify({
+          ...body, answers: spdCollectAnswers(scale.items, picked, "q_") }) }) });
+      if (done) route();
+      return;
     }
     return postAction("/api/spd/screenings", body, "#spd-screen-msg");
   };
@@ -3891,18 +3895,17 @@ async function renderSpdMember() {
      * 高危还自动派干预与复诊。选项 value 用 label 本身——score_scale 就是按 label 查分值表的。 */
     const fields = spdQuestionFields(scale.items, "q_");
     if (!fields.length) return setMsg("#spd-assess-msg", "该量表没有题目，先去量表配置补齐", false);
-    const answersRaw = await spdModal(`${scale.name} · 逐题作答（没答的题留空）`, fields);
-    if (!answersRaw) return;
-    const answers = spdCollectAnswers(scale.items, answersRaw, "q_");
-    try {
+    // 框自己提交（P2-1091，与筛查同一句）：原先答完点确定就关框、再发请求——选了别家患者 403、量表改版 409，作答随框没了
+    const r = await spdModal(`${scale.name} · 逐题作答（没答的题留空）`, fields, {
       // 带上作答的那一版（P2-921）：与筛查同一句
-      const r = await api("/api/spd/assessments", { method: "POST", body: JSON.stringify({
-        patient_id: picked.patient_id, scale_code: scale.code, scale_id: scale.id, answers }) });
-      /* 不调 route() 刷新整页——那会把这条结果消息一并刷掉。
-       * 统计卡片下次进入页面自然更新，当下要紧的是让操作者看到评估结论。 */
-      setMsg("#spd-assess-msg",
-        `评估完成：${r.score} 分，风险等级 ${SPD_RISK[r.risk_level]?.[0] || r.risk_level || "未分级"}。${r.advice || ""}`);
-    } catch (err) { setMsg("#spd-assess-msg", err.message, false); }
+      submit: (answersRaw) => api("/api/spd/assessments", { method: "POST", body: JSON.stringify({
+        patient_id: picked.patient_id, scale_code: scale.code, scale_id: scale.id,
+        answers: spdCollectAnswers(scale.items, answersRaw, "q_") }) }) });
+    if (!r) return;
+    /* 不调 route() 刷新整页——那会把这条结果消息一并刷掉。
+     * 统计卡片下次进入页面自然更新，当下要紧的是让操作者看到评估结论。 */
+    setMsg("#spd-assess-msg",
+      `评估完成：${r.score} 分，风险等级 ${SPD_RISK[r.risk_level]?.[0] || r.risk_level || "未分级"}。${r.advice || ""}`);
   };
   /* 评估记录（成员端 #8「查看评估对象、记录与统计结果」，P2-563）：原先这一块只有统计卡片，列表容器画了却从不填——
    * 评了谁、哪次评的、得几分，页面上一条也看不到。按患者 / 量表 / 风险等级 / 病种筛，截到上限时明说 */

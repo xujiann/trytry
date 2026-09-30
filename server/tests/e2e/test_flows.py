@@ -2788,6 +2788,36 @@ def test_量表评估的单选默认未答_没答的题不交(page, base_url, se
     assert assessment["answers"] == {"salt": "否", "smoke": "是"}, assessment
 
 
+def test_筛查与出报告由框自己提交_被拒时作答与所见都在(page, base_url, seed, admin_call, admin_read, scale136):
+    """P2-1091（第三十一批 C3-3）：筛查逐题作答、出报告原先点确定就关框、再发请求——患者号敲错被拒、别人已出过报告
+    409，一整套作答 / 一整段所见随框一起没了（执行随访的逐题作答早按 P2-607 改成框内提交）。现在框自己提交：失败留框、
+    报错写在框里、填的都在。"""
+    _login(page, base_url)
+    _open_page(page, "spdpatients", "筛查建档与纳管")
+    form = page.locator("#spd-screen-form")
+    form.locator('[name="patient_id"]').fill("987654321")   # 敲错的患者号
+    form.locator('[name="program_code"]').select_option("hypertension")
+    form.locator('[name="scale_code"]').select_option("E2E_SCR136")
+    form.locator("button").click()
+    modal = _spd_modal_rejected(page, {"q_salt": "是", "q_family": "是"})   # 修前框先关、作答丢了
+    expect(modal.locator('[name="q_family"]')).to_have_value("是")
+    _cancel_modal(page)
+
+    req = admin_call("POST", "/api/exams", {"patient_id": seed["patient"]["id"], "from_org_id": seed["org"]["id"],
+                                            "center_type": "imaging", "item_code": "E2E-P21091", "item_name": "E2E框内出报告"})
+    admin_call("POST", f"/api/exams/{req['id']}/claim")
+    _open_page(page, "exams", "共享诊断中心")
+    page.click(f'button[data-report="{req["id"]}"]')
+    admin_call("POST", f"/api/exams/{req['id']}/report", {   # 框开着的时候别人先出了报告
+        "finding": "", "conclusion": "E2E 别人先出的报告", "critical": False, "reported_by": "影像科"})
+    finding = "双肺纹理清晰\n心影不大"
+    modal = _spd_modal_rejected(page, {"conclusion": "E2E 我写的结论", "finding": finding})   # 修前框先关、所见丢了
+    expect(modal.locator('[name="finding"]')).to_have_value(finding)
+    _cancel_modal(page)
+    (row,) = [r for r in admin_read(f"/api/exams?patient_id={seed['patient']['id']}") if r["id"] == req["id"]]
+    assert row["status"] == "reported"
+
+
 def test_干预模板与服务包的下拉按病种联动(page, base_url, seed, admin_call):
     """P2-99：干预下发的模板下拉、绑服务包的弹窗原先列全部病种的——高血压患者下发到糖尿病的干预、绑上糖尿病的服务包。
     现在只列这个病种的与通用的（后端对不上的 422）。"""
