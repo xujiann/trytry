@@ -935,14 +935,17 @@ def advance_path(db: Session, instance: SpdPathInstance) -> dict:
             index = nodes.index(current)
             nxt = nodes[index + 1] if index + 1 < len(nodes) else None
 
-    done = sum(
-        1
+    # 进度 = 办结过任务的不同节点数 ÷ 节点数（P2-1121）：原先数办结的任务条数，路径按 next_key 回到走过的节点（回环是有意
+    # 支持的，见 `tasks._resume_paused`）再办一趟就多算一条——复诊 → 评估 → 复诊绕一圈显示 100%，状态仍是执行中、环外的
+    # 结案节点一次没走到。环合不合法、发布时拦不拦另待裁定（随 P2-1033）
+    done_nodes = {
+        t.node_key
         for t in db.query(SpdTask)
         .filter(SpdTask.instance_id == instance.id, SpdTask.task_type == "path")
         .all()
         if t.status == "done"
-    )
-    instance.progress = min(int(done / len(nodes) * 100), 100)
+    }
+    instance.progress = min(int(len(done_nodes.intersection(by_key)) / len(nodes) * 100), 100)
 
     if nxt is None:
         instance.status = "completed"
