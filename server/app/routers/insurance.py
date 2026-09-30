@@ -97,12 +97,19 @@ class ReferralCertOut(BaseModel):
     dependencies=[Depends(require_roles("operator"))],  # H2: 转诊证明签发=经办
 )
 def issue_referral_cert(
-    referral_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+    referral_id: int, patient_id: int | None = None, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
-    """转诊证明：仅对已接诊/已结案的转诊签发，幂等返回既有证明。"""
+    """转诊证明：仅对已接诊/已结案的转诊签发，幂等返回既有证明。
+
+    带了 `patient_id` 就核对转诊单的患者（P2-997，与县外就诊挂转诊单同一句 422）：平台转诊与慢专病转诊各自从 1 编号，
+    经办照慢专病转诊页上的单号来签，证明就挂到了同号的另一位患者的平台转诊上，回执只有证明号、签错了看不出来；
+    复签幂等，别人那张早签过的话拿到的就是别人的证明号。页面一律带上患者号；不带的老调用照旧。"""
     referral = db.get(Referral, referral_id)
     if referral is None:
         raise HTTPException(status_code=404, detail="转诊记录不存在")
+    if patient_id is not None and referral.patient_id != patient_id:
+        raise HTTPException(status_code=422, detail="该转诊单不属于此患者")
     # P0-29：原先任一机构的经办都能给别家的转诊签证明。先把与患者毫无关系的第三方挡在外面——
     # 转出、转入两方本身就有转诊关系，照常能签；"到底该哪一方签"另在待裁定清单里。
     assert_patient_visible(db, user, referral.patient_id, resource="referral_cert")

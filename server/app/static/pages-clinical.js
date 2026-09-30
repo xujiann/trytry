@@ -1019,7 +1019,7 @@ async function renderInsurance() {
         <input name="self_pay" type="number" step="any" placeholder="自付" required><button>登记</button>
       </form>` : ""}
       <h3 style="margin-top:12px">转诊证明 / 特病申报</h3>
-      ${canSettle ? `<form class="inline" id="cert-form"><input name="referral_id" type="number" placeholder="转诊记录ID" required><button>签发证明</button></form>` : ""}
+      ${canSettle ? `<form class="inline" id="cert-form"><input name="referral_id" type="number" placeholder="平台转诊记录ID" required><input name="patient_id" type="number" placeholder="患者ID" required><button>签发证明</button></form>` : ""}
       ${canApply ? `<form class="inline" id="spec-form"><input name="patient_id" type="number" placeholder="患者ID" required><input name="disease_name" placeholder="病种" required><button>特病申报</button></form>` : ""}
       ${canSettle || canApply ? "" : `<p class="muted">结算登记与转诊证明由经办办理，特病申报由经办或医师提出；管理层在下面的队列里审核。</p>`}
       <p class="msg" id="ins-msg"></p>`)}
@@ -1046,7 +1046,14 @@ async function renderInsurance() {
     $("#ins-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/insurance/settlements", formJson(e.target, ["patient_id", "org_id", "total_amount", "insurance_pay", "self_pay"]), "#ins-msg"); };
     $("#cert-form").onsubmit = async (e) => {
       e.preventDefault();
-      try { const c = await api(`/api/insurance/referral-certs/${new FormData(e.target).get("referral_id")}`, { method: "POST" }); setMsg("#ins-msg", `证明号：${c.cert_no}`); }
+      // 带上患者号、后端核对转诊单是不是这位患者的（P2-997）：平台转诊与慢专病转诊各自编号，照慢专病转诊单号来签会签到同号
+      // 的另一位患者的平台转诊上
+      const f = new FormData(e.target);
+      try {
+        const c = await api(`/api/insurance/referral-certs/${f.get("referral_id")}?patient_id=${encodeURIComponent(f.get("patient_id"))}`,
+          { method: "POST" });
+        setMsg("#ins-msg", `证明号：${c.cert_no}（转诊记录 ${c.referral_id}，患者 ${f.get("patient_id")}）`);
+      }
       catch (err) { setMsg("#ins-msg", err.message, false); }
     };
   }
