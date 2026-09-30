@@ -741,7 +741,9 @@ def auto_screen(
 
     只扫**本机构有就诊记录的患者**，不扫全县主索引：全域扫描是一次全表笛卡尔，
     而且业务上没有意义——本机构没接触过的人，识别出来也没人去随访。
-    需要全域跑批时由 admin 走定时任务，那里可以慢慢跑。
+    不挂机构的全域账号（管理层 / admin）须指定按哪家机构扫，留空 422（P2-1140）。没有全域跑批的定时任务：这里原先写
+    「需要全域跑批时由 admin 走定时任务」，任务注册表里并无此项；要随就诊逐人识别的，走就诊事件订阅
+    （`MEDPLAT_SPD_AUTO_IDENTIFY_ON_ENCOUNTER`，缺省关，见 `spd/subscribers.py`）。
 
     只对命中纳入的人判排除（P2-1118）：纳入且排除 → 排除，没命中纳入 → 跳过、计入 normal，不写筛查、不进池。
     `rules.screen()` 先判排除、不管有没有命中纳入——「有禁忌」压过「符合适应证」，那是医护登记筛查与 `exclusion_problem`
@@ -754,6 +756,10 @@ def auto_screen(
     if not program.include_rules:
         raise HTTPException(status_code=422, detail="该病种未配置纳入规则，无法自动识别")
     org_id = body.org_id if body.org_id is not None else user.org_id
+    if org_id is None:
+        # 就诊记录必挂机构：全域账号（没有本机构）不指定机构，原先按「机构为空」去扫，恒 0 人、200、不报原因——页面弹
+        # 「扫描 0 人」，操作的人以为本县没有目标人群（P2-1140，与 `followup.auto_match_plans` 的 P2-92 同一句）
+        raise HTTPException(status_code=422, detail="请指定按哪家机构的就诊记录识别（本账号没有所属机构）")
     assert_org_writable(db, user, org_id)
     if org_id is not None and db.get(Organization, org_id) is None:   # 全域角色过守卫不查存在（P2-411）
         raise HTTPException(status_code=404, detail="机构不存在")
