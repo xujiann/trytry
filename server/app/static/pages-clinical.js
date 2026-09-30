@@ -2918,8 +2918,9 @@ async function renderInpatient() {
           <td>${esc(a.diagnosis_name)}</td><td>${statusTag(AS, a.status)}</td>
           <td>${actions} <button class="btn" data-orders="${a.id}">医嘱单</button> ${prints}</td></tr>`;
       }))}
-    <div class="panel hidden" id="inp-orders-panel"><h3>医嘱单</h3><div id="inp-orders"></div>
+    <div class="panel hidden" id="inp-orders-panel"><h3 id="inp-orders-title">医嘱单</h3><div id="inp-orders"></div>
       <div id="inp-exec"></div></div>`;
+  let ordersSeq = 0;
   const drawExecutions = async (orderId) => {
     // 只按行上的 id 取（行本身来自按住院单查的医嘱列表），不做"输入任意医嘱ID"的入口
     const rows = await api(`/api/inpatient/orders/${encodeURIComponent(orderId)}/executions`);
@@ -3026,8 +3027,15 @@ async function renderInpatient() {
         return await drawExecutions(d.execAdd);
       }
       if (d.orders) {
+        // 只画最后一次点的那一次住院、标题写上住院号（P2-1012）：原先先点甲、立刻改点乙，甲那次响应晚到就把甲的医嘱画在
+        // 面板里，标题只写「医嘱单」——「登记执行」记到了甲的医嘱上（与 route() / loadSpd() 同一个毛病、同一种修法）
+        const seq = ++ordersSeq;
+        $("#inp-orders").innerHTML = "";
+        $("#inp-exec").innerHTML = "";
         const orders = await api(`/api/inpatient/orders?admission_id=${d.orders}`);
+        if (seq !== ordersSeq) return;
         $("#inp-orders-panel").classList.remove("hidden");
+        $("#inp-orders-title").textContent = `医嘱单 · 住院 #${d.orders}`;
         $("#inp-exec").innerHTML = "";
         $("#inp-orders").innerHTML = table(["ID", "类型", "内容", "状态", "开立", "操作"], orders, (o) =>
           `<tr><td>${o.id}</td><td>${o.order_type === "long" ? "长期" : "临时"}</td><td>${esc(o.content)}</td>

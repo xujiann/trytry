@@ -1366,12 +1366,19 @@ async function renderPatients() {
 async function renderDicts() {
   $("#page-desc").textContent = "诊断/药品/耗材/收费“四统一”编码字典";
   const systems = { diagnosis: "诊断(ICD-10)", drug: "药品", consumable: "耗材", charge: "收费" };
-  // 先清空、取不到把原因写出来（P2-1009）：原先切换字典时抛错没人接，表里照旧是上一个字典的条目
+  // 先清空、取不到把原因写出来（P2-1009）：原先切换字典时抛错没人接，表里照旧是上一个字典的条目。
+  // 只画最后一次切的那个字典（P2-1012）：连着切两个，先发的那个晚到会把它的条目画在后选的字典名下
+  let dictSeq = 0;
   const draw = async (system) => {
+    const seq = ++dictSeq;
     $("#dict-table").innerHTML = "";
     let entries;
     try { entries = await api(`/api/dictionaries/${system}/entries`); }
-    catch (err) { $("#dict-table").innerHTML = `<p class="msg err">${esc(err.message)}</p>`; return; }
+    catch (err) {
+      if (seq === dictSeq) $("#dict-table").innerHTML = `<p class="msg err">${esc(err.message)}</p>`;
+      return;
+    }
+    if (seq !== dictSeq) return;
     $("#dict-table").innerHTML = table(["编码", "名称"], entries, (d) =>
       `<tr><td><span class="tag">${esc(d.code)}</span></td><td>${esc(d.name)}</td></tr>`);
   };

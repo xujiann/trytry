@@ -3483,6 +3483,55 @@ def test_医生端慢病随访录完_下拉仍是刚才那一份(page, base_url,
     assert len(admin_read(f"/api/chronic/{low_rec['id']}/followups")) == 1
 
 
+def _user_call(base_url, username, password="passw0rd1"):
+    """以指定账号调接口（造医师才能造的前置数据，如医嘱）。"""
+    import json
+    from urllib.request import Request
+
+    def call(method, path, payload=None, token=None):
+        req = Request(f"{base_url}{path}", method=method,
+                      data=json.dumps(payload).encode() if payload is not None else None,
+                      headers={"Content-Type": "application/json",
+                               **({"Authorization": f"Bearer {token}"} if token else {})})
+        with urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read())
+
+    token = call("POST", "/api/auth/login", {"username": username, "password": password})["access_token"]
+    return lambda method, path, payload=None: call(method, path, payload, token)
+
+
+def test_医嘱单面板只画最后点的那一次住院_标题写住院号(page, base_url, seed, admin_call):
+    """P2-1012：先点甲的「医嘱单」、立刻改点乙，甲那次响应晚到原先把甲的医嘱画在面板里，标题只写「医嘱单」——
+    「登记执行」记到了甲的医嘱上。用 Playwright 扣住甲的请求、等乙画完再放行，先后是确定的。"""
+    doctor = _user_call(base_url, "e2e_doctor")   # 种子机构的医师：医嘱开立 = 医师
+    adms = []
+    for i, (card, dx) in enumerate((("320981199203031812", "肺炎"), ("320981199304041913", "心衰"))):
+        bed = admin_call("POST", "/api/inpatient/beds", {"ward_id": seed["ward"]["id"], "bed_no": f"E2E-O{i}"})
+        patient = admin_call("POST", "/api/patients", {"name": f"E2E医嘱{'甲乙'[i]}", "id_card": card, "gender": "男"})
+        adms.append(admin_call("POST", "/api/inpatient/admissions", {
+            "patient_id": patient["id"], "ward_id": seed["ward"]["id"], "bed_id": bed["id"], "diagnosis_name": dx}))
+    a, b = adms
+    doctor("POST", "/api/inpatient/orders", {"admission_id": a["id"], "order_type": "long", "content": "E2E甲 头孢曲松 2g"})
+    doctor("POST", "/api/inpatient/orders", {"admission_id": b["id"], "order_type": "long", "content": "E2E乙 呋塞米 20mg"})
+    _login(page, base_url)
+    _open_page(page, "inpatient", "住院管理")
+    held = []
+    pattern = f"**/api/inpatient/orders?admission_id={a['id']}"
+    page.route(pattern, lambda route: held.append(route))
+    page.click(f'[data-orders="{a["id"]}"]')   # 甲那次被扣住
+    page.click(f'[data-orders="{b["id"]}"]')
+    panel = page.locator("#inp-orders")
+    expect(panel).to_contain_text("E2E乙 呋塞米")
+    page.wait_for_function("() => true")   # 让扣住的那次路由回调落地
+    assert len(held) == 1, held
+    held[0].continue_()
+    page.wait_for_timeout(1000)   # 甲的响应落地
+    page.unroute(pattern)
+    expect(panel).to_contain_text("E2E乙 呋塞米")
+    expect(panel).not_to_contain_text("E2E甲")   # 修前被甲的医嘱盖掉
+    expect(page.locator("#inp-orders-title")).to_have_text(f"医嘱单 · 住院 #{b['id']}")
+
+
 def test_surgery_full_flow(page, base_url, seed):
     """手术麻醉（T2.3）：申请 → 审批 → 排班 → 术中记录，状态逐级推进。
 

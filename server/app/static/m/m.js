@@ -747,14 +747,17 @@ async function renderAppointments(box) {
       }
     });
   });
+  // 只画最后一次筛选的结果（P2-1012）：连着改机构、日期，先发的那次晚到会把它的号源画在后选的条件下
+  let slotSeq = 0;
   const drawSlots = async () => {
+    const seq = ++slotSeq;
     const qs = new URLSearchParams();
     if ($("#slot-org").value) qs.set("org_id", $("#slot-org").value);
     if ($("#slot-date").value) qs.set("slot_date", $("#slot-date").value);
     const query = qs.toString();
     const slots = await authApi(`/api/portal/me/slots${query ? `?${query}` : ""}`);
     const holder = $("#slot-list");
-    if (!holder) return;   // 期间切走了页签
+    if (!holder || seq !== slotSeq) return;   // 期间切走了页签、或又改了筛选
     holder.innerHTML = slots.map((s) => `<div class="m-card">
       ${kv("机构", esc(s.org_name))}
       ${kv("资源", esc(s.resource_name))}
@@ -782,10 +785,13 @@ async function renderAppointments(box) {
       });
     });
   };
-  const redraw = () => drawSlots().catch((err) => {
-    const holder = $("#slot-list");
-    if (holder) holder.innerHTML = `<p class="empty">${esc(err.message)}</p>`;
-  });
+  const redraw = () => {
+    const mine = slotSeq + 1;   // drawSlots 一进门就把序号加一，这一次的序号就是它
+    return drawSlots().catch((err) => {
+      const holder = $("#slot-list");
+      if (holder && mine === slotSeq) holder.innerHTML = `<p class="empty">${esc(err.message)}</p>`;
+    });
+  };
   $("#slot-org").addEventListener("change", redraw);
   $("#slot-date").addEventListener("change", redraw);
   await drawSlots();
@@ -1021,12 +1027,17 @@ $("#survey-form").addEventListener("submit", async (e) => {
 /* 展开才拉数据：绝大多数人开 App 是来看宣教的，不该为价格表付一次请求。 */
 let priceLoaded = false;
 
+// 只画最后一次查的结果（P2-1012）：展开时先发的全表常比按关键字的那次晚回来，把全表画在关键字底下
+let priceSeq = 0;
+
 async function loadPriceList(keyword = "") {
+  const seq = ++priceSeq;
   const box = $("#price-list");
   box.innerHTML = '<p class="hint">加载中…</p>';
   try {
     const rows = await api(`/api/portal/price-list${
       keyword ? `?keyword=${encodeURIComponent(keyword)}` : ""}`);
+    if (seq !== priceSeq) return;
     if (!rows.length) {
       box.innerHTML = '<p class="empty">没有匹配的项目</p>';
       return;
@@ -1038,7 +1049,7 @@ async function loadPriceList(keyword = "") {
         <span class="p">${r.price} 元</span>
       </div>`).join("");
   } catch (err) {
-    box.innerHTML = `<p class="empty">${esc(err.message)}</p>`;
+    if (seq === priceSeq) box.innerHTML = `<p class="empty">${esc(err.message)}</p>`;
   }
 }
 
