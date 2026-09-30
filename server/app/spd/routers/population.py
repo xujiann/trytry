@@ -1164,6 +1164,15 @@ def create_enrollment(
             patient_id=body.patient_id, program_code=body.program_code, status="enrolled", source="enrollment",
             org_id=org_id, reason="直接签约建档",
         ))
+    # 这位居民这个病种挂着的待受理服务申请一并办结为「已受理」（P2-937）：申请是给未纳管居民的，建档即达成。原先照挂
+    # 「待受理」——居民端同时显示「已纳管」和「待受理」，工作台待受理计数不减，医生按清单驳回后在管居民看到「已驳回」
+    db.execute(
+        update(SpdServiceApply)
+        .where(SpdServiceApply.patient_id == body.patient_id, SpdServiceApply.program_code == body.program_code,
+               SpdServiceApply.status == "pending")
+        .values(status="accepted", handled_by=user.id, handled_at=now_naive(), handle_note="已直接签约建档")
+        .execution_options(synchronize_session=False)
+    )
 
     if body.package_id is not None:
         _bind_package(db, enrollment, body.package_id)
