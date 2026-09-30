@@ -73,9 +73,13 @@ def assign_drg_group(db: Session, summary: CaseSummary) -> dict | None:
     diagnosis = summary.discharge_diagnosis or ""
     operation = summary.operation or ""
     best: tuple[tuple[int, int], DrgGroup] | None = None
+    # 按组编号遍历（P2-963）：只有严格更高分才换组，两组匹配分并列时留下先遍历到的那组——原先不排序，谁先谁后由库决定，
+    # PG 上对一组「调权」（原地 UPDATE）这一行就挪到堆尾，同一句诊断改入另一组、权重差一倍（与 P2-304 同形）。
+    # 并列时入哪组的规矩（主诊断在前 / 入歧义组 / 取权重高低）另行待裁定，这里先让结果确定
     for group in (
         db.query(DrgGroup)
         .filter(DrgGroup.active.is_(True), DrgGroup.is_fallback.is_(False))
+        .order_by(DrgGroup.id)
         .all()
     ):
         score = _match_group(group, diagnosis, operation)
@@ -429,9 +433,10 @@ def drg_pre_check(body: PreCheckIn, db: Session = Depends(get_db)):
     """
     diagnosis, operation = body.diagnosis, body.operation
     scored = []
-    for group in (
+    for group in (   # 与出院入组同一个次序（P2-963）：并列的候选按组编号排，截前 5 与出院入组对得上
         db.query(DrgGroup)
         .filter(DrgGroup.active.is_(True), DrgGroup.is_fallback.is_(False))
+        .order_by(DrgGroup.id)
         .all()
     ):
         score = _match_group(group, diagnosis, operation)
