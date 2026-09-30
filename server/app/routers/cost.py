@@ -14,7 +14,7 @@ from datetime import date, datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -357,10 +357,21 @@ def _occupied_bed_days(db: Session, org_id: int, start: date, end: date) -> int:
 
     在院未出院的按期间末计。当日入当日出计 1 床日（不是 0）——住了一天就是一天，记在那一天所在的期间。
     1 床日的下限**只给当日入出院**（P2-135）：原先交集为空也记 1 天——8 月 20 日入、9 月 1 日出，9 月凭空多出 1 床日。
+
+    只读与期间有交集的住院（P2-1152）：原先只有「入院 < 期末」一个条件，算一个月要把这家机构建库以来的全部住院整行读进
+    内存。出院早于期初的与期间没有交集，下面按 `max(…, 0)` 本来就计 0，补上「在院或出院 ≥ 期初」这个下界，床日一格不变
+    （运行效率 `analytics._efficiency_rows` 同一个过滤）。
     """
     admissions = (
         db.query(Admission)
-        .filter(Admission.org_id == org_id, Admission.admitted_at < datetime.combine(end, datetime.min.time()))
+        .filter(
+            Admission.org_id == org_id,
+            Admission.admitted_at < datetime.combine(end, datetime.min.time()),
+            or_(
+                Admission.discharged_at.is_(None),
+                Admission.discharged_at >= datetime.combine(start, datetime.min.time()),
+            ),
+        )
         .all()
     )
     total = 0
