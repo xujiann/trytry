@@ -1433,7 +1433,7 @@ async function renderVaccination() {
       <form class="inline" id="vac-form">
         <select name="batch_id" id="vac-batch"><option value="">疫苗批次（选了就查效期 / 封存 / 库存并扣减一支）</option></select>
         <input name="patient_id" type="number" placeholder="患者ID" required><input name="vaccine_code" placeholder="疫苗编码" required>
-        <input name="vaccine_name" placeholder="疫苗名称" required><input name="dose_no" type="number" value="1" min="1" style="min-width:60px">
+        <input name="vaccine_name" placeholder="疫苗名称" required><input name="dose_no" type="number" min="1" placeholder="剂次（留空按既往剂次+1）" style="min-width:60px">
         <input name="vaccinated_date" placeholder="接种日期"><input name="org_id" type="number" placeholder="接种机构ID" required>
         <input name="site" placeholder="接种部位"><input name="vaccinator" placeholder="接种人"><button>登记接种</button></form>
       <p class="desc">新接种一律建议选批次：出了问题按批号召回、查受种者时，没挂批次的这一针查不出来。

@@ -54,11 +54,23 @@ def _contra_expired(c: VaccineContraindication, today: str) -> bool:
     return c.contra_type == "temporary" and bool(c.valid_until) and c.valid_until < today
 
 
+def _previous_doses(db: Session, patient_id: int, vaccine_code: str) -> int:
+    """这位受种者这种疫苗已登记的剂次数，按比对键认编码（P1-219）。接种前评估的「本次为第 N 剂」与登记时不送剂次的缺省
+    （P2-987）共用这一处。"""
+    key = code_key(vaccine_code)
+    return sum(
+        1 for (code,) in db.query(VaccinationRecord.vaccine_code).filter(VaccinationRecord.patient_id == patient_id)
+        if code_key(code) == key
+    )
+
+
 class RecordCreate(BaseModel):
     patient_id: int
     vaccine_code: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
     vaccine_name: str = Field(min_length=1, max_length=128, pattern=NON_BLANK)
-    dose_no: int = Field(default=1, ge=1, le=INT4_MAX)
+    # 不送就按「同一疫苗的既往剂次 + 1」取，与接种前评估的「本次为第 N 剂」同一个算法（P2-987）：原先缺省 1、页面也预填 1，
+    # 第二、三针都记成、印成「第 1 剂」，而评估照旧按条数报下一剂——系统里两个数自相矛盾。送了的照送的记
+    dose_no: int | None = Field(default=None, ge=1, le=INT4_MAX)
     vaccinated_date: OptionalDateStr = ""
     org_id: int
     # 批次可空（存量记录没有批号），给了就三查：过期 / 封存 / 库存
@@ -69,6 +81,7 @@ class RecordCreate(BaseModel):
 
 class RecordOut(RecordCreate):
     id: int
+    dose_no: int   # 入参可不送（P2-987），落库的恒有剂次
     batch_no: str = ""
     # 出参不带入参的日历校验（P1-63）：库里的存量坏日期要原样读出来，而不是让响应 500
     vaccinated_date: str = ""
@@ -135,7 +148,9 @@ def vaccinate(body: RecordCreate, db: Session = Depends(get_db), user: User = De
             raise HTTPException(status_code=409, detail="该批次库存已用完")
         batch_no = batch.batch_no
 
-    record = VaccinationRecord(batch_no=batch_no, **{**body.model_dump(), "vaccinated_date": vaccinated_date})
+    dose_no = body.dose_no if body.dose_no is not None else _previous_doses(db, body.patient_id, body.vaccine_code) + 1
+    record = VaccinationRecord(batch_no=batch_no, **{**body.model_dump(), "vaccinated_date": vaccinated_date,
+                                                     "dose_no": dose_no})
     db.add(record)
     # 扣库存与写记录同一个事务提交（D-1 的教训）
     db.commit()
@@ -338,10 +353,7 @@ def pre_vaccination_check(
         .all()
         if code_key(c.vaccine_code) == key
     ]
-    doses = sum(
-        1 for (code,) in db.query(VaccinationRecord.vaccine_code).filter(VaccinationRecord.patient_id == patient_id)
-        if code_key(code) == key
-    )
+    doses = _previous_doses(db, patient_id, vaccine_code)
     return {
         "allowed": not blocking,
         "contraindications": [c.reason for c in blocking],
