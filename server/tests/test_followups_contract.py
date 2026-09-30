@@ -100,8 +100,18 @@ def seed(client, admin):
 
     data["fu1"] = create({"patient_id": data["patients"][0]["id"], "org_id": org["id"],
                           "category": "chronic", "due_date": d(-3)}, data["doctor"])
+    # 来源号要是这位患者的手术申请（P2-1018）：原先随手写 77，来源号是谁的、是什么都不查
+    ward = client.post("/api/inpatient/wards", json={"org_id": org["id"], "name": "契约随访病区"}, headers=admin).json()
+    bed = client.post("/api/inpatient/beds", json={"ward_id": ward["id"], "bed_no": "FUCT-1"}, headers=admin).json()
+    admission = client.post("/api/inpatient/admissions", json={
+        "patient_id": data["patients"][1]["id"], "ward_id": ward["id"], "bed_id": bed["id"],
+        "diagnosis_name": "胆囊结石"}, headers=admin).json()
+    surgery = client.post("/api/surgery/requests", json={"admission_id": admission["id"], "surgery_name": "腹腔镜胆囊切除术"},
+                          headers=data["doctor"])
+    assert surgery.status_code == 201, surgery.text
+    data["surgery_request"] = surgery.json()
     data["fu2"] = create({"patient_id": data["patients"][1]["id"], "org_id": org["id"],
-                          "category": "surgery", "source_id": 77, "title": "术后第7天随访",
+                          "category": "surgery", "source_id": data["surgery_request"]["id"], "title": "术后第7天随访",
                           "due_date": d(7), "assigned_to": "王护士"}, data["ph"])
     data["fu3"] = create({"patient_id": data["patients"][2]["id"], "org_id": org["id"],
                           "category": "maternal", "due_date": d(-1)}, data["doctor"])
@@ -147,7 +157,7 @@ def test_补建回执精确_标题按类别回落(seed):
         "org_name": "契约随访医院",
         "category": "surgery",
         "category_name": "术后随访",
-        "source_id": 77,
+        "source_id": seed["surgery_request"]["id"],
         "title": "术后第7天随访",
         "due_date": d(7),
         "assigned_to": "王护士",

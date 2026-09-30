@@ -20,7 +20,8 @@ from ..visibility import assert_obj_org_writable, assert_org_writable, scope_pat
 from ..database import get_db
 from ..datetypes import DateStr
 from ..deps import get_current_user, paginate, require_roles, resolve_business_date, row_dict
-from ..models import FollowupTask, Organization, Patient, User, utcnow
+from ..models import (Admission, ChronicPatient, FollowupTask, MaternalRecord, Organization, Patient, SurgeryRequest, User,
+                      utcnow)
 
 router = APIRouter(prefix="/api/followups", tags=["随访中心"], dependencies=[Depends(get_current_user)])
 
@@ -53,11 +54,13 @@ def create_task(
     """供业务模块调用的派生入口（出院、手术结案等）。
 
     同来源同类别已有待随访任务时不重复派生——出院流程可能因故重跑，
-    重复派生会让随访护士看到两条一模一样的任务。
+    重复派生会让随访护士看到两条一模一样的任务。去重键带上患者（P2-1018）：来源号是多态的、手工补建时由人填，
+    原先只按（类别，来源号）找——别人名下一条来源号填错的待随访，就把这位患者这次出院该派的随访顶掉了。
     """
     existing = (
         db.query(FollowupTask)
         .filter(
+            FollowupTask.patient_id == patient_id,
             FollowupTask.category == category,
             FollowupTask.source_id == source_id,
             FollowupTask.status == "pending",
@@ -76,6 +79,11 @@ def create_task(
     )
     db.add(task)
     return task
+
+
+#: 各类随访的来源单据（模型 docstring：慢病档案 / 住院记录 / 手术申请；妇幼访视挂孕产妇档案）
+_SOURCE_MODELS = {"chronic": ChronicPatient, "discharge": Admission, "surgery": SurgeryRequest, "maternal": MaternalRecord}
+_SOURCE_NAMES = {"chronic": "慢病档案", "discharge": "住院记录", "surgery": "手术申请", "maternal": "孕产妇档案"}
 
 
 class FollowupIn(BaseModel):
@@ -178,6 +186,14 @@ def create_followup(body: FollowupIn, db: Session = Depends(get_db), user: User 
         raise HTTPException(status_code=404, detail="患者不存在")
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="机构不存在")
+    # 来源号要是这位患者的这类单据（P2-1018）：原先来源号是谁的、是什么都不查——给甲补建出院随访、来源号填成乙这次住院，
+    # 201；乙出院时派生按（类别，来源号）去重，看到甲名下那条就不派了，乙名下一条出院随访都没有。不填（0）的照旧
+    if body.source_id:
+        source_model = _SOURCE_MODELS[body.category]
+        source = db.get(source_model, body.source_id)
+        if source is None or source.patient_id != body.patient_id:
+            raise HTTPException(status_code=422,
+                                detail=f"来源号 {body.source_id} 不是这位患者的{_SOURCE_NAMES[body.category]}")
     payload = body.model_dump()
     payload["title"] = body.title or CATEGORY_TITLES.get(body.category, "随访")
     task = FollowupTask(**payload)
