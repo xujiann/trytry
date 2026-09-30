@@ -75,3 +75,14 @@ def normalize_gender(value: str | None) -> str | None:
     """性别的常见写法归一成「男 / 女 / 未知」（拉丁字母不分大小写）；认不出返回 None，由调用方决定 422 还是记错误行。"""
     key = (value or "").strip()
     return _GENDER_WORDS.get(key.lower() if key.isascii() else key)
+
+
+#: Excel 把长数字标识（14 位药品本位码、18 位证件号）当数值显示、另存 CSV 时写成的样子：`8.69E+13`、`1.10101E+17`
+#: （P2-1125）。真实的编码与证件号里不会出现「数字 E+ 数字」，按这个形状认；被抹成 …000 的 18 位证件号这里认不出（要核
+#: 校验位，见 P2-811）。
+_EXCEL_SCI_NOTATION = re.compile(r"[0-9]+(\.[0-9]+)?[Ee]\+[0-9]+")
+
+
+def excel_sci_notation(value: str | None) -> bool:
+    """导入的标识列是不是被表格软件改成了科学计数法（去首尾空白后整串比）：是就当错误行，别当编码落库（P2-1125）。"""
+    return _EXCEL_SCI_NOTATION.fullmatch((value or "").strip()) is not None

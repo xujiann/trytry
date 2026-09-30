@@ -64,6 +64,7 @@
 数据库连接沿用 MEDPLAT_DATABASE_URL（与应用一致）。
 """
 import argparse
+import codecs
 import csv
 import math
 import secrets
@@ -97,7 +98,7 @@ from app.models import (  # noqa: E402
 from app.routers.chronic import _suggest_next_due  # noqa: E402
 from app.routers.patients import id_card_variants  # noqa: E402
 from app.schemas import OrganizationCreate  # noqa: E402
-from app.texttypes import normalize_gender  # noqa: E402
+from app.texttypes import excel_sci_notation, normalize_gender  # noqa: E402
 
 
 def _field_len(model, field: str) -> tuple[int, int]:
@@ -264,6 +265,41 @@ def _too_long(row: dict, line_no: int, report: ImportReport, **columns: tuple[ty
     return False
 
 
+def _sci_notation(row: dict, line_no: int, report: ImportReport, *cols: str) -> bool:
+    """标识列（证件号、编码）被表格软件改成了科学计数法（`8.69E+13`）的记错误行、点名哪一列，调用方跳过这一行（P2-1125）。
+
+    `errors.csv` 按原样回写原始列、docstring 让人「修正后重新导入」：经 Excel 一开一存，长数字标识成了科学计数法，原先照样
+    当编码落库（药品编码、诊断编码），或者按字面找不到患者、报一句摸不着头脑的「患者不存在」。"""
+    bad = [f"{col} {(row.get(col) or '').strip()}" for col in cols if excel_sci_notation(row.get(col))]
+    if bad:
+        report.error(line_no, f"疑似被表格软件改成科学计数法: {'；'.join(bad)}（把这一列设成文本格式、改回原值后重导）", row)
+        return True
+    return False
+
+
+def _bed_twin(bed_numbers: dict[tuple[int, int], str], ward_id: int, bed_no: str) -> str | None:
+    """同一病区里写法不同、数值相同的纯数字床号（`01` 与 `1`）：有就返回已有的那种写法（P2-1125）。"""
+    if not (bed_no.isascii() and bed_no.isdigit()):
+        return None
+    other = bed_numbers.get((ward_id, int(bed_no)))
+    return other if other is not None and other != bed_no else None
+
+
+def _check_utf8(path: Path) -> None:
+    """开读之前核一遍整份文件是 UTF-8（P2-1125）：Excel「CSV（逗号分隔）」默认另存成 GBK，原先读到第一个汉字就抛一句
+    `'utf-8' codec can't decode byte 0xd5`，不说该怎么办；读到半路才抛时，前面的批次已经提交了。"""
+    decoder = codecs.getincrementaldecoder("utf-8")()
+    with path.open("rb") as fh:
+        try:
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                decoder.decode(chunk)
+            decoder.decode(b"", final=True)
+        except UnicodeDecodeError:
+            raise ValueError(
+                f"文件不是 UTF-8 编码: {path}（Excel 另存「CSV（逗号分隔）」默认是 GBK：请另存为「CSV UTF-8（逗号分隔）」后重导）"
+            ) from None
+
+
 def _dup_in_batch(seen: dict, key, line_no: int, report: ImportReport, row: dict, what: str) -> bool:
     """同一个文件里键相同的后一行记错误行（P2-732），与患者导入「同批内重复单独报错」同一口径。
 
@@ -341,6 +377,8 @@ def _resolve_patient(row: dict, line_no: int, report: ImportReport,
     id_card = (row.get("id_card") or "").strip()
     ehc_no = (row.get("ehc_no") or "").strip()
     if id_card:
+        if _sci_notation(row, line_no, report, "id_card"):   # P2-1125：别报成摸不着头脑的「患者不存在」
+            return None
         pid = _find_by_id_card(by_id_card, id_card)
         if pid is None:
             report.error(line_no, f"患者不存在: 身份证号 {id_card}（请先导入患者）", row)
@@ -438,6 +476,8 @@ def import_patients(db, rows, report: ImportReport, ctx: ImportContext) -> None:
         if not _require(row, line_no, report, "name", "id_card"):
             continue
         if _too_long(row, line_no, report, name=(Patient, "name")):   # P2-1094
+            continue
+        if _sci_notation(row, line_no, report, "id_card"):   # P2-1125：原先报成「长度非法」，不说是表格软件改的
             continue
         id_card = row["id_card"].strip()
         if len(id_card) not in (15, 18):
@@ -606,6 +646,8 @@ def import_encounters(db, rows, report: ImportReport, ctx: ImportContext) -> Non
         if _too_long(row, line_no, report, doctor_name=(Encounter, "doctor_name"),
                      diagnosis_code=(Encounter, "diagnosis_code")):   # P2-1094
             continue
+        if _sci_notation(row, line_no, report, "diagnosis_code"):   # P2-1125
+            continue
         visit_date = row["visit_date"].strip()
         if not _valid_date(visit_date):
             report.error(line_no, f"visit_date 格式非法: {visit_date}（须 YYYY-MM-DD）", row)
@@ -753,7 +795,8 @@ def import_prescriptions(db, rows, report: ImportReport, ctx: ImportContext) -> 
                 "tainted": tainted or rx_no == bad_rx_no,
             }
         # 明细行（组首行同时也是一条明细）
-        if _too_long(row, line_no, report, drug_code=(PrescriptionItem, "drug_code")):   # P2-1094：与剂量非法同样整组不导
+        if _too_long(row, line_no, report, drug_code=(PrescriptionItem, "drug_code")) or _sci_notation(
+                row, line_no, report, "drug_code"):   # P2-1094 / P2-1125：与剂量非法同样整组不导
             group["tainted"] = True
             continue
         daily_dose_raw = (row.get("daily_dose") or "").strip()
@@ -879,6 +922,8 @@ def import_admissions(db, rows, report: ImportReport, ctx: ImportContext) -> Non
         (wid, no): (bid, status)
         for bid, wid, no, status in db.query(Bed.id, Bed.ward_id, Bed.bed_no, Bed.status).all()
     }
+    # 纯数字床号按（病区, 数值）记下已有的写法（P2-1125）：errors.csv 经 Excel 一开一存，「01」成了「1」
+    bed_numbers = {(wid, int(no)): no for (wid, no) in beds if no.isascii() and no.isdigit()}
     existing = {
         (pid, oid, _date_key(admitted))
         for pid, oid, admitted in db.query(
@@ -929,10 +974,19 @@ def import_admissions(db, rows, report: ImportReport, ctx: ImportContext) -> Non
             ward_id = wards[(org_id, ward_name)] = ward.id
         bed_entry = beds.get((ward_id, bed_no))
         if bed_entry is None:
+            # 按字面找不到就建床之前，先看同病区有没有数值相同的另一种写法（P2-1125）：原先「1」另建一张床与「01」并存，
+            # 「在院不可同床」就此拦不住——01 床已有人在院，再导进来的 1 床照收
+            twin = _bed_twin(bed_numbers, ward_id, bed_no)
+            if twin is not None:
+                report.error(line_no, f"床号 {bed_no} 与本病区已有的床号 {twin} 数值相同、疑似同一张床"
+                                      "（表格软件会吃掉前导零）：请按已有写法填", row)
+                continue
             bed = Bed(ward_id=ward_id, bed_no=bed_no)
             db.add(bed)
             db.flush()
             bed_entry = beds[(ward_id, bed_no)] = (bed.id, "free")
+            if bed_no.isascii() and bed_no.isdigit():
+                bed_numbers[(ward_id, int(bed_no))] = bed_no
         bed_id, bed_status = bed_entry
         if in_hospital:
             if bed_status == "occupied":
@@ -1004,6 +1058,7 @@ def run_import(
     导入中途失败（P2-1094，多是批末提交时写库出错）：回滚未提交的这一批，错误明细照样落盘、汇总照样经 `out` 打出
     （点名回滚的是第几行到第几行），异常照原样抛出并附上同一句说明——退出码与原先一样。
     """
+    _check_utf8(Path(csv_path))   # GBK 另存的文件开读之前就说清（P2-1125），命令行按文件错误退出码 2
     report = ImportReport(entity=entity, dry_run=dry_run)
     create_all_for_scripts(dry_run)  # 只在开发环境、非 dry-run 时建表（P2-1089，ADR-0002）
     db = SessionLocal()

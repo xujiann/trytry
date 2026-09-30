@@ -33,8 +33,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from app.database import SessionLocal, create_all_for_scripts  # noqa: E402
 from app.models import CodeEntry, CodeSystem  # noqa: E402
 from app.routers.dictionaries import SYSTEM_CODES  # noqa: E402
+from app.texttypes import excel_sci_notation  # noqa: E402
 
 # D1 扩列：可选属性列 → 列长上限（超长截断，与 name[:256] 同一策略）
+#: 标识列：经 Excel 一开一存会被改成科学计数法的（14 位本位码 → `8.69E+13`），这几列是就记错误行（P2-1125）
+CODE_COLUMNS = ("code", "insurance_code", "national_code")
+
 OPTIONAL_COLUMNS = {
     "spec": 64,
     "dosage_form": 32,
@@ -113,6 +117,10 @@ def run_import(
                     report.error(line_no, f"name 为空（code={code}）")
                 elif len(code) > 64:
                     report.error(line_no, f"code 超长（>64）：{code}")
+                elif sci := [col for col in CODE_COLUMNS if excel_sci_notation(row.get(col))]:
+                    # 原先原样收下：字典是给外部系统「下载对照」用的，库里存着 8.69E+13 这种本位码（P2-1125）
+                    report.error(line_no, "疑似被表格软件改成科学计数法：" + "；".join(
+                        f"{col} {(row.get(col) or '').strip()}" for col in sci) + "（把这一列设成文本格式、改回原值后重导）")
                 elif code in existing:
                     report.skipped += 1
                 else:
