@@ -1295,8 +1295,10 @@ def score_analysis(
         "total": len(rows),
         "average": round(sum(r.total_score for r in rows) / len(rows), 2),
         "distribution": buckets,
+        # 「高频扣分项」按扣分次数排（P2-964）：原先按累计扣分排——权重 90 的指标只扣过 1 次，排在五家都扣过的权重 10 的
+        # 指标前面，指标一多，真正高频的被截在前 10 之外。次数并列再按累计扣分、再按指标编码，结果与取数次序无关
         "top_deductions": sorted(
-            deductions.values(), key=lambda d: d["total_deduction"], reverse=True
+            deductions.values(), key=lambda d: (-d["count"], -d["total_deduction"], d["indicator_code"])
         )[:10],
         "ranking": [
             {"object_id": r.object_id, "object_name": r.object_name,
