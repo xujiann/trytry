@@ -100,7 +100,7 @@ async function renderClinicalDocs() {
         <input name="pulse" type="number" placeholder="脉搏"><input name="respiration" type="number" placeholder="呼吸">
         <input name="sbp" type="number" placeholder="收缩压"><input name="dbp" type="number" placeholder="舒张压">
         <input name="intake_ml" type="number" min="0" placeholder="入量 ml"><input name="output_ml" type="number" min="0" placeholder="出量 ml">
-        <input name="weight_kg" type="number" step="0.1" min="0" placeholder="体重 kg">
+        <input name="weight_kg" type="number" step="any" min="0" placeholder="体重 kg">
         <button>录入</button></form>
       ${vitals.length ? lineChart(vitals.map((v) => v.measured_at.slice(5, 10)),
         // 未测的给 null、不给 0（P2-158）：接口的注释与用户手册都说「未测项留空不要填 0，填 0 会污染体温单趋势曲线」
