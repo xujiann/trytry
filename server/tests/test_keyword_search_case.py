@@ -118,7 +118,8 @@ def test_keyword_like两边都转小写():
     t = Table("t", MetaData(), Column("name", String(16)))
     expr = keyword_like(t.c.name, "HbA1c")
     sql = str(expr.compile(compile_kwargs={"literal_binds": True})).lower()
-    assert "lower(t.name) like '%hba1c%'" in sql, sql
+    # 两边都在库里转（P2-919）：关键词不在 Python 里先 lower，否则 Ⅱ / 全角字母两边转出来不一样
+    assert "lower(t.name) like lower('%hba1c%')" in sql, sql
 
 
 # ================================================================ 端点回归（真 PG 上修前查不到）

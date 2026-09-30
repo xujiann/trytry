@@ -6,7 +6,7 @@ from typing import Iterable, TypeVar
 
 from fastapi import Depends, HTTPException, Request, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from sqlalchemy import func, true
+from sqlalchemy import func, literal, true
 from sqlalchemy.engine import Row
 from sqlalchemy.orm import Session
 
@@ -202,8 +202,12 @@ def keyword_like(column, keyword: str):
     开发库 SQLite 的 LIKE 对 ASCII 不分大小写，生产库 PostgreSQL 区分——诊断字典搜 `i10` 开发库命中 `I10`，
     生产库什么都搜不到；「CT」「HbA1c」「COPD」这类夹在中文名里的缩写同病。统一在这里转小写，两库同一口径
     （开发库结果一字不变）；汉字不受 lower 影响。`%` / `_` 照旧当通配符，与改之前一样。
+
+    两边都在库里转（P2-919）：原先关键词在 Python 里 `.lower()`、列在库里 `lower()`——Python 的 lower 会把 Ⅱ 转成 ⅱ、
+    全角 Ｃ 转成 ｃ，SQLite 与 C / POSIX 区域的 PG 只转 ASCII，两边转出来不是同一个串，「Ⅱ型糖尿病」「ＣＯＰＤ」原文照搜
+    也落空（P2-66 带来的回退）。全角半角互认（NFKC）另议。
     """
-    return func.lower(column).like(f"%{keyword.lower()}%")
+    return func.lower(column).like(func.lower(literal(f"%{keyword}%")))
 
 
 #: OFFSET 的上限（P2-410）：SQLite 与 PostgreSQL 的整数都是 64 位，再大驱动就抛 OverflowError（PG 报「bigint out of
