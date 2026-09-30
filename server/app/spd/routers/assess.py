@@ -697,7 +697,9 @@ def collect_metrics_batch(
     # ---- 以下口径都从"该对象名下的在管档案"出发：档案取一次、按对象分桶
     enroll_col = _object_column(SpdEnrollment, object_type)
     enroll_query = prog(SpdEnrollment, db.query(SpdEnrollment))
-    if source in ("enrollment", "archive", "assessment"):
+    # 监测同样只数期末之前纳管的人（P2-1073）：「期内在管患者的监测次数」——原先取现在在管的全部档案，期末之后才纳管的人
+    # 纳管前的读数（公卫随访同步、设备、手录都不要求纳管）补跑往期时进了往期的达标率，同一期越晚跑结果越不一样
+    if source in ("enrollment", "archive", "assessment", "measurement"):
         enroll_query = enroll_query.filter(through_day(SpdEnrollment.created_at, end))
     if enroll_col is not None:
         enroll_query = enroll_query.filter(enroll_col.in_(ids))
