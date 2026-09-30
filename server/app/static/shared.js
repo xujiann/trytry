@@ -119,8 +119,26 @@ function readCookie(name) {
  * "String should have at least 1 character"——按错误类型与约束认出来换成人话。
  * 写超了长度（`max_length`）原先照样是英文 "String should have at most 512 characters"，批量选多了是
  * "List should have at most 500 items after validation, not 501"（P2-606）——同样按类型换成「最多 N 个字 / 项」。
+ * 数值上下界、整数 / 数字解析、缺字段、格式（正则）、取值不在选项里（P2-1087）：原先照样是 pydantic 的英文原话——
+ * 孕周填「38+2」报 "Input should be a valid integer, unable to parse string as an integer"、体温敲成 365 报
+ * "Input should be less than or equal to 45"，而产检、绩效权重、定时任务等六处页面注释都写着「交给后端报人话」。
  */
 function errorText(detail, fallback) {
+  const ERROR_TYPE_TEXT = {
+    greater_than_equal: (ctx) => `不能小于 ${ctx.ge}`,
+    greater_than: (ctx) => `要大于 ${ctx.gt}`,
+    less_than_equal: (ctx) => `不能大于 ${ctx.le}`,
+    less_than: (ctx) => `要小于 ${ctx.lt}`,
+    int_parsing: () => "要填整数",
+    int_type: () => "要填整数",
+    int_from_float: () => "要填整数，不能带小数",
+    float_parsing: () => "要填数字",
+    float_type: () => "要填数字",
+    bool_parsing: () => "只能选是或否",
+    missing: () => "必填",
+    literal_error: () => "取值不在可选范围内",
+    string_pattern_mismatch: () => "格式不对",
+  };
   if (Array.isArray(detail)) {
     const origins = ["body", "query", "path", "header", "cookie"];
     const parts = detail.map((e) => {
@@ -129,9 +147,10 @@ function errorText(detail, fallback) {
       const empty = e && e.type === "string_too_short" && ctx.min_length === 1;
       const tooLong = e && e.type === "string_too_long" && ctx.max_length != null;
       const tooMany = e && e.type === "too_long" && ctx.max_length != null;
+      const byType = e && Object.prototype.hasOwnProperty.call(ERROR_TYPE_TEXT, e.type) ? ERROR_TYPE_TEXT[e.type](ctx) : "";
       const msg = blank ? "不能只填空格" : empty ? "不能为空"
         : tooLong ? `最多 ${ctx.max_length} 个字，超出了` : tooMany ? `最多 ${ctx.max_length} 项，超出了`
-        : String((e && e.msg) || "").replace(/^Value error, /, "");
+        : byType || String((e && e.msg) || "").replace(/^Value error, /, "");
       const field = Array.isArray(e && e.loc)
         ? e.loc.filter((x) => !origins.includes(x)).join(".") : "";
       return field && msg ? `${field}：${msg}` : msg;

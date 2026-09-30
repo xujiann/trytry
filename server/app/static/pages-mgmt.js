@@ -1100,6 +1100,8 @@ async function renderJobs() {
         const form = await spdModal("改执行间隔", [
           { name: "minutes", label: "执行间隔（分钟，最小 1）", type: "number", required: true }]);
         if (!form) return;
+        // 下界在页面上按分钟判（P2-1087）：送的是秒，后端报的是「interval_seconds：不能小于 60」，填分钟的人看不懂
+        if (!(form.minutes >= 1)) throw new Error("执行间隔至少 1 分钟");
         await api(`/api/jobs/${d.interval}`, { method: "PATCH",
           body: JSON.stringify({ interval_seconds: Math.round(form.minutes * 60) }) });
       } else return;
