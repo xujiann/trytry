@@ -3052,7 +3052,8 @@ async function renderInpatient() {
 }
 
 /* 块3：支付渠道/状态/对账差异类型 */
-const PAY_CHANNELS = { cash: "现金", card: "银行卡", insurance: "医保基金", online: "线上支付" };
+// 与 billing.PAYMENT_CHANNELS 同一张表（P2-1021）：原先少了「网关支付」，配好了支付网关页面上也选不到，只能直接调接口
+const PAY_CHANNELS = { cash: "现金", card: "银行卡", insurance: "医保基金", online: "线上支付", gateway: "网关支付" };
 const PAY_STATUS = { pending: ["待支付", "orange"], paid: ["已支付", "green"], refunded: ["已退款", ""], failed: ["支付失败", "red"] };
 const RECON_DIFF = { missing_local: "通道有本地无", missing_remote: "本地有通道无", amount_mismatch: "金额不一致" };
 
@@ -3256,8 +3257,23 @@ async function renderBilling() {
     try {
       const order = await api("/api/billing/payments", { method: "POST", body: JSON.stringify(body) });
       await route();   // 先重画再写回执（P2-1013）：原先写完即被重画冲掉，流水号 / 失败原因闪一下就没了
-      setMsg("#pay-msg", order.status === "paid"
-        ? `支付成功，流水号 ${order.trade_no}` : `支付失败：${order.fail_reason}`, order.status === "paid");
+      if (order.status === "pending") {
+        // 网关渠道是异步语义（P2-1021）：受理≠到账，单子停在「待支付」等网关回调转已支付。回执原先只分 paid / 其余两种，
+        // 受理成功也报「支付失败：」后面跟个空原因，付款链接 / 二维码串（只在这张回执里带回来）一并丢掉
+        setMsg("#pay-msg", `已受理，待网关回调确认到账（流水号 ${order.trade_no || "—"}）${
+          order.qr_code ? `；二维码串 ${order.qr_code}` : ""}`);
+        if (/^https?:\/\//i.test(order.pay_url || "")) {   // 只认 http(s)，别让网关应答里的 javascript: 链接进页面
+          const link = document.createElement("a");
+          link.href = order.pay_url;
+          link.target = "_blank";
+          link.rel = "noopener";
+          link.textContent = "打开付款页";
+          $("#pay-msg").append("；", link);
+        }
+      } else {
+        setMsg("#pay-msg", order.status === "paid"
+          ? `支付成功，流水号 ${order.trade_no}` : `支付失败：${order.fail_reason}`, order.status === "paid");
+      }
     } catch (err) { setMsg("#pay-msg", err.message, false); }
   };
   // 金额留空的默认额按渠道取（P2-605，同 billing.create_payment 的 default_amount）：医保渠道记本单的统筹支付额，其余渠道

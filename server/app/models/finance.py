@@ -206,7 +206,7 @@ class PaymentOrder(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     settlement_id: Mapped[int] = mapped_column(ForeignKey("settlements.id"), index=True)
-    # cash=现金, card=银行卡, insurance=医保基金, online=线上支付
+    # cash=现金, card=银行卡, insurance=医保基金, online=线上支付, gateway=网关支付（异步：受理后停在 pending 等回调）
     channel: Mapped[str] = mapped_column(String(16), index=True)
     amount: Mapped[float] = mapped_column(Money, default=0)
     # pending=待支付, paid=已支付, refunded=已全额退款, failed=支付失败

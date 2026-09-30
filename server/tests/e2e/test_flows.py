@@ -1922,6 +1922,40 @@ def test_统一支付的金额占位按渠道写明留空时收哪一份(page, b
     expect(amount).to_have_attribute("placeholder", "金额(元，空=押金冲抵后应补缴的自付额)")
 
 
+def test_统一支付选得到网关支付_受理回执写待回调_不报支付失败(page, base_url):
+    """P2-1021：渠道下拉原先没有「网关支付」；网关受理（pending）的回执原先写「支付失败：」加空原因，付款链接 / 二维码串
+    一并丢掉。e2e 服务没有真网关，下单应答由 Playwright 截下来按网关受理的形状回（后端这一形状见
+    test_payment_gateway_channel.py），这里只看页面怎么写。"""
+    _login(page, base_url)
+    _open_page(page, "billing", "费用结算")
+    replies = [{"pay_url": "https://pay.example.com/h5/E2E1021", "qr_code": "weixin://wxpay/E2E1021"},
+               {"pay_url": "javascript:alert(1021)", "qr_code": ""}]
+
+    def accepted(route):
+        if route.request.method != "POST":
+            return route.continue_()
+        route.fulfill(status=201, json={
+            "id": 991021, "settlement_id": 1, "channel": "gateway", "channel_name": "网关支付", "amount": 12.5,
+            "refunded_amount": 0, "status": "pending", "status_name": "待支付", "trade_no": "GW-E2E-1021",
+            "fail_reason": "", "paid_at": None, "refunded_at": None, "callback_at": None,
+            "created_at": "2026-09-30T08:00:00", **replies.pop(0)})
+
+    page.route("**/api/billing/payments", accepted)
+    msg = page.locator("#pay-msg")
+    for _ in range(2):
+        page.fill('#pay-form input[name="settlement_id"]', "1")
+        page.locator('#pay-form select[name="channel"]').select_option("gateway")   # 修前没有这一项
+        _submit(page, "#pay-form button")
+        expect(msg).to_contain_text("已受理，待网关回调确认到账（流水号 GW-E2E-1021）")
+        expect(msg).not_to_contain_text("支付失败")   # 修前「支付失败：」
+        if replies:
+            expect(msg).to_contain_text("二维码串 weixin://wxpay/E2E1021")
+            expect(msg.locator("a")).to_have_attribute("href", "https://pay.example.com/h5/E2E1021")
+        else:
+            expect(msg.locator("a")).to_have_count(0)   # javascript: 链接不进页面
+    page.unroute("**/api/billing/payments")
+
+
 def test_编辑专病中心只改名_已停用的状态不被悄悄改成筹建(page, base_url, admin_read, admin_call):
     """P2-421：编辑框的状态下拉原先写死筹建 / 运行中 / 暂停三项，已停用的中心一打开就落在第一项「筹建」，
     只改个名字保存，状态被悄悄改掉。修后选项取自后端的状态文案表（专家工作台下发的 `center_status_names`）。"""
