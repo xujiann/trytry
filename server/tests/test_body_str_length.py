@@ -1139,3 +1139,25 @@ def test_机构名很长_考核跑分与报告推送照常_快照名截断(clien
         width = SpdReportInstance.__table__.c.title.type.length
         assert len(titles) == 1 and len(titles[0]) == width and titles[0].startswith("模" * 64 + "（")
 
+
+# 档案更正的 `changes` 是 dict[str, str]，长度闸门看不见字典里的值：83 字的新姓名照收，主任点「通过」时写进 patients.name（64）
+# 在生产库上 500、申请永远卡在待审；值合计过千字的申请提交即 500（correction_requests.changes 1024）（P2-1047，第三十批 D1-7）。
+def test_档案更正_姓名超长与内容过长_提交时422_恰好到上限的审批照常(client, admin, world):
+    from app.routers.consents import CORRECTION_CHANGES_MAX, PATIENT_NAME_MAX
+
+    patient = client.post("/api/patients", headers=admin, json={
+        "name": "P21047 患者", "id_card": "330191198001011047", "gender": "男", "birth_date": "1980-01-01"}).json()["id"]
+
+    def submit(changes):
+        return client.post("/api/consents/corrections", headers=admin, json={
+            "patient_id": patient, "request_type": "correction", "changes": changes, "reason": "户籍更名"})
+
+    too_long = submit({"name": "名" * (PATIENT_NAME_MAX + 1)})
+    assert too_long.status_code == 422 and "姓名不超过" in too_long.json()["detail"], too_long.text   # 修前 201，审批时 500
+    bulky = submit({"phone": "1" * CORRECTION_CHANGES_MAX})
+    assert bulky.status_code == 422 and "更正内容过长" in bulky.json()["detail"], bulky.text   # 修前生产库 500
+    exact = submit({"name": "名" * PATIENT_NAME_MAX})
+    assert exact.status_code == 201, exact.text
+    reviewed = client.post(f"/api/consents/corrections/{exact.json()['id']}/review", headers=admin, json={"approve": True})
+    assert reviewed.status_code == 200, reviewed.text
+

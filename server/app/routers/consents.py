@@ -23,9 +23,11 @@
   整包授了审核权的自定义角色——那类账号不是全域角色，看不到这个患者，却改得了他的主索引。
 """
 import json
+from typing import cast
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
+from sqlalchemy import String
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -373,15 +375,23 @@ def list_consent_texts(
 # ============================================================================
 
 
+#: 更正落库的两处列宽（P2-1047）：姓名审批通过时写进 `patients.name`，整份更正内容序列化后写进 `correction_requests.changes`
+PATIENT_NAME_MAX = cast(String, Patient.__table__.c.name.type).length or 64
+CORRECTION_CHANGES_MAX = cast(String, CorrectionRequest.__table__.c.changes.type).length or 1024
+
+
 def _check_correction_value(field: str, value: str) -> None:
     """更正新值的格式校验；不合法抛 ValueError（带人话）。
 
-    目前只有出生日期要管：年龄全靠它现算，写坏了（`2016/03/05`），未满 14 周岁须监护人、
-    审方的儿童/老年规则都会当"不知道"放过。更正内容是 `dict[str, str]`，请求体日期字段的
-    棘轮看不见字典里的值，所以在这里单独卡（P1-61）。
+    出生日期：年龄全靠它现算，写坏了（`2016/03/05`），未满 14 周岁须监护人、审方的儿童/老年规则都会当"不知道"放过。
+    更正内容是 `dict[str, str]`，请求体日期字段的棘轮看不见字典里的值，所以在这里单独卡（P1-61）。
+    姓名与建档同一个上限（P2-1047）：长度闸门同样看不见字典里的值，83 字的新姓名原先照收，主任点「通过」时写进
+    `patients.name`（64）在生产库上 500，申请永远卡在待审。电话的上限随 P1-61 / 加密列容量一并定，这里不另起口径。
     """
     if field == "birth_date":
         check_date(value)
+    if field == "name" and len(value) > PATIENT_NAME_MAX:
+        raise ValueError(f"姓名不超过 {PATIENT_NAME_MAX} 字")
         if value > clock.today().isoformat():   # 与建档同一句（P2-713）：将来的出生日期算出负年龄
             raise ValueError(f"出生日期（{value}）不得晚于今天")
     # 性别与建档同一口径（P2-941）：原先「女性」审批通过即落库，区域结构、审方、FHIR 出站都认不得
@@ -416,7 +426,11 @@ def validate_correction_changes(request_type: str, changes: dict[str, str]) -> s
             raise HTTPException(status_code=422, detail=f"更正字段 {field}：{exc}") from None
     if "gender" in changes:   # 编码写法（1 / 2、M / F）归一后再存，审批执行时落库的就是「男 / 女 / 未知」（P2-941）
         changes = {**changes, "gender": normalize_gender(str(changes["gender"])) or str(changes["gender"])}
-    return json.dumps(changes, ensure_ascii=False)
+    payload = json.dumps(changes, ensure_ascii=False)
+    # 整份更正内容装得进列（P2-1047）：值合计过千字的申请原先提交即 500（生产库），居民端也能提交
+    if len(payload) > CORRECTION_CHANGES_MAX:
+        raise HTTPException(status_code=422, detail=f"更正内容过长（{len(payload)} 字，上限 {CORRECTION_CHANGES_MAX}）")
+    return payload
 
 
 class CorrectionSubmitIn(BaseModel):
