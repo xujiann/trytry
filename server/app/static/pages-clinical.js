@@ -2627,10 +2627,12 @@ async function renderHrFinance() {
     const f = new FormData(e.target);
     try {
       const r = await api(`/api/mgmt/budgets/execution?org_id=${f.get("org_id")}&year=${f.get("year")}`);
+      // 红标按原值判「实际超预算」（P2-990）：原先按取整到两位的执行率判 > 100，预算 100 万、实际超支 40 元时执行率是
+      // 100.0、标绿；预算到千万级，四百多元以内的超支都显示绿色
       $("#bud-exec").innerHTML = table(["类别", "预算", "实际", "执行率"], [
         ["收入", r.income], ["支出", r.expense]], ([label, d]) =>
         `<tr><td>${label}</td><td>${d.budget}</td><td>${d.actual}</td>
-         <td>${d.execution_pct === null ? "—" : `<span class="tag ${d.execution_pct > 100 ? "red" : "green"}">${d.execution_pct}%</span>`}</td></tr>`);
+         <td>${d.execution_pct === null ? "—" : `<span class="tag ${d.actual > d.budget ? "red" : "green"}">${d.execution_pct}%</span>`}</td></tr>`);
     } catch (err) { setMsg("#hrf-msg", err.message, false); }
   };
   $("#page-body").onclick = async (e) => {
