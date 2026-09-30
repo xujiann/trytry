@@ -30,6 +30,7 @@ from .. import clock
 from .. import events
 from ..concurrency import insert_if_absent
 from ..config import settings
+from ..texttypes import has_keyword
 from .models import SpdCandidate, SpdFollowupRecord, SpdFollowupRule, SpdProgram, SpdScreening
 from .service import actively_enrolled, match_program, plan_offsets
 
@@ -59,7 +60,7 @@ def on_admission_discharged(db: Session, payload: dict) -> None:
     rule = next(
         (
             r for r in rules
-            if any(k and k in text for k in (r.diagnosis_keywords or []))
+            if has_keyword(text, r.diagnosis_keywords)   # 大小写 / 全角 / 夹空格都认（P2-917）
         ),
         None,
     )

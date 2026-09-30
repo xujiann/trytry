@@ -49,3 +49,11 @@ def text_key(value: str | None) -> str:
     `pci术` / `ＰＣＩ术`、诊断写成 `qt间期延长` / `ＱＴ间期延长` 都命中不了——经皮冠脉介入落进内科组，QT 延长的患者照开
     阿奇霉素、系统审通过。关键词与被查的文字两侧都过它；同 `code_key`，只用于比对，不改落库的值。"""
     return "".join(unicodedata.normalize("NFKC", value or "").casefold().split())
+
+
+def has_keyword(text: str | None, keywords) -> bool:
+    """`keywords` 里有没有一个出现在 `text` 里：两侧都过 `text_key`，关键词归一后为空的不算命中（与 DRG 的 `_contains`
+    同一句）。随访方案的诊断关键词（自动匹配、出院即派生）与病历质控的要点关键词共用（P2-917）：原先按原样
+    `k in text`，诊断写成 `i10`、`Ｉ１０`、`copd急性加重` 就不派随访，也没有任何提示。"""
+    key = text_key(text)
+    return any(k and k in key for k in (text_key(kw) for kw in keywords or []))

@@ -56,7 +56,7 @@ from ..service import (CALL_SETTLEABLE_STATUSES, REVISIT_OPEN_STATUSES, adjust_f
                        settle_call_task, plan_offsets, spawn_followup_abnormal_task, unknown_code, unknown_ids,
                        unknown_program)
 from ...numtypes import INT4_MAX, INT4_MIN, non_finite_path
-from ...texttypes import NON_BLANK
+from ...texttypes import NON_BLANK, has_keyword
 from ...visibility import assert_org_writable, assert_patient_visible, visible_org_ids
 
 router = APIRouter(
@@ -817,7 +817,7 @@ def auto_match_plans(
     seen: set[tuple[int, int]] = set()
     for patient_id, base_date, text in candidates:
         rule = next(
-            (r for r in rules if any(k and k in text for k in r.diagnosis_keywords or [])), None
+            (r for r in rules if has_keyword(text, r.diagnosis_keywords)), None   # 与出院即派生同一句（P2-917）
         )
         if rule is None:
             continue

@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from ..concurrency import ensure_present, insert_if_absent
 from ..numtypes import INT4_MAX, INT4_MIN
-from ..texttypes import NON_BLANK
+from ..texttypes import NON_BLANK, has_keyword
 from ..visibility import assert_obj_org_writable, assert_org_writable, assert_patient_visible, scope_org_list
 from ..database import get_db
 from ..datetypes import OptionalDateStr
@@ -553,7 +553,7 @@ def _check_record_rule(rule: RecordQcRule, value: str) -> str:
         return f"共 {len(text)} 字，超出上限 {maximum} 字" if len(text) > maximum else ""
     if rule.rule == "keyword_present":
         keywords = rule.config.get("keywords", [])
-        if any(k in text for k in keywords):
+        if has_keyword(text, keywords):   # 写法不同照认、空关键词不算（P2-917，与随访方案同一句）
             return ""
         return f"未体现要点（应含以下之一：{'、'.join(keywords)}）"
     return ""  # 未知规则类型不判缺陷（规则库演进期兼容）
