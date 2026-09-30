@@ -1945,8 +1945,12 @@ async function renderProjects() {
           options: PROJECT_STATUS_OPTS },
       ]);
       if (!picked) return;
-      return postAction(`/api/projects/${d.progress}`,
-        { progress_pct: picked.progress_pct, status: picked.status }, "#pj-msg", "PATCH");
+      // 只送改过的列（P2-969）：原先两列都按载入值预填、恒送——两列都送时后端不设条件，别人刚结项（完成、100%），旧页面上报个
+      // 进度 85 就把项目改回「进行中 85%」，P2-416 那道「只改一列时按另一列判」从页面上永远不生效
+      const body = {};
+      if (!p || String(picked.progress_pct) !== String(p.progress_pct)) body.progress_pct = picked.progress_pct;
+      if (!p || picked.status !== p.status) body.status = picked.status;
+      return postAction(`/api/projects/${d.progress}`, body, "#pj-msg", "PATCH");
     }
     if (d.ms) {
       const picked = await spdModal("新增里程碑", [
