@@ -424,7 +424,6 @@ def test_物资全部出库后清单仍打得开(client, admin, org):
 KNOWN_READ_MODIFY_WRITE: dict[str, tuple[int, str]] = {
     # —— 幂等/取极值形状：同为读-改-写，但重复执行结果一致，丢更新后果有限（登记，暂不修）——
     "portal.py:bind_wechat": (1, "nickname = nickname or 新值，幂等回填"),
-    "spd/portal.py:feedback_intervention": (1, "read_at = read_at or now，幂等回填"),
     "spd/portal.py:read_education": (1, "read_at = read_at or now，幂等回填"),
     "spd/tasks.py:submit_task": (1, "assignee_id = assignee_id or 当前用户，幂等回填"),
     "spd/config/catalog.py:update_program": (1, "version = _bump_version(version)，配置版本号自增（低频、单写者）"),

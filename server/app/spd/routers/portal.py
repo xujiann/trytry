@@ -53,7 +53,8 @@ from ..service import (CONSULT_ROLES, FOLLOWUP_OPEN_STATUSES, MEASUREMENT_SOURCE
                        REFERRAL_STATUS_LABELS, TASK_COMPLETABLE_STATUSES, TASK_OPEN_STATUSES, actively_enrolled, answers_problem, referral_ends,
                        close_followup_record, enrollment_for, judge_measurement, mark_intervention_done,
                        measure_program_for, measure_value_problem, move_task,
-                       exclusion_problem, scale_program_mismatch, scale_unusable, scale_version_problem,
+                       exclusion_problem, feedback_appended, scale_program_mismatch, scale_unusable,
+                       scale_version_problem,
                        spawn_followup_abnormal_task, unknown_program)
 from .followup import ABNORMAL_LEVEL_NAMES, FOLLOWUP_SCENE_NAMES
 from fastapi import File, Form, UploadFile
@@ -1233,14 +1234,17 @@ def feedback_intervention(
     # 标记已读、留一句反馈照常（P2-67）
     if body.done and record.status == "removed":
         raise HTTPException(status_code=409, detail="该干预方案已被医生移除，不能再标记完成")
-    record.read_at = record.read_at or now_naive()
-    if body.feedback:
-        record.feedback = body.feedback
-    # 上面那道预检是锁外读的（P2-302）：翻成已完成与「没被移除」压进同一条 UPDATE，与顺序请求同一句 409
-    if body.done and not mark_intervention_done(db, record.id):
-        db.rollback()
-        raise HTTPException(status_code=409, detail="该干预方案已被医生移除，不能再标记完成")
-    db.commit()
+    # 反馈追加，与医护办结同一行临界区（P2-961）：原先整格写，医护办结时填的「患者反馈」与这里互相盖掉
+    with serialized_on(db, SpdIntervention, record.id):
+        db.refresh(record)
+        record.read_at = record.read_at or now_naive()
+        if body.feedback:
+            record.feedback = feedback_appended(record.feedback, body.feedback)
+        # 上面那道预检是锁外读的（P2-302）：翻成已完成与「没被移除」压进同一条 UPDATE，与顺序请求同一句 409
+        if body.done and not mark_intervention_done(db, record.id):
+            db.rollback()
+            raise HTTPException(status_code=409, detail="该干预方案已被医生移除，不能再标记完成")
+        db.commit()
     db.refresh(record)
     return {"id": record.id, "status": record.status, "read": True}
 

@@ -50,7 +50,8 @@ from ..models import (
 )
 from ..rules import score_scale
 from ..service import (ENROLL_STATUS_LABELS, ENROLLMENT_ENDED_STATUSES, MEASUREMENT_SOURCE_NAMES, REVISIT_OPEN_STATUSES,
-                       RISK_LEVEL_NAMES, award_points, enrollment_for, judge_measurement, measure_program_for,
+                       RISK_LEVEL_NAMES, award_points, enrollment_for, feedback_appended, judge_measurement,
+                       measure_program_for,
                        measure_value_problem, scale_program_mismatch, scale_unusable, scale_version_problem, spawn_task,
                        unknown_program, withdraw_calls)
 from ...visibility import assert_org_writable, assert_patient_visible, scope_patient_list, visible_org_ids
@@ -1109,7 +1110,9 @@ def update_intervention(
             if ended:
                 raise HTTPException(status_code=409, detail=f"患者已不在管（{ended}），干预不能恢复")
         for key, value in changes.items():
-            if key == "feedback" and not value:
+            if key == "feedback":
+                if value:   # 追加，不盖掉居民在手机上交的（P2-961）
+                    record.feedback = feedback_appended(record.feedback, value)
                 continue
             setattr(record, key, value)
         db.commit()

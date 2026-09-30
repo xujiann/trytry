@@ -728,6 +728,18 @@ def adjust_followup_record(db: Session, record_id: int, **values: Any) -> bool:
     return moved
 
 
+def feedback_appended(current: str | None, text: str, limit: int = 512) -> str:
+    """干预反馈追加一段（P2-961），不整格覆盖。
+
+    `spd_interventions.feedback` 只有一列：居民在手机上交的反馈（`portal.feedback_intervention`）与医护办结时填的「患者反馈」
+    （`care.update_intervention`）原先都整格写——居民报的「吃药后头晕，早上量血压 95/60」被医护电话随访后写的一句话整段替换，
+    库里别处没有留存；反过来医护先写、居民后交也一样。与执行随访追加结果（P2-291）同一口径改成追加、不加来源标注（两处记的
+    都是患者的反馈），第一段原样存——只一方写过的与修前一字不差；超出列宽时留最新的，旧的从头上截掉（最新的反馈才是眼下的
+    情况）。**不 commit**，调用方在同一行的临界区里、refresh 之后调。"""
+    merged = f"{current}；{text}" if current else text
+    return merged[-limit:]
+
+
 def spawn_followup_abnormal_task(db: Session, record: SpdFollowupRecord, level: str, title: str) -> SpdTask | None:
     """随访答卷命中中度 / 重度异常时派一条处置任务；医护执行与居民自助作答共用这一处（P2-131）。
 
