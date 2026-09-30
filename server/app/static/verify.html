@@ -44,7 +44,10 @@ td.k { color: #888; width: 84px; white-space: nowrap; }
 "use strict";
 (async function () {
   const box = $("#result");
-  // 令牌在 # 片段里：不进服务端访问日志，也不被中间设备当缓存键收录
+  // 令牌在 # 片段里：打开本页的那次请求不带它（片段不发给服务端），不进那一行访问日志，也不被中间设备当缓存键收录。
+  // 但下面调核验接口仍按 `?token=` 查询串传，它照样出现在记查询串的访问日志里——应用自己的 medplat.access 只记 path、
+  // uvicorn 自带的访问日志生产上关着（--no-access-log），反向代理的日志按运维手册别记查询串（P2-1142）。
+  // 令牌里签的是单据类型、编号、签发机构与打印日，不含患者信息（ADR-0015：泄露无隐私增量）
   const token = location.hash.slice(1);
   if (!token) {
     box.innerHTML = '<div class="badge warn"><span class="ico">?</span>缺少核验令牌</div>'
