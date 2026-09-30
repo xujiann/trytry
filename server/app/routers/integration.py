@@ -1009,7 +1009,8 @@ def hl7v2_oru(
     """ORU^R01 检验/检查结果入站：OBR（申请信息）+ 多条 OBX（结果项）回写检查报告。
 
     - **申请单定位**：OBR-2（下单方单号）即平台申请单号（ExamRequest.id，对接规范
-      映射表"检查检验申请→ServiceRequest"）；OBR-2 缺失回退 OBR-3（执行方单号）；
+      映射表"检查检验申请→ServiceRequest"）；OBR-2 缺失回退 OBR-3（执行方单号），回退时必须带 PID
+      段核对患者（P2-986）；
     - **OBX 逐条解析**：标识（OBX-3）/值（OBX-5）/单位（OBX-6）/参考范围（OBX-7）/
       异常标志（OBX-8），逐行拼入报告 finding；异常标志 HH/LL/AA 判**危急值**，
       复用报告发布的危急值闭环（通知→确认→处置留痕）；标志按 `~` 拆开逐个判，认不得的
@@ -1050,11 +1051,18 @@ def _oru_groups(segments: list[str]) -> list[tuple[str, list[str]]]:
 
 def _oru_request(db: Session, obr: str, pid: str | None) -> ExamRequest:
     """按 OBR 定位申请单并核对 PID（每一组各自核，防串单）。"""
-    order_no = (_hl7_field(obr, 2) or _hl7_field(obr, 3)).split("^")[0].strip()
+    placer = _hl7_field(obr, 2)
+    order_no = (placer or _hl7_field(obr, 3)).split("^")[0].strip()
     # 只认 ASCII（P1-97）：`isdigit()` 放行上标「²」、圈码「①」，下一行 int() 抛异常，被入站兜底成笼统的
     # 「消息解析失败」——对方系统看不出是单号不对
     if not (order_no.isascii() and order_no.isdigit()):
         raise HTTPException(status_code=422, detail="OBR-2/OBR-3 申请单号缺失或非平台单号")
+    # 按 OBR-3 回退时必须带 PID、核对上申请单患者（P2-986）：OBR-3 是执行方（LIS）自己编的号，只是碰巧可能等于某张平台
+    # 申请单号——不带 PID 就不核患者，LIS 回传一份平台上没有申请单的结果，样本号恰好等于别人的申请单号，结果连同危急值
+    # 就写进那位患者的申请单，他自己的结果随后回传反而 409。带 OBR-2（平台单号）的照旧可以不带 PID
+    if not placer and (pid is None or not _pid3_id_card(_hl7_field(pid, 3))):
+        raise HTTPException(status_code=422,
+                            detail="OBR-2（平台申请单号）缺失：按 OBR-3 定位申请单时须带 PID 段核对患者，结果拒收")
     request = db.get(ExamRequest, int(order_no))
     if request is None:
         raise HTTPException(
