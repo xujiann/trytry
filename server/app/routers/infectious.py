@@ -3,13 +3,13 @@ from datetime import date, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from .. import clock
 from ..database import get_db
 from ..deps import get_current_user, require_roles, resolve_business_date
 from ..models import InfectiousCase, InfectiousDisease, Organization, User
+from ..texttypes import code_key
 from ..visibility import assert_org_writable
 from ..schemas import InfectiousCaseCreate, InfectiousCaseOut, InfectiousDiseaseOut
 from .reports import _csv_response
@@ -87,12 +87,11 @@ def report_case(
     if body.onset_date > clock.today().isoformat():
         raise HTTPException(status_code=422, detail=f"发病日期（{body.onset_date}）不得晚于今天")
     case = InfectiousCase(**body.model_dump())
-    # 目录内病种自动回填甲/乙/丙分类
-    disease = (
-        db.query(InfectiousDisease).filter(InfectiousDisease.code == body.disease_code).first()
-    )
-    if disease is not None:
-        case.category = disease.category
+    # 目录内病种自动回填甲/乙/丙分类。病种编码按比对键对目录（P2-1146，与审方 P1-218 同一个 `code_key`）：编码是手输框，
+    # 原先按原样对——`A00` 后面多一个零宽字符、写成 `a00` 或带尾随空格，霍乱卡就不回填甲类、进不了迟报清单。落库的编码照原样
+    meta = _disease_meta(db).get(code_key(body.disease_code))
+    if meta is not None:
+        case.category = meta[1]
     db.add(case)
     db.commit()
     db.refresh(case)
@@ -123,40 +122,33 @@ def multi_point_alerts(
     # 两头都含，实际 8 天（P2-159）；0 与 1 都只看今天
     start = (end - timedelta(days=max(window_days - 1, 0))).isoformat()
     # 「同病种」按病种编码认（P2-159）：名称是报告时手填的自由文本，原先按（编码, 名称）分组——同是 J11，甲院写「流行性感冒」、
-    # 乙院写「流感」，两家各 3 例被拆成两组、都不到阈值 5，跨机构的聚集一条预警都不出
-    rows = (
-        db.query(
-            InfectiousCase.disease_code,
-            func.max(InfectiousCase.disease_name).label("disease_name"),
-            func.count(InfectiousCase.id).label("case_count"),
-            func.count(func.distinct(InfectiousCase.org_id)).label("org_count"),
-        )
+    # 乙院写「流感」，两家各 3 例被拆成两组、都不到阈值 5，跨机构的聚集一条预警都不出。编码也按比对键认（P2-1146）：原先
+    # SQL 按原样分组，3 例 `J11` 与 2 例 `J11`+零宽字符（或小写、带尾随空格）又被拆成两组。窗口内的行取出来在这里分组
+    groups: dict[str, list] = {}
+    for row in (
+        db.query(InfectiousCase.disease_code, InfectiousCase.disease_name, InfectiousCase.org_id)
         .filter(InfectiousCase.onset_date >= start, InfectiousCase.onset_date <= end.isoformat())
-        .group_by(InfectiousCase.disease_code)
-        .having(func.count(InfectiousCase.id) >= threshold)
-        .order_by(InfectiousCase.disease_code)
         .all()
-    )
-    # 目录里有这个病种的显示目录名，没有的显示报告里的一个写法
-    catalog_names = {
-        code: name
-        for code, name in db.query(InfectiousDisease.code, InfectiousDisease.name)
-        .filter(InfectiousDisease.code.in_([r.disease_code for r in rows] or [""]))
-        .order_by(InfectiousDisease.code)
-        .all()
-    }
-    return [
-        {
-            "disease_code": r.disease_code,
-            "disease_name": catalog_names.get(r.disease_code) or r.disease_name,
-            "case_count": r.case_count,
-            "org_count": r.org_count,
+    ):
+        groups.setdefault(code_key(row.disease_code), []).append(row)
+    # 目录里有这个病种的显示目录编码与目录名，没有的显示报告里的一个写法
+    catalog = {code_key(d.code): d for d in db.query(InfectiousDisease).order_by(InfectiousDisease.id).all()}
+    alerts = []
+    for key, members in groups.items():
+        if len(members) < threshold:
+            continue
+        disease = catalog.get(key)
+        org_count = len({m.org_id for m in members})
+        alerts.append({
+            "disease_code": disease.code if disease is not None else min(m.disease_code for m in members),
+            "disease_name": disease.name if disease is not None else max(m.disease_name for m in members),
+            "case_count": len(members),
+            "org_count": org_count,
             "window_days": window_days,
             # 多机构同时报告，聚集性风险升级
-            "severity": "high" if r.org_count >= 2 else "medium",
-        }
-        for r in rows
-    ]
+            "severity": "high" if org_count >= 2 else "medium",
+        })
+    return sorted(alerts, key=lambda a: a["disease_code"])
 
 
 # ---------- 工程包 I1：法定上报导出（传染病报告卡） ----------
@@ -218,7 +210,7 @@ def _timeliness_text(late: bool | None, report_hours: int | None) -> str:
 
 
 def _case_card(case: InfectiousCase, org_names: dict, meta_by_code: dict) -> dict:
-    meta = meta_by_code.get(case.disease_code)
+    meta = meta_by_code.get(code_key(case.disease_code))   # 按比对键取目录元信息（P2-1146，见 `_disease_meta`）
     report_hours, days_late, late = _timeliness(case, meta)
     return {
         "case_id": case.id,
@@ -239,8 +231,13 @@ def _case_card(case: InfectiousCase, org_names: dict, meta_by_code: dict) -> dic
 
 
 def _disease_meta(db: Session) -> dict:
+    """目录元信息 `(名称, 分类, 法定时限小时)`，键是病种编码的比对键 `code_key`（P2-1146）。
+
+    回填分类、报告卡、法定导出、迟报清单共用这一份，查的时候同样拿 `code_key(病种编码)` 取：原先按原样取，`A00` 带零宽
+    字符、写成小写或带尾随空格的霍乱卡，报告卡印「目录外 / 无法定时限」，迟报清单和「只导迟报」都漏掉这张卡。"""
     return {
-        d.code: (d.name, d.category, d.report_hours) for d in db.query(InfectiousDisease).all()
+        code_key(d.code): (d.name, d.category, d.report_hours)
+        for d in db.query(InfectiousDisease).order_by(InfectiousDisease.id).all()
     }
 
 
@@ -321,10 +318,10 @@ def late_reports(db: Session = Depends(get_db)):
     即甲类（2h）跨日报告即迟报，乙/丙类（24h）相隔≥2天迟报。判定与报告卡导出共用 `_timeliness`（P2-528：原先
     两处各写一遍，都拿 UTC 日期算报告日）。
     """
-    hours_by_code = {d.code: (d.name, d.category, d.report_hours) for d in db.query(InfectiousDisease).all()}
+    hours_by_code = _disease_meta(db)   # 按比对键取（P2-1146）：原先按原样取，编码带零宽 / 小写 / 尾随空格的迟报卡不进清单
     rows = []
     for case in db.query(InfectiousCase).order_by(InfectiousCase.id).all():
-        meta = hours_by_code.get(case.disease_code)
+        meta = hours_by_code.get(code_key(case.disease_code))
         report_hours, days_late, late = _timeliness(case, meta)   # 目录外病种、发病日期坏了的都判不了，不进清单
         if meta is None or not late:
             continue
