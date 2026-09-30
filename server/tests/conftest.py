@@ -3,12 +3,15 @@ from datetime import date, datetime, timezone
 import faulthandler
 import os
 import signal
+import sqlite3
 import subprocess
 import sys
 import threading
 import time
 
 import pytest
+from sqlalchemy import event
+from sqlalchemy.engine import Engine
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 os.environ["MEDPLAT_DATABASE_URL"] = "sqlite:///./test_run.db"
@@ -16,6 +19,20 @@ os.environ["MEDPLAT_DATABASE_URL"] = "sqlite:///./test_run.db"
 os.environ["MEDPLAT_UPLOAD_DIR"] = "./test_uploads"
 # 测试需要 console 通道回显 debug_code 拿验证码；生产默认关（sms_debug_echo=False）。
 os.environ.setdefault("MEDPLAT_SMS_DEBUG_ECHO", "true")
+
+
+@event.listens_for(Engine, "connect")
+def _test_sqlite_no_fsync(dbapi_connection, _connection_record) -> None:
+    """测试库关掉 fsync（P2-1015）：测试库用完即弃，不需要持久性。
+
+    每个测试模块开头重建库表（下面的 `reset_database`），pysqlite 不把 DDL 包进事务，每条 CREATE / DROP 各提交一次、
+    各刷一次盘：一次重建约 7,560 次 fdatasync，全量单元档约 694 万次，99% 来自 915 次重建（2026-09-30 在 7b8931c 上
+    把 fdatasync 换成计数实测）。CI run 770 分到的那台 runner 刷盘慢了约 11 倍（0.15 ms → 1.75 ms），单元档就从
+    七十分钟拖到四小时十分钟——全绿、没有哪条卡住，纯 CPU 的用例段一样快。只动测试进程里的 SQLite 连接；端到端档另起
+    进程、真 PG 的集成档都不经过这里，应用与生产库不受影响。
+    """
+    if isinstance(dbapi_connection, sqlite3.Connection):
+        dbapi_connection.execute("PRAGMA synchronous=OFF")
 
 
 def reset_database():
