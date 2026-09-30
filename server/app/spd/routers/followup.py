@@ -9,11 +9,11 @@
 """
 import zlib
 from datetime import date, timedelta
-from typing import Any
+from typing import Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import func, select
+from sqlalchemy import String, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -65,6 +65,8 @@ router = APIRouter(
     dependencies=[Depends(get_current_user)],
 )
 
+#: 随访结果列宽：执行随访与呼叫回写都往这一格追加（P2-291），超出时留最新的（P2-1045）
+FOLLOWUP_RESULT_MAX = cast(String, SpdFollowupRecord.__table__.c.result.type).length or 512
 FOLLOWUP_ROLES = ("doctor", "public_health", "director", "operator")
 
 #: `spd_followup_records.status` → 中文（§13「状态文案取自后端」，P2-72）：措辞照抄列注释，与随访看板的状态筛选
@@ -1036,7 +1038,9 @@ def execute_followup(
         record.channel = body.channel
         record.executor_id = user.id
         record.executed_at = clock.today().isoformat()
-        record.result = (record.result + " " + body.result).strip()[:512]
+        # 超出列宽时留最新的（P2-1045，与干预反馈追加 P2-961 同一口径）：原先 `[:512]` 截掉的是这次写的——先回写的通话摘要
+        # 占满，医生执行随访写的结论（加量、复查安排）被整段截掉，接口 200 且无提示；通话原文另在呼叫任务上，截旧的不丢东西
+        record.result = (record.result + " " + body.result).strip()[-FOLLOWUP_RESULT_MAX:]
         if body.evidence:
             record.evidence = (record.evidence or []) + body.evidence
         # 上面那道预检是 check-then-act：两名随访人员（或医护与居民自助）同时执行同一条
@@ -1314,7 +1318,7 @@ def record_call_result(
             settle()
             db.refresh(record)
             if record.status in ("planned", "overdue"):
-                record.result = (record.result + " " + body.result).strip()[:500]
+                record.result = (record.result + " " + body.result).strip()[-FOLLOWUP_RESULT_MAX:]   # 留最新的（P2-1045）
                 record.evidence = (record.evidence or []) + (
                     [body.record_url] if body.record_url else []
                 )
