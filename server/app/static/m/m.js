@@ -1334,7 +1334,9 @@ async function renderSpdMeasure(box, days = 90) {
     } catch (err) { $("#spd-measure-msg").textContent = err.message; }
   });
   const older = box.querySelector("[data-spd-older]");
-  if (older) older.addEventListener("click", () => renderSpdMeasure(box, 730));
+  // 取不到就说出来（P2-1009）：原先抛错没人接，点「看近两年的」一声不吭
+  if (older) older.addEventListener("click", () => renderSpdMeasure(box, 730)
+    .catch((err) => { $("#spd-measure-msg").textContent = err.message; }));
 }
 
 async function renderSpdTasks(box) {
@@ -1695,8 +1697,10 @@ async function renderSpdConsults(box) {
     } catch (err) { $("#spd-consult-msg").textContent = err.message; }
   });
   box.querySelectorAll(".consult-open").forEach((btn) => {
+    // 取不到就说出来（P2-1009）：原先抛错没人接，点开会话一声不吭，下面还是上一次打开的那一段
     btn.addEventListener("click", () => showConsultThread(btn.dataset.consult,
-      consults.find((c) => String(c.id) === btn.dataset.consult), send));
+      consults.find((c) => String(c.id) === btn.dataset.consult), send)
+      .catch((err) => { $("#spd-consult-msg").textContent = err.message; }));
   });
 }
 

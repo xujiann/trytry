@@ -636,7 +636,9 @@ async function renderSpdAdmin() {
       let prog;
       try { prog = await api(`/api/spd/programs/${progRules.dataset.progRules}`); }
       catch (err) { return setMsg("#spd-program-msg", err.message, false); }
-      const ruleMeta = await spdMeta();
+      let ruleMeta;
+      try { ruleMeta = await spdMeta(); }
+      catch (err) { return setMsg("#spd-program-msg", err.message, false); }
       $("#spd-cfg-detail").innerHTML = panel(
         `改纳入 / 排除规则 · ${prog.name}（当前 ${prog.version || "—"}，保存即升一版并留快照）`, `
         <div style="display:flex;gap:24px;flex-wrap:wrap">
@@ -3828,7 +3830,12 @@ async function renderSpdMember() {
     if (!body.patient_id) return;
     const params = new URLSearchParams({ patient_id: body.patient_id, limit: 30 });
     if (body.metric) params.set("metric", body.metric);
-    const rows = await api(`/api/spd/measurements?${params}`);
+    // 先清空、查不到把原因写出来（P2-1009，与同一行「看趋势」同一写法）：原先抛错没人接，换了患者号查失败，
+    // 结果区照旧挂着上一位的血压，清单里不写是谁
+    $("#spd-meas-result").innerHTML = "";
+    let rows;
+    try { rows = await api(`/api/spd/measurements?${params}`); }
+    catch (err) { return setMsg("#spd-meas-msg", err.message, false); }
     $("#spd-meas-result").innerHTML = table(
       ["时间", "指标", "数值", "等级", "来源", "备注"], rows, (m) =>
       `<tr><td>${esc(m.measured_at.slice(0, 16))}</td><td>${esc(m.metric)}</td>
@@ -4142,7 +4149,13 @@ function spdRevisitTable(rows) {
 }
 
 async function spdShowConsultThread(consultId, closed = false) {
-  const messages = await api(`/api/spd/consults/${consultId}/messages`);
+  // 取不到就在会话区说清楚（P2-1009）：原先抛错没人接，点「查看」一声不吭，会话区还是上一次打开的那一段
+  let messages;
+  try { messages = await api(`/api/spd/consults/${consultId}/messages`); }
+  catch (err) {
+    $("#spd-consult-thread").innerHTML = `<p class="msg err">会话 #${esc(consultId)}：${esc(err.message)}</p>`;
+    return;
+  }
   $("#spd-consult-thread").innerHTML = `
     <div class="panel" style="border-left:4px solid #0b6e6e">
       <h3>会话 #${consultId}</h3>

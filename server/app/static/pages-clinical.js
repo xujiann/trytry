@@ -1487,8 +1487,17 @@ async function renderVaccination() {
     form.org_id.value = b.org_id;
   };
   $("#contra-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/vaccination/contraindications", formJson(e.target, ["patient_id"]), "#vac-msg"); };
+  // 先清空、查不到把原因写出来（P2-1009，与 P2-378 同一写法）：原先抛错没人接，换了患者号查失败（无权 403、打错号），
+  // 清单照旧挂着上一位的禁忌、「解除」按钮挂着上一位的患者号——点解除解的是上一位的长期禁忌，他的接种前评估随即放行
   const drawContras = async (pid) => {
-    const rows = await api(`/api/vaccination/contraindications?patient_id=${pid}`);
+    $("#contra-result").innerHTML = "";
+    let rows;
+    try {
+      rows = await api(`/api/vaccination/contraindications?patient_id=${pid}`);
+    } catch (err) {
+      $("#contra-result").innerHTML = `<p class="msg err">${esc(err.message)}</p>`;
+      return;
+    }
     $("#contra-result").innerHTML = table(["疫苗", "原因", "类型", "有效期至", "当前", "操作"], rows, (r) =>
       `<tr><td>${esc(r.vaccine_code)}</td><td>${esc(r.reason)}</td>` +
       `<td>${r.contra_type === "temporary" ? "暂时" : "长期"}</td><td>${esc(r.valid_until || "—")}</td>` +

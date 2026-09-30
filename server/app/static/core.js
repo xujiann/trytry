@@ -1361,8 +1361,12 @@ async function renderPatients() {
 async function renderDicts() {
   $("#page-desc").textContent = "诊断/药品/耗材/收费“四统一”编码字典";
   const systems = { diagnosis: "诊断(ICD-10)", drug: "药品", consumable: "耗材", charge: "收费" };
+  // 先清空、取不到把原因写出来（P2-1009）：原先切换字典时抛错没人接，表里照旧是上一个字典的条目
   const draw = async (system) => {
-    const entries = await api(`/api/dictionaries/${system}/entries`);
+    $("#dict-table").innerHTML = "";
+    let entries;
+    try { entries = await api(`/api/dictionaries/${system}/entries`); }
+    catch (err) { $("#dict-table").innerHTML = `<p class="msg err">${esc(err.message)}</p>`; return; }
     $("#dict-table").innerHTML = table(["编码", "名称"], entries, (d) =>
       `<tr><td><span class="tag">${esc(d.code)}</span></td><td>${esc(d.name)}</td></tr>`);
   };
