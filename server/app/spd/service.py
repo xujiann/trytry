@@ -1406,6 +1406,20 @@ ENROLL_STATUS_LABELS = {
 
 #: 档案已结束、患者不在这份档案下管了：死亡、迁出、排除、结案。召回中 / 脱管不算——人还挂在本机构、正在找回来
 ENROLLMENT_ENDED_STATUSES = ("dead", "migrated", "excluded", "completed")
+#: 没结束、也不在管的：脱管、召回中（P2-1050）——这份档案要恢复，不该另建一份、也不该让居民再去申请
+ENROLLMENT_PAUSED_STATUSES = ("lost", "recalled")
+
+
+def paused_enrollment(db: Session, patient_id: int, program_code: str) -> SpdEnrollment | None:
+    """这位患者这个病种脱管 / 召回中的档案（P2-1050）。居民端首页、自查、申请与建档都认它：原先只认在管的，召回中的居民
+    首页被告知「没有签约的慢专病管理」、自查提示去申请、申请照收，受理后再建档出两份档案，原来那份的召回永远结不了。"""
+    return (
+        db.query(SpdEnrollment)
+        .filter(SpdEnrollment.patient_id == patient_id, SpdEnrollment.program_code == program_code,
+                SpdEnrollment.status.in_(ENROLLMENT_PAUSED_STATUSES))
+        .order_by(SpdEnrollment.id.desc())
+        .first()
+    )
 #: 迁出登记之后、确认之前原档案成了这些状态的，这次迁出不再生效：死亡（P1-111），已迁出 / 已排除 / 已结案（P2-527）
 MIGRATION_VOID_STATUSES = ENROLLMENT_ENDED_STATUSES
 

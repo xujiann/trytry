@@ -219,7 +219,7 @@ def test_指标与评估的整数值仍是float(client, auth):
 def test_首页的键集合与动态指标字典(client, auth):
     body = client.get(f"{B}/home", headers=auth).json()
     assert set(body) == {"patient", "programs", "latest_metrics", "todo", "packages",
-                         "enrolled"}
+                         "enrolled", "paused_programs"}   # 脱管 / 召回中另列 P2-1050 加
     assert set(body["patient"]) == {"id", "name", "gender", "birth_date"}
     assert set(body["todo"]) == {"followups", "tasks", "revisits", "interventions",
                                  "unread_edu"}

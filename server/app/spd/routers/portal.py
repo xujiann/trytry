@@ -49,7 +49,7 @@ from ..models import (
     SpdTeam,
 )
 from ..rules import is_suspect_risk, score_scale
-from ..service import (SCALE_ADVICE_MAX, CONSULT_ROLES, FOLLOWUP_OPEN_STATUSES, MEASUREMENT_SOURCE_NAMES, MEDIA_TYPE_NAMES, PACKAGE_BINDING_STATUS_NAMES,
+from ..service import (ENROLL_STATUS_LABELS, ENROLLMENT_PAUSED_STATUSES, SCALE_ADVICE_MAX, paused_enrollment, CONSULT_ROLES, FOLLOWUP_OPEN_STATUSES, MEASUREMENT_SOURCE_NAMES, MEDIA_TYPE_NAMES, PACKAGE_BINDING_STATUS_NAMES,
                        REFERRAL_ACTION_NAMES, REFERRAL_STATUS_LABELS, TASK_COMPLETABLE_STATUSES, TASK_OPEN_STATUSES, actively_enrolled, answers_problem, referral_ends,
                        close_followup_record, enrollment_for, judge_measurement, mark_intervention_done,
                        measure_program_for, measure_value_problem, move_task,
@@ -153,6 +153,15 @@ class SpdHomePackageOut(BaseModel):
     status_name: str
 
 
+class SpdHomePausedProgramOut(BaseModel):
+    """脱管 / 召回中的病种（P2-1050）：档案还在、等着恢复，不是「没有签约」。"""
+
+    program_code: str
+    program_name: str
+    status: str
+    status_name: str
+
+
 class SpdHomeOut(BaseModel):
     """居民首页。
 
@@ -167,6 +176,7 @@ class SpdHomeOut(BaseModel):
     todo: SpdHomeTodoOut
     packages: list[SpdHomePackageOut]
     enrolled: bool
+    paused_programs: list[SpdHomePausedProgramOut]
 
 
 @router.get("/home", response_model=SpdHomeOut)
@@ -182,7 +192,15 @@ def home(
         .filter(SpdEnrollment.patient_id == patient.id, SpdEnrollment.status == "active")
         .all()
     )
-    names = _program_names(db, [e.program_code for e in enrollments])
+    # 脱管 / 召回中的另列（P2-1050）：人还挂在本机构、正在找回来，原先首页照「没有签约的慢专病管理」引导去自查、申请。
+    # 不混进在管的 programs——那一份是咨询病种下拉、待办的口径，只认在管的
+    paused = (
+        db.query(SpdEnrollment.program_code, SpdEnrollment.status)
+        .filter(SpdEnrollment.patient_id == patient.id, SpdEnrollment.status.in_(ENROLLMENT_PAUSED_STATUSES))
+        .order_by(SpdEnrollment.id)
+        .all()
+    )
+    names = _program_names(db, [e.program_code for e in enrollments] + [code for code, _ in paused])
     teams: dict[int | None, str] = {
         t.id: t.name
         for t in db.query(SpdTeam).filter(
@@ -273,6 +291,11 @@ def home(
         },
         "packages": packages,
         "enrolled": bool(enrollments),
+        "paused_programs": [
+            {"program_code": code, "program_name": names.get(code, ""), "status": status,
+             "status_name": ENROLL_STATUS_LABELS.get(status, status)}
+            for code, status in paused
+        ],
     }
 
 
@@ -644,7 +667,9 @@ def self_screening(
         "id": record.id, "score": record.score, "risk_level": record.risk_level,
         "result": record.result, "advice": record.advice,
         # 已在管这个病种的不提示申请（P2-559）：受理只是把人放进目标池，在管的人受理了什么也不发生，居民却看到「已受理」
-        "can_apply": record.result == "suspect" and not actively_enrolled(db, patient.id, body.program_code),
+        # 脱管 / 召回中的同样不提示（P2-1050）：那份档案要恢复，不是重新申请
+        "can_apply": record.result == "suspect" and not actively_enrolled(db, patient.id, body.program_code)
+        and paused_enrollment(db, patient.id, body.program_code) is None,
     }
     if excluded:
         out["excluded_reason"] = excluded
@@ -677,6 +702,10 @@ def apply_service(
     # 申请是给「未纳管居民」的（模型注释）：在管的人申请了，医护受理也只是把人放进目标池——已纳管的什么都不发生
     if actively_enrolled(db, patient.id, body.program_code):
         raise HTTPException(status_code=409, detail="该病种已在专病管理中，无需申请")
+    paused = paused_enrollment(db, patient.id, body.program_code)
+    if paused is not None:   # P2-1050：受理后再建档会出两份档案，原来那份的召回永远结不了
+        raise HTTPException(status_code=409, detail=f"该病种的管理档案{ENROLL_STATUS_LABELS.get(paused.status, paused.status)}，"
+                                                    "请联系签约团队恢复管理，无需重新申请")
     # 命中病种排除规则的不收（P2-935，与自查、受理同一口径）：原先 15 岁的居民照样申请成人高血压管理、受理进目标池
     program = db.query(SpdProgram).filter(SpdProgram.code == body.program_code, SpdProgram.active.is_(True)).first()
     excluded = exclusion_problem(db, patient.id, program) if program is not None else ""

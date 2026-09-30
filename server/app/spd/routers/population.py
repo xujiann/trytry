@@ -56,7 +56,7 @@ from ..models import (
     SpdVillageDoctor,
 )
 from ..rules import RuleError, as_validated, evaluate, is_suspect_risk, score_scale
-from ..service import (PACKAGE_ITEM_NAME_MAX, SCALE_ADVICE_MAX, MEASUREMENT_SOURCE_NAMES, TASK_OPEN_STATUSES, actively_enrolled, award_points, build_facts,
+from ..service import (ENROLL_STATUS_LABELS, PACKAGE_ITEM_NAME_MAX, paused_enrollment, SCALE_ADVICE_MAX, MEASUREMENT_SOURCE_NAMES, TASK_OPEN_STATUSES, actively_enrolled, award_points, build_facts,
                        candidate_reason, candidate_undistributed, close_open_work, exclusion_problem, match_program, migration_void_reason,
                        package_items_ok,
                        scale_program_mismatch, scale_unusable, scale_version_problem, unknown_program)
@@ -1125,6 +1125,13 @@ def create_enrollment(
     program = db.query(SpdProgram).filter(SpdProgram.code == body.program_code).first()
     if program is None or not program.active:
         raise HTTPException(status_code=404, detail="专病档案不存在或已停用")
+    # 同病种有一份脱管 / 召回中的档案就不另建（P2-1050）：那份要恢复在管——另建一份在管的，原来那份的召回永远结不了
+    # （恢复在管 409「已在…在管」），两份档案各挂各的随访、任务与积分
+    paused = paused_enrollment(db, body.patient_id, body.program_code)
+    if paused is not None:
+        raise HTTPException(status_code=409, detail=(
+            f"该患者此病种有一份{ENROLL_STATUS_LABELS.get(paused.status, paused.status)}的档案（#{paused.id}），"
+            "请在原档案上恢复在管，不要另建"))
     if body.package_id is not None:
         _usable_package(db, body.package_id, body.program_code)
     _check_enroll_refs(db, body.model_dump())

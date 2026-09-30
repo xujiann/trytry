@@ -1267,8 +1267,13 @@ async function loadSpd() {
 
 async function renderSpdHome(box) {
   const home = await authApi(`/api/portal/spd/home${spdQuery()}`);
+  // 脱管 / 召回中的档案另列（P2-1050）：档案还在、等着恢复，原先照「没有签约」引导去自查、申请——受理后再建档出两份档案
+  const paused = (home.paused_programs || []).map((p) => `<div class="m-card">
+    ${kv("管理病种", esc(p.program_name || p.program_code))}
+    ${kv("档案状态", `<span class="tag orange">${esc(p.status_name)}</span>`)}
+    <p class="hint">请联系您的签约团队恢复管理，无需重新申请。</p></div>`).join("");
   if (!home.enrolled) {
-    box.innerHTML = `<div class="m-card"><p class="hint">您当前没有签约的慢专病管理。
+    box.innerHTML = paused || `<div class="m-card"><p class="hint">您当前没有签约的慢专病管理。
       可在「自查」中完成高危筛查后申请专病服务。</p></div>`;
     return;
   }
@@ -1297,7 +1302,7 @@ async function renderSpdHome(box) {
       ${kv("未读宣教", home.todo.unread_edu)}
     </div>
     ${metrics ? `<div class="m-card"><h3>最新指标</h3>${metrics}</div>` : ""}
-    ${programs}
+    ${programs}${paused}
     ${packages}`;
 }
 
