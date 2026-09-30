@@ -365,8 +365,10 @@ def _indicator(db, section, org_id, period):
         return {**_head(section, "text"), "note": f"公式求值失败：{exc}"}
     return {
         **_head(section, "text"),
+        # 目标 0 照印（P2-995）：原先真值判断吃掉 0，「目标 0 例投诉」这类合法的 0 目标与没设目标印成一个样
+        # （考核指标库页面用 `?? "—"` 区分，计分那边也写明分档的 0 目标合法）
         "text": f"{indicator.name}：{round(value, 2)}"
-                + (f"（目标 {indicator.target_value}）" if indicator.target_value else ""),
+                + (f"（目标 {indicator.target_value}）" if indicator.target_value is not None else ""),
         "metrics": metrics, "value": round(value, 2),
         "indicator_code": indicator.code, "version": indicator.version,
     }
