@@ -3179,7 +3179,7 @@ async function renderSpdFollowup() {
       <form class="inline" id="spd-fu-filter">
         <select name="status"><option value="">全部状态</option>
           <option value="planned">待随访</option><option value="done">已完成</option>
-          <option value="unreachable">失访</option></select>
+          <option value="unreachable">失访</option><option value="removed">已移除</option></select>
         <select name="scene"><option value="">全部场景</option>
           <option value="inpatient">出院</option><option value="outpatient">门诊</option>
           <option value="surgery">术后</option><option value="checkup">体检</option></select>
@@ -3285,6 +3285,8 @@ async function renderSpdFollowup() {
       route();
     } catch (err) { setMsg("#spd-fu-msg", err.message, false); }
   };
+  // 状态下拉与后端 FOLLOWUP_STATUS_NAMES 同名同码（P2-1024）：原先缺「已移除」——调整弹窗能把随访移除、也能「恢复为待随访」，
+  // 可被移除的那条在页面上四种查法都查不回来。「已超期」不进下拉：走「只看超期」，那条会先跑一次超期扫描
   // 「只看超期」与状态不相与（P2-828）：后端 overdue=true 就是按「已超期」筛，再带状态是两个条件相与——「待随访 + 只看超期」
   // 恒为空，而这一步扫描刚把那几条改成了超期，看的人以为没有超期的。勾上就把状态置灰（置灰的不进表单、不送）
   const fuFilter = $("#spd-fu-filter");
