@@ -4121,6 +4121,44 @@ def test_医生移动端卡片内表单提交失败_报错写在这张卡的表�
     expect(form.locator("textarea[name=conclusion]")).to_have_value("E2E 我写的结论")
 
 
+def test_医生移动端换人登录_不留上一位速查的档案_顶部写的是这一位(page, base_url, seed, admin_call):
+    """P2-1218（第三十五批扫描 T1-3）：医生移动端退出原先只清 sessionStorage、藏起工作台——换人登录落回 hash 指的页签，
+    「速查」进页不取数，后一位看到的就是前一位查的患者档案（姓名、诊断、危急值；自己查是 403），卡号框里还是那个卡号，
+    顶部 #who 还写着前一位。修后退出即把工作台清回刚载入的样子、页签复位到待办；会话失效（api() 的 401 分支）同样清。"""
+    org = admin_call("POST", "/api/organizations",
+                     {"name": "E2E换人乙镇卫生院", "org_type": "township", "level": "township"})
+    admin_call("POST", "/api/users", {"username": "e2e_p21218_doc", "password": "passw0rd1", "role": "doctor",
+                                      "full_name": "E2E乙镇医生", "org_id": org["id"]})
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.goto(f"{base_url}/m/doctor")
+    page.fill("#lg-user", "admin")
+    page.fill("#lg-pass", "admin123")
+    page.click("#login-form button[type=submit]")
+    expect(page.locator("#workbench")).to_be_visible()
+    page.click('a.tab-btn[data-tab="patient"]')
+    page.fill("#pt-ehc", seed["patient"]["ehc_no"])
+    page.click("#pt-form button[type=submit]")
+    expect(page.locator("#pt-result")).to_contain_text("E2E患者")
+    page.click("#btn-logout")
+    expect(page.locator("#login-page")).to_be_visible()
+    page.fill("#lg-user", "e2e_p21218_doc")
+    page.fill("#lg-pass", "passw0rd1")
+    page.click("#login-form button[type=submit]")
+    expect(page.locator("#workbench")).to_be_visible()
+    expect(page.locator("#who")).to_contain_text("e2e_p21218_doc")   # 修前一直写着 admin
+    expect(page.locator("#tab-todo")).to_be_visible()   # 落在待办，进页即取数
+    expect(page.locator("#pt-result")).to_have_text("")   # 修前是前一位查的档案
+    expect(page.locator("#pt-ehc")).to_have_value("")
+    # 会话失效：速查框里填了卡号，Cookie 没了，点待办 → 401 → 回登录页，同样不留
+    page.click('a.tab-btn[data-tab="patient"]')
+    page.fill("#pt-ehc", seed["patient"]["ehc_no"])
+    page.context.clear_cookies()
+    page.click('a.tab-btn[data-tab="todo"]')
+    expect(page.locator("#login-page")).to_be_visible()
+    expect(page.locator("#pt-ehc")).to_have_value("")
+    expect(page.locator("#who")).to_have_text("")
+
+
 def test_校验失败的报错是人话而不是object_Object(page, base_url):
     """P2-39：请求体校验失败的 422，`detail` 是数组；三端请求帮手原先直接
     `new Error(data.detail)`，页面上显示的是 "[object Object]"。

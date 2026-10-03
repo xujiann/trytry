@@ -109,7 +109,29 @@ function showWorkbench(show) {
   $("#btn-logout").classList.toggle("hidden", !show);
 }
 
+/* 退出时把上一位留在工作台上的都清掉、页签复位到待办（P2-1218）。原先只清 sessionStorage、藏起工作台：换人登录落回 hash
+ * 指的页签，「速查」进页不取数（loadPatientTab 是空函数），后一位看到的就是前一位查的患者档案（姓名、卡号、诊断、危急值），
+ * 卡号框里还是那个卡号，顶部还写着前一位（#who 只在待办取数成功时改写）；查房、手术、随访、慢专病取数失败时只改一行状态，
+ * 前一位的病程、体征、名单照旧挂着，「我的患者」还按前一位筛（spdMe）。
+ * 不整页重载：登录口令错也回 401、也进 logout()，重载会把登录框下的报错一起冲掉；登出请求发出不等，重载还会掐断它。 */
+const WORKBENCH_BLOCKS = ["#who", "#todo-list", "#critical-list", "#exam-list", "#fu-chronic", "#fu-metrics",
+  "#chronic-list", "#round-adm", "#round-status", "#round-notes", "#round-vitals", "#surgery-schedule",
+  "#surgery-requests", "#spd-wb", "#spd-list", "#pt-result"].map((sel) => [sel, $(sel).innerHTML]);   // 页面刚载入时的样子
+
+function clearWorkbench() {
+  WORKBENCH_BLOCKS.forEach(([sel, html]) => { $(sel).innerHTML = html; });
+  document.querySelectorAll("#workbench form").forEach((f) => f.reset());   // 卡号、病程、体征、随访填了没交的
+  document.querySelectorAll("#workbench .msg").forEach((m) => { m.textContent = ""; m.className = "msg"; });
+  $("#round-note").classList.add("hidden");
+  $("#round-vital").classList.add("hidden");
+  roundAdmissionId = 0;
+  spdMe = null;
+  history.replaceState(null, "", location.pathname + location.search);   // 下一位落在待办：进页即取数，#who 跟着改写
+}
+
 function logout() {
+  // 登录口令错同样回 401、同样走到这里：那时工作台上没有上一位，不清，也不动 hash（带页签的链接照旧落在那一页）
+  const signedIn = isAuthed();
   // 先请后端拉黑令牌并清 HttpOnly Cookie（直接 fetch 而不走 api()：
   // api() 的 401 分支会调回本函数）；失败时照样本地退出
   fetch("/api/auth/logout", {
@@ -120,6 +142,7 @@ function logout() {
   sessionStorage.removeItem(TOKEN_KEY);
   sessionStorage.removeItem(USER_KEY);
   showWorkbench(false);
+  if (signedIn) clearWorkbench();
 }
 
 $("#btn-logout").addEventListener("click", logout);
