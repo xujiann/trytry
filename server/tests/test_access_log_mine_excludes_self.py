@@ -30,7 +30,8 @@ def test_本人调阅不列_医护调阅照列(client, admin, world):
         assert client.get("/api/portal/me/archive", headers=world["me"]).status_code == 200   # 本人调阅，留痕照写
     assert client.get(f"/api/archive/{world['patient']['ehc_no']}", headers=admin).status_code == 200
     rows = client.get("/api/access-logs/mine", headers=world["me"]).json()
-    assert [r["viewer"] for r in rows] == ["admin"]          # 修前还有三条 resident:{本账号}
+    # 修前还有三条 resident:{本账号}；调阅人给姓名不给登录账号（P2-1248），admin 种子姓名「平台管理员」
+    assert [r["viewer"] for r in rows] == ["平台管理员"]
     from app.models import AccessLog
 
     with SessionLocal() as db:   # 留痕本身不动

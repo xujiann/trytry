@@ -21,8 +21,8 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..deps import get_current_user, paginate, require_date, require_roles, through_day
-from ..models import AccessLog, Organization, Patient, ResidentAccount, User
+from ..deps import ROLE_NAMES, get_current_user, paginate, require_date, require_roles, through_day
+from ..models import AccessLog, Organization, Patient, ResidentAccount, Role, User
 from ..visibility import _write_access_log
 from .portal import current_resident, current_resident_patient
 
@@ -181,6 +181,7 @@ class AccessLogOut(BaseModel):
     """
 
     id: int
+    #: 监管清单是调阅人的登录账号（稽核按账号查）；居民视角 `/mine` 是姓名 / 角色中文名 / 居民端称呼（P2-1248，见 `_mine_viewers`）
     viewer: str
     viewer_org_id: int | None
     viewer_org_name: str
@@ -235,6 +236,37 @@ def _decorate(db: Session, rows: list[AccessLog]) -> list[dict]:
         for p in db.query(Patient).filter(Patient.id.in_(patient_ids)).all()
     } if patient_ids else {}
     return [_row_out(r, orgs.get(r.org_id, ""), patients.get(r.patient_id, "")) for r in rows]
+
+
+#: 居民端主体（`user_id` 空，`username` 是 `resident:{账户号}` / `portal:legacy` 这类内部标识）在居民视角里的称呼，
+#: 按依据分（P2-1248，措辞同 `BASIS_NAMES`）。本账号自己的调阅 `/mine` 不列（P2-360），剩下的多是代管家属账号
+RESIDENT_VIEWER_NAMES = {"delegate": "家庭代管账户", "self": "本人"}
+
+
+def _mine_viewers(db: Session, rows: list[AccessLog]) -> dict[int, str]:
+    """居民视角的「调阅人」，按留痕行 id 给（P2-1248）：医护给姓名，没填姓名的给角色中文名；居民端主体按依据给称呼。
+
+    原先与监管清单共用 `viewer = log.username`：调阅医生的**登录账号**原样送到居民手机上（页面印成「调阅人」）——
+    登录名回答不了「谁看过我」，还能被拿去试口令。与慢专病居民端的主管医生（P2-560）同一口径：只取姓名，不拿登录账号
+    顶替。角色名先取角色表（自定义角色、本地改过名的内置角色都在那里），再取内置六角色的中文名；都取不到给空串。
+    """
+    user_ids = {r.user_id for r in rows if r.user_id is not None}
+    users = {
+        uid: (full_name, role)
+        for uid, full_name, role in db.query(User.id, User.full_name, User.role).filter(User.id.in_(user_ids)).all()
+    } if user_ids else {}
+    role_keys = {role for _, role in users.values()}
+    role_names = {**ROLE_NAMES, **{
+        key: name for key, name in db.query(Role.key, Role.name).filter(Role.key.in_(role_keys)).all()
+    }} if role_keys else {}
+    out: dict[int, str] = {}
+    for r in rows:
+        if r.user_id is None:   # 代管人是谁不在这里给：「对谁展示谁」另有口径（P2-42 遗留）
+            out[r.id] = RESIDENT_VIEWER_NAMES.get(r.basis, "")
+            continue
+        full_name, role = users.get(r.user_id, ("", ""))
+        out[r.id] = (full_name or "").strip() or role_names.get(role, "")
+    return out
 
 
 @router.get("", response_model=list[AccessLogOut],
@@ -312,8 +344,8 @@ def my_access_logs(
     《个保法》第 44 条：个人有权知悉其个人信息的处理情况。这条接口把它落到
     实处——居民自己就能看到自己的档案被谁调阅过、凭什么。
 
-    只返回**本人**的记录（按绑定的 patient_id 过滤，绕不开）；不显示调阅人
-    的机构内部账号名细节之外的东西，够回答"谁看过我"即可。
+    只返回**本人**的记录（按绑定的 patient_id 过滤，绕不开）；调阅人给姓名（没填姓名的给角色中文名），
+    不给登录账号（P2-1248，见 `_mine_viewers`），够回答"谁看过我"即可。
 
     不列这个账号自己的调阅（P2-360）：居民端每读一次自己的档案都留一条「本人调阅」，打开一次「我的档案」就是三条——
     手机页只取最近 50 条，十几次之后窗口里全是自己，别家医生真正的调阅被挤出去，「还没有人调阅过您的档案」也永远出不来。
@@ -325,7 +357,8 @@ def my_access_logs(
         .order_by(AccessLog.id.desc())
     )
     rows = paginate(query, response, offset, limit)
-    return _decorate(db, rows)
+    viewers = _mine_viewers(db, rows)
+    return [{**row, "viewer": viewers[row["id"]]} for row in _decorate(db, rows)]
 
 
 @router.get("/stats", response_model=AccessLogStatsOut,

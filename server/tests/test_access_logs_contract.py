@@ -9,6 +9,7 @@
 - 监管清单与患者视角 `/mine` 是**同一个 `_row_out()` 形状**（11 键），一个模型
   两处复用；`viewer_org_id` 是**键恒在值可空**（居民端/无机构账号记 null）→
   `int | None`；`at` 是 isoformat **或空串**（created_at 缺省兜底）→ str。
+  `viewer` 两处取值不同（P2-1248）：监管清单是登录账号，`/mine` 是姓名 / 角色中文名。
 - `stats` 的 `by_basis` 行固定三键，`total` 为 int；按 -count 排序。
 - **查询本身也留痕**的语义一并钉住：按患者过滤的清单/统计会追加一条
   `access_log_view` 记录——这是行为语义不是契约噪声，逐值断言。
@@ -147,8 +148,11 @@ def test_患者视角mine精确_与监管行同形(client, world):
     rows = resp.json()
     assert resp.headers["x-total-count"] == "3"
     assert [list(r.keys()) for r in rows] == [ROW_KEYS] * 3
-    # 与监管清单同形同值（本人过滤后正是这三条）
-    assert rows == client.get("/api/access-logs", headers=world["admin"]).json()
+    # 与监管清单同形同值（本人过滤后正是这三条），只有调阅人不同：监管清单是登录账号，居民视角给姓名、没填姓名的给
+    # 角色中文名（P2-1248）——admin 种子姓名「平台管理员」，alc_doc 建号没填姓名
+    names = {"admin": "平台管理员", "alc_doc": "医师"}
+    assert rows == [{**r, "viewer": names[r["viewer"]]}
+                    for r in client.get("/api/access-logs", headers=world["admin"]).json()]
     # 业务令牌不得读 /mine（语义未动）
     assert client.get("/api/access-logs/mine", headers=world["admin"]).status_code in (401, 403)
 
