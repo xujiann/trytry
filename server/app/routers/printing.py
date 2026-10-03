@@ -93,6 +93,10 @@ _DOC_TYPE_PATTERN = "^(" + "|".join(DOC_TYPES) + ")$"
 
 CENTER_NAMES = {"imaging": "影像", "ecg": "心电", "lab": "检验", "pathology": "病理"}
 CERT_TYPE_NAMES = {"birth": "出生医学证明", "death": "死亡医学证明", "defect": "出生缺陷儿登记"}
+# 证明日期按类型印名称（P2-1242）：证明只存一个 event_date，原先一律印「事件日期」，家属拿死亡证明办户籍注销、殡葬，读不出
+# 这是哪一天；签发校验（P2-940）与死因报告卡导出早就叫它「死亡日期」。出生缺陷儿登记的这个日期指出生还是诊断库里没说，
+# 照旧「事件日期」
+CERT_DATE_LABELS = {"birth": "出生日期", "death": "死亡日期"}
 BILL_TYPE_NAMES = {"outpatient": "门诊", "inpatient": "住院"}
 REFERRAL_DIRECTION_NAMES = {"up": "上转", "down": "下转"}
 # 转诊状态文案与业务端逐字相同，不再抄一份：打印件与列表页读起来必须是同一句话。
@@ -477,7 +481,7 @@ def print_exam_request(
 
 @router.get("/certs/{cert_id}", response_class=HTMLResponse, response_model=str)
 def print_cert(cert_id: int, request: Request, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    """出生/死亡医学证明与缺陷登记打印版：证明编号、当事人信息、事件日期与诊断说明。"""
+    """出生/死亡医学证明与缺陷登记打印版：证明编号、当事人信息、出生 / 死亡日期（缺陷登记为事件日期）与诊断说明。"""
     cert = db.get(MedicalCert, cert_id)
     if cert is None:
         raise HTTPException(status_code=404, detail="证明不存在")
@@ -493,7 +497,7 @@ def print_cert(cert_id: int, request: Request, db: Session = Depends(get_db), us
     meta = (
         f'<tr><td class="k">姓名</td><td>{_esc(cert.name)}</td>'
         f'<td class="k">性别</td><td>{_esc(cert.gender)}</td></tr>'
-        f'<tr><td class="k">事件日期</td><td>{_esc(cert.event_date)}</td>'
+        f'<tr><td class="k">{CERT_DATE_LABELS.get(cert.cert_type, "事件日期")}</td><td>{_esc(cert.event_date)}</td>'
         f'<td class="k">证明类别</td><td>{_esc(type_name)}</td></tr>'
         f'<tr><td class="k">签发机构</td><td colspan="3">{_esc(org_name)}</td></tr>'
     ) + (_patient_rows(patient, user) if patient is not None else "")
