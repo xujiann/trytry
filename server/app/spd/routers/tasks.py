@@ -27,7 +27,7 @@ from ...texttypes import NON_BLANK
 from ...deps import (get_current_user, paginate, require_date, require_roles, resolve_business_date, row_dict,
                      rows_by_id)
 from ..platform import (Patient, User, assignee_outside_org, evidence_urls, notify_user, role_unfit, unusable_user,
-                        valid_task_evidence)
+                        usable_task_evidence, valid_task_evidence)
 from ..models import (
     SpdEnrollment,
     SpdPathInstance,
@@ -1131,7 +1131,8 @@ def submit_task(
         _submit_move(db, task, "doing")
         db.commit()
         return _task_out(task)
-    if task.require_evidence and not (task.evidence or []):
+    # 数的是没被病毒扫描隔离的佐证（P2-1251）：记进清单之后补扫才判毒的，清单不空、审核人却一张也打不开（下载 410）
+    if task.require_evidence and not usable_task_evidence(db, task.evidence):
         raise HTTPException(status_code=422, detail="该任务要求上传佐证材料后才能提交")
     task.assignee_id = task.assignee_id or user.id
     if body.note:
@@ -1248,7 +1249,7 @@ def complete_task(
         if problems:
             raise HTTPException(status_code=422, detail="；".join(problems))
         task.evidence = body.evidence
-    if task.require_evidence and not (task.evidence or []):
+    if task.require_evidence and not usable_task_evidence(db, task.evidence):   # 隔离件不算佐证，同提交（P2-1251）
         raise HTTPException(status_code=422, detail="该任务要求上传佐证材料后才能办结")
     return _finish_task(db, task, user)
 

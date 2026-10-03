@@ -67,6 +67,7 @@ from ..platform import (
     org_names,
     store_attachment,
     usable_or_none,
+    usable_task_evidence,
     valid_task_evidence,
 )
 
@@ -981,7 +982,9 @@ def submit_task(
         if problems:
             raise HTTPException(status_code=422, detail="；".join(problems))
         task.evidence = body.evidence
-    if task.require_evidence and not (task.evidence or []):
+    # 数的是没被病毒扫描隔离的凭证（P2-1251，与医护端提交 / 办结同一个帮手）：居民传的照片上传即记进清单，补扫判毒之后
+    # 医护审核时一张也打不开（下载 410），原先照样提交
+    if task.require_evidence and not usable_task_evidence(db, task.evidence):
         raise HTTPException(status_code=422, detail="该任务需要上传照片或报告等凭证")
     task.result = body.result
     # 条件翻转（P2-114）：锁外读到「未结束」之后医护刚办结的，别改回「待审核」——复活的任务再审一次，随访计分再记一笔；

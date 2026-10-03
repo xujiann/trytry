@@ -23,7 +23,7 @@
 | 居民端 | `ResidentAccount` / `current_resident` / `accessible_patient` | 患者移动端身份与"能看谁的档案" |
 | 消息 | `Notification` / `broadcast` / `notify_resident` / `send_sms` | 定向投递、实时广播、居民触达、短信通道 |
 | 告警 | `send_alert`（经 `broadcast` 用） | 广播无人在线时转发运维告警 webhook，与平台 `jobs._alert` 同一句（P2-273） |
-| 附件 | `Attachment` / `store_attachment` / `register_attachment_owner` | 任务佐证材料走平台附件服务（白名单/限额/去重同一份） |
+| 附件 | `Attachment` / `store_attachment` / `register_attachment_owner` / `quarantined_copy` | 任务佐证材料走平台附件服务（白名单/限额/去重同一份）；被病毒扫描隔离的不算佐证，判据与下载侧 410 同一份（P2-1251） |
 | 公卫数据 | `FollowUp`（慢病随访） | publichealth 采集器的数据源 |
 | 列类型 | `Money` / `utcnow` | 与平台其余表同一套金额与时间口径 |
 | PII 检索 | `pii_filter` | 加密态证件号等值检索：开态密文列 contains 恒空，必须走索引列（P1-25） |
@@ -67,6 +67,7 @@ from ..routers.encounters import ENCOUNTER_TYPE_NAMES  # 就诊类型文案：�
 from ..qrsvg import qr_svg
 from ..wechat import get_wechat_provider as _get_wechat_provider
 from ..routers.attachments import register_owner as _register_attachment_owner
+from ..routers.attachments import quarantined_copy as _quarantined_copy
 from ..routers.attachments import store_upload as _store_upload
 from ..routers.portal import accessible_patient, current_resident
 from ..routers.portal import REFERRAL_FEED_LIMIT as _REFERRAL_FEED_LIMIT
@@ -344,11 +345,18 @@ def store_attachment(
     )
 
 
+def _quarantined(db: Session, attachment: Attachment) -> bool:
+    """这份附件已被病毒扫描隔离：本行 infected，或同一份内容（sha256）的任意一行 infected——与下载侧
+    （`attachments.download_attachment` 的 410，P2-395）同一个判据（P2-1251）。"""
+    return attachment.scan_status == "infected" or _quarantined_copy(db, attachment.sha256) is not None
+
+
 def valid_task_evidence(db: Session, task_id: int, evidence: list) -> list[str]:
     """校验佐证清单里的每一项都是挂在该任务上的真实附件，返回问题列表（空=通过）。
 
     佐证从"任意字符串"收紧为附件 id：`require_evidence` 是节点配置里勾选过的
-    硬要求，能用随便一串字符糊弄过去，配置就形同虚设。
+    硬要求，能用随便一串字符糊弄过去，配置就形同虚设。被病毒扫描隔离的附件同样不收（P2-1251）：
+    下载侧对它一律 410，审核人打不开，原先照样拿来提交、办结。
     """
     problems: list[str] = []
     for item in evidence or []:
@@ -362,7 +370,27 @@ def valid_task_evidence(db: Session, task_id: int, evidence: list) -> list[str]:
             problems.append(f"附件 #{attachment_id} 不存在")
         elif attachment.owner_type != "spd_task" or attachment.owner_id != task_id:
             problems.append(f"附件 #{attachment_id} 不属于该任务")
+        elif _quarantined(db, attachment):
+            problems.append(f"附件 #{attachment_id} 已被病毒扫描隔离")
     return problems
+
+
+def usable_task_evidence(db: Session, evidence: list) -> list:
+    """佐证清单里还算数的条目：去掉已被病毒扫描隔离的附件（P2-1251）。
+
+    要佐证的任务在医护端提交 / 办结、居民端提交时数的是它，而不是「清单非空」：扫描是异步的，常常先记进佐证、补扫之后
+    才判出病毒，清单里只剩一张隔离件时审核人一张也打不开（下载 410），任务却照样办结。只按此刻的扫描结论剔隔离件，
+    其余条目照旧计数——编号不对、不属于该任务的，记进清单时已由 `valid_task_evidence` 拦下。
+    """
+    usable = []
+    for item in evidence or []:
+        try:
+            attachment = db.get(Attachment, int(item))
+        except (TypeError, ValueError):
+            attachment = None
+        if attachment is None or not _quarantined(db, attachment):
+            usable.append(item)
+    return usable
 
 
 def evidence_urls(evidence: list) -> list[dict]:
