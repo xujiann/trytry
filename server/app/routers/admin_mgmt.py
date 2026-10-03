@@ -5,7 +5,7 @@ from sqlalchemy import and_, exists, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
 
-from ..concurrency import add_amount, insert_or_conflict, serialized_on, take_amount, upsert_unique
+from ..concurrency import add_amount, insert_or_conflict, move_row, serialized_on, take_amount, upsert_unique
 from ..database import get_db
 from ..datetypes import DateStr, OptionalDateStr, PeriodStr
 from ..numtypes import INT4_MAX, MONEY_MAX, MoneyFloat
@@ -415,7 +415,11 @@ def transfer_asset(
         raise HTTPException(status_code=409, detail="已报废物资不可调拨")
     if db.get(Organization, to_org_id) is None:
         raise HTTPException(status_code=404, detail="调入机构不存在")
-    asset.org_id = to_org_id
+    # 划拨与「未报废」压进同一条 UPDATE（P2-1188）：上面那道预检是锁外读的——与整件报废（物资行的临界区里重读、置已报废）
+    # 同时到，原先照旧把机构改掉：已报废的物资被划到调入机构名下。抢输的一路改到 0 行，与顺序发生时同一句 409
+    if not move_row(db, Asset, asset.id, Asset.status != "scrapped", org_id=to_org_id):
+        db.rollback()
+        raise HTTPException(status_code=409, detail="已报废物资不可调拨")
     db.commit()
     db.refresh(asset)
     return asset
