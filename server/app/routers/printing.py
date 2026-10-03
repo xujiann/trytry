@@ -51,6 +51,7 @@ from ..models import (
     ExamRequest,
     MedicalCert,
     Organization,
+    PathologySpecimen,
     Patient,
     PhysicalExam,
     Prescription,
@@ -265,11 +266,35 @@ def _render(
 # ---------- 检查报告打印 ----------
 
 
+def _pathology_specimens_html(db: Session, request_id: int) -> str:
+    """病理报告单的「标本」表（P2-1239）：标本号、送检部位、离体 / 固定时间、固定液，按登记先后逐行。
+
+    标本号由平台生成、「唯一性是全部价值」——切片、蜡块按它归档，多部位取材时结论要对得上是哪个标本；这些都在标本表里
+    （一张申请可以有多个标本），报告单原先一个都不印，连「标本」两个字都没有。被拒收的在标本号后标「拒收：原因」，
+    没登记标本的写「未登记标本」（与处方笺「无药品明细」同一写法）。时刻原样印，只把登记页 datetime-local 送来的 `T`
+    分隔印成空格（与页面上显示时刻同一个换法）。
+    """
+    rows = []
+    for s in (db.query(PathologySpecimen).filter(PathologySpecimen.request_id == request_id)
+              .order_by(PathologySpecimen.id).all()):
+        rejected = f"（拒收：{_esc(s.reject_reason) or '—'}）" if s.status == "rejected" else ""
+        rows.append(
+            f"<tr><td>{_esc(s.specimen_no)}{rejected}</td><td>{_esc(s.site) or '—'}</td>"
+            f"<td>{_esc(s.excised_at.replace('T', ' ')) or '—'}</td><td>{_esc(s.fixed_at.replace('T', ' ')) or '—'}</td>"
+            f"<td>{_esc(s.fixative) or '—'}</td></tr>"
+        )
+    body = "".join(rows) or '<tr><td colspan="5">未登记标本</td></tr>'
+    return f"""
+  <div class="section"><h3>标本</h3>
+    <table class="items"><thead><tr><th>标本号</th><th>送检部位</th><th>离体时间</th><th>固定时间</th>
+      <th>固定液</th></tr></thead><tbody>{body}</tbody></table></div>"""
+
+
 @router.get("/exam-reports/{report_id}", response_class=HTMLResponse, response_model=str)
 def print_exam_report(
     report_id: int, http_request: Request, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
-    """检查检验报告单打印版：机构抬头、患者信息、项目、所见、结论、危急值标记与报告医师；别家诊断中心出的写明报告机构与诊断医师。"""
+    """检查检验报告单打印版：机构抬头、患者信息、项目、（病理）标本、所见、结论、危急值标记与报告医师；别家诊断中心出的写明报告机构与诊断医师。"""
     report = db.get(ExamReport, report_id)
     if report is None:
         raise HTTPException(status_code=404, detail="报告不存在")
@@ -319,7 +344,9 @@ def print_exam_report(
             f' 最后一次修订：{_esc(last.revised_by) or "—"}，{_esc(_shown_at(last.created_at))}'
             f"{reason}</p>"
         )
-    body = f"""
+    # 病理报告先列标本（P2-1239），其他中心的报告一个字节不变
+    specimen_html = _pathology_specimens_html(db, request.id) if request.center_type == "pathology" else ""
+    body = f"""{specimen_html}
   <div class="section"><h3>检查所见</h3><div class="body">{_esc(report.finding) or "—"}</div></div>
   <div class="section"><h3>诊断结论</h3><div class="body">{_esc(report.conclusion) or "—"}</div></div>
   {critical_html}
