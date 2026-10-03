@@ -42,7 +42,8 @@
     --dry-run        校验模式：完整执行解析/外键解析/幂等判定，报告 将导入/跳过/
                      错误 行数与错误明细，但**不落库**（事务回滚）。
     --batch-size     实导时每 N 个导入行提交一次事务（默认 1000），避免超大
-                     文件单事务过长；dry-run 恒不提交。
+                     文件单事务过长；dry-run 恒不提交（每 N 行写进事务后清出
+                     会话、最后整个回滚，内存与实导同一个量级，P2-1155）。
     --progress-every 每处理 N 行输出一次进度（默认 1000，0=关闭）。
     --errors-csv     错误行明细输出路径（默认 <输入文件>.errors.csv，仅在
                      存在错误行时生成）；错误行跳过继续跑，不中断导入。
@@ -163,7 +164,7 @@ class ImportReport:
 
 class ImportContext:
     """批量提交与进度输出：importer 每导入一行调 checkpoint()，
-    满 batch_size 提交一次（dry-run 恒不提交，最终回滚）。"""
+    满 batch_size 提交一次（dry-run 恒不提交：满一批写进事务、从会话逐出，最终回滚）。"""
 
     def __init__(self, db, report: ImportReport, *, dry_run: bool,
                  batch_size: int, progress_every: int, out, operator: str):
@@ -192,8 +193,23 @@ class ImportContext:
 
     def checkpoint(self, next_from: int | None = None) -> None:
         """`next_from`：提交后下一批从第几行算起。默认当前行已写进这一批；处方按张提交，触发提交的那一行是下一张的
-        首行、还没写，由处方导入器传进来（P2-1094）。"""
+        首行、还没写，由处方导入器传进来（P2-1094）。
+
+        dry-run 满一批也不提交，而是写进事务（`flush`）再把会话清空（`expunge_all`），最后整个回滚（P2-1155）。原先
+        dry-run 既不提交也不 flush（会话 autoflush=False），每行建的 ORM 对象都留在会话里直到最后回滚：内存与文件行数
+        成正比，就诊 2 万 → 6 万行峰值 36 → 106 MB，约为实导的四倍半（2026-09-30 在 bf2ced8 上实测，第三十三批扫描
+        A4-6）——几百万行的迁移预检会在迁移机上 OOM。写进事务还顺带让 dry-run 与实导一样撞得到库侧约束。回滚范围的
+        说明照旧：dry-run 不推进 `batch_from`，中途失败仍说「第 N～M 行校验到一半失败」。
+
+        判重的两个集合照旧（同一文件里见过的键 `seen_batch`、库里原有的键 `existing`），没改成每批 IN 查库：前者要报
+        「与第几行相同」，库里查不出行号，实导时前几批已提交、查库还会把同一文件里的重复当成「已存在」跳过（P2-732 的
+        口径就变了）；后者随库表大小而不随文件行数涨，改查库要把每个导入器改成先攒一批再判。两者都与实导同一份内存。
+        """
         self._pending += 1
+        if self.dry_run and self._pending >= self.batch_size:
+            self.db.flush()
+            self.db.expunge_all()
+            self._pending = 0
         if not self.dry_run and self._pending >= self.batch_size:
             self.db.commit()
             self._pending = 0
@@ -1083,6 +1099,7 @@ def run_import(
 
             IMPORTERS[entity](db, stream(), report, ctx)
         if dry_run:
+            db.flush()   # 最后不满一批的也写进事务、撞一遍库侧约束，与满批的同一个口径（P2-1155），再整个回滚
             db.rollback()
         else:
             db.commit()
