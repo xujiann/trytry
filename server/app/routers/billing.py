@@ -1596,15 +1596,24 @@ class PaymentCallbackOut(BaseModel):
 def _settled_callback_result(order: PaymentOrder, result_status: str, trade_no: str) -> dict:
     """回调到达时支付单已不在 `pending`：同一笔的重放算幂等，其余一律 409。
 
+    「同一笔的重放」= 回调结果对得上单子的终态、流水号也对得上（本地没记流水号的放过）：已入账收到成功回调；支付失败
+    收到同一笔的失败回调、已全额退款收到当初那条成功回调（这两种 P2-1246 补上：原先只对 paid 判了幂等，都回 409，网关
+    当通知失败一直重投，退款也不会让它停下）。金额进这里之前已与本地单核对过（不符 422）。对不上的——失败单收到成功
+    回调、已入账收到失败回调、流水号不符——照旧 409，那是异常单，进对账差异，不自动翻状态。
+
     抽出来是因为这段判定要用**两次**——一次在锁外（挡先后到达的重放，省掉
     进临界区的开销），一次在锁内 `db.refresh` 之后（真正同时到达的两路只有
     在锁内才分得出先来后到）。两处必须逐字同口径，所以只留一份实现。
     """
+    same_trade = not order.trade_no or order.trade_no == trade_no
     if order.status == "paid":
-        if result_status == "paid" and (not order.trade_no or order.trade_no == trade_no):
+        if result_status == "paid" and same_trade:
             # 幂等：同一笔的重复回调不再产生任何写入
             return {"ok": True, "order_id": order.id, "status": order.status, "idempotent": True}
         raise HTTPException(status_code=409, detail="支付单已入账，回调与已有流水不符")
+    if same_trade and (order.status, result_status) in (("failed", "failed"), ("refunded", "paid")):
+        # 同样只认作重放、不产生任何写入（P2-1246）
+        return {"ok": True, "order_id": order.id, "status": order.status, "idempotent": True}
     raise HTTPException(
         status_code=409,
         detail=f"当前状态 {PAYMENT_STATUS.get(order.status, order.status)} 不接受支付回调",
@@ -1622,8 +1631,8 @@ router.dependencies = []
 async def payment_callback(request: Request, db: Session = Depends(get_db)):
     """支付网关回调：验签后把 pending 单置为终态（paid/failed）。
 
-    防重放两道：时间戳窗口（窗外 401）＋订单状态幂等（已 paid 的同单
-    重放不再产生任何写入，返回 idempotent=True）。金额与本地单核对，
+    防重放两道：时间戳窗口（窗外 401）＋订单状态幂等（同一笔的重放不再
+    产生任何写入，返回 idempotent=True；哪些算同一笔见 `_settled_callback_result`）。金额与本地单核对，
     不一致按篡改拒绝。既有"支付成功后续逻辑"（status/trade_no/paid_at
     回写）原子迁移到这里，与 Mock 同步路径口径一致。
     """
