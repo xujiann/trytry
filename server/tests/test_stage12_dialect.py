@@ -124,10 +124,16 @@ def test_手写SQL总量可控():
     `postgresql_where` 各写一次谓词，故 1 条 = 2 处。与 17 → 25、25 → 41 同一类声明：全量唯一让结案后再孕建不了册，
     不唯一又放回并发建册的两本册子，只能由部分索引把「在册」这一态钉进库里。
 
+    44 → 46（2026-10-03，P2-1156 危急值部分索引）：`exam_reports` 补一条只收危急值的**部分索引**
+    `ix_exam_reports_critical`（迁移 8d2e5b5c287f），模型里 `sqlite_where`（`critical = 1`，SQLite 没有布尔类型）与
+    `postgresql_where`（`critical`）各写一次谓词，故 1 条 = 2 处。与 42 → 44 同一类声明：待办铃铛每人每 30 s、驾驶舱、
+    运营报表、危急值清单与催办都按「critical 为真」取，critical_status 的索引筛不掉缺省 '' 的普通报告，只有部分索引能把
+    这一小撮危急值单独钉成一棵小树；查询那一侧没有新增手写串（判据写成 ORM 的 `== true()`）。
+
     上限只在"增量是部分索引谓词，或按方言分流的连接 / 锁原语"时才允许上调，且要像上面几段一样
     写清是哪几条、为什么不能用 ORM 表达；查询串的增量一律先改写成 ORM。"""
     total = sum(len(list(_raw_sql_snippets(src))) for _p, src in _python_sources())
-    assert total <= 44, f"手写 SQL 已达 {total} 处，超出可控范围，请优先用 ORM 表达"
+    assert total <= 46, f"手写 SQL 已达 {total} 处，超出可控范围，请优先用 ORM 表达"
 
 
 # 金额列的命名族。`debit`/`credit`/`bonus` 是补进来的——阶段十二第一遍只按
