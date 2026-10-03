@@ -158,7 +158,8 @@ ROW_KEYS = {
     "encounters": {"id", "org_id", "encounter_type", "diagnosis_name", "summary"} | {"created_at"},
     "exam_reports": {"id", "request_id", "conclusion", "critical"} | {"item_name", "reported_at", "critical_status"},
     "chronic_diseases": {"id", "disease", "level", "next_due"},
-    "prescriptions": {"id", "diagnosis_name", "status"} | {"created_at"},
+    # 处方再加状态中文名与已退药标记（P2-1198）
+    "prescriptions": {"id", "diagnosis_name", "status"} | {"created_at"} | {"status_name", "dispense_reversed"},
     "settlements": {"id", "bill_type", "total_amount", "insurance_pay", "self_pay", "created_at"},
     # 体检加给人看的异常项（P2-1197）
     "physical_exams": {"id", "exam_date", "package_name", "has_abnormal", "abnormal_items"} | {"abnormal_text"},

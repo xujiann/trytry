@@ -20,7 +20,9 @@ from ..models import (
 )
 from ..visibility import assert_org_writable, assert_patient_visible, visible_org_ids
 from .checkups import _abnormal_item_names, abnormal_text as checkup_abnormal_text  # 体检异常项与体检清单同一口径（P2-1197）
+from .dispense import prescription_not_reversed   # 已退药与用药画像同一判据（P2-1198）
 from .patients import find_by_ehc_no
+from .prescriptions import PRESCRIPTION_STATUS_NAMES
 from ..schemas import EncounterCreate, EncounterOut
 
 #: `encounters.encounter_type` → 中文（§13「状态文案取自后端」）：驾驶舱下钻明细原先把 outpatient 原样印出来（P2-646）
@@ -166,6 +168,10 @@ class ArchivePrescription(BaseModel):
     status: str
     #: 开方时刻（P2-1196，只加键）：同就诊段
     created_at: str
+    #: 以下两个键是 P2-1198 加的（只加键；行保留，开过这张方是事实）：处方状态是审方结论，退药冲销不动它——原先退掉的那张
+    #: 照原审方状态列出，医生当它还在吃（用药画像早按 P2-624 排除了）；药师退回的只给英文码。中文名表外的码原样回显
+    status_name: str
+    dispense_reversed: bool
 
 
 class ArchiveSettlement(BaseModel):
@@ -233,6 +239,14 @@ def patient_360_view(
         db.query(Prescription).filter(Prescription.patient_id == patient.id)
         .order_by(Prescription.created_at.desc(), Prescription.id.desc())
     )
+    # 已退药的（P2-1198）：判据照用量统计那一句（`dispense.prescription_not_reversed`，P2-624），这一段一条 SQL 取回
+    reversed_prescriptions: set[int] = set()
+    if prescriptions:
+        reversed_prescriptions = {
+            rx_id
+            for (rx_id,) in db.query(Prescription.id)
+            .filter(Prescription.id.in_([p.id for p in prescriptions]), ~prescription_not_reversed())
+        }
     checkups, checkups_more = _section(
         db.query(PhysicalExam).filter(PhysicalExam.patient_id == patient.id).order_by(PhysicalExam.id.desc())
     )
@@ -292,6 +306,8 @@ def patient_360_view(
                 "diagnosis_name": p.diagnosis_name,
                 "status": p.status,
                 "created_at": p.created_at.isoformat(),
+                "status_name": PRESCRIPTION_STATUS_NAMES.get(p.status, p.status),
+                "dispense_reversed": p.id in reversed_prescriptions,
             }
             for p in prescriptions
         ],
