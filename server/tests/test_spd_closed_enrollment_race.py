@@ -224,3 +224,85 @@ def test_没有竞争时照常启动路径_派发与签包(client, admin, world)
     assert titles == sorted(["P21179 规范管理路径·首次随访", "指标异常处置：bp_sys 190.0mmHg", "P21179 照常"])
     bound = client.post(f"{B}/enrollments/{enrollment}/packages", headers=admin, json={"package_id": world["package"]})
     assert bound.status_code == 201, bound.text
+
+
+# ---------------------------------------------------------------- 跟进：个案上报、咨询转随访、低 / 中危评估（同一类入口）
+#: 同一量表答成中危：2+2+0 = 4 → mid（只回写风险分层，不开干预与复诊）
+MID_ANSWERS = {"control": "部分达标", "adherence": "一般", "complication": "无"}
+
+
+def _open_consult(patient):
+    from app.spd.models import SpdConsult
+
+    with SessionLocal() as db:
+        consult = SpdConsult(patient_id=patient, program_code="hypertension", status="open")
+        db.add(consult)
+        db.commit()
+        return consult.id
+
+
+def test_个案上报与登记死亡并发_上报照存_任务不挂死者档案也不记分(client, admin, world, monkeypatch):
+    from app.spd.models import SpdCaseReport, SpdPointRecord, SpdTask
+    from app.spd.routers import care
+
+    patient, enrollment = _enrolled(client, admin, world)
+    fired = _dies_meanwhile(monkeypatch, care, "_managed_enrollment_of", enrollment)
+    resp = client.post(f"{B}/case-reports", headers=admin, json={
+        "patient_id": patient, "program_code": "hypertension", "report_type": "review", "content": "P21179 血压异常"})
+    monkeypatch.undo()
+    assert fired
+    assert resp.status_code == 201, resp.text
+    assert len(_rows(SpdCaseReport, patient_id=patient)) == 1   # 上报照存
+    assert [(t.task_type, t.enrollment_id) for t in _rows(SpdTask, patient_id=patient)] == [("report", None)]   # 修前挂死者档案
+    assert _rows(SpdPointRecord, ref_type="case_report", ref_id=resp.json()["id"]) == []   # 修前照记「异常上报」积分
+
+
+def test_咨询转随访与登记死亡并发_任务照建但不挂死者档案(client, admin, world, monkeypatch):
+    from app.spd.models import SpdTask
+    from app.spd.routers import care
+
+    patient, enrollment = _enrolled(client, admin, world)
+    consult = _open_consult(patient)
+    fired = _dies_meanwhile(monkeypatch, care, "_managed_enrollment_of", enrollment)
+    resp = client.post(f"{B}/consults/{consult}/to-followup", headers=admin, json={"title": "P21179 咨询转随访"})
+    monkeypatch.undo()
+    assert fired
+    assert resp.status_code == 200, resp.text
+    assert [t.enrollment_id for t in _rows(SpdTask, id=resp.json()["task_id"])] == [None]   # 修前挂在死亡档案上
+    assert _rows(SpdTask, enrollment_id=enrollment) == []
+
+
+def test_中危评估与登记死亡并发_评估照存_风险分层不回写(client, admin, world, monkeypatch):
+    from app.spd.models import SpdAssessment
+    from app.spd.routers import care
+
+    patient, enrollment = _enrolled(client, admin, world)
+    fired = _dies_meanwhile(monkeypatch, care, "_managed_enrollment_of", enrollment)
+    resp = client.post(f"{B}/assessments", headers=admin, json={
+        "patient_id": patient, "scale_code": "assess_risk_common", "program_code": "hypertension",
+        "answers": MID_ANSWERS})
+    monkeypatch.undo()
+    assert fired
+    assert resp.status_code == 201 and resp.json()["risk_level"] == "mid", resp.text
+    assert len(_rows(SpdAssessment, patient_id=patient)) == 1   # 评估记录照存
+    assert _enrollment(enrollment) == ("dead", "low")          # 修前风险分层被改成 mid
+
+
+def test_没有竞争时个案上报_咨询转随访_中危评估照常挂档案(client, admin, world):
+    from app.spd.models import SpdPointRecord, SpdTask
+
+    patient, enrollment = _enrolled(client, admin, world)
+    reported = client.post(f"{B}/case-reports", headers=admin, json={
+        "patient_id": patient, "program_code": "hypertension", "report_type": "review", "content": "P21179 照常上报"})
+    assert reported.status_code == 201, reported.text
+    assert len(_rows(SpdPointRecord, ref_type="case_report", ref_id=reported.json()["id"])) == 1
+    followed = client.post(f"{B}/consults/{_open_consult(patient)}/to-followup", headers=admin,
+                           json={"title": "P21179 照常转随访"})
+    assert followed.status_code == 200, followed.text
+    assert sorted(t.title for t in _rows(SpdTask, enrollment_id=enrollment)) == sorted(
+        ["异常上报处置：P21179 照常上报", "P21179 照常转随访"])
+    assessed = client.post(f"{B}/assessments", headers=admin, json={
+        "patient_id": patient, "scale_code": "assess_risk_common", "program_code": "hypertension",
+        "answers": MID_ANSWERS})
+    assert assessed.status_code == 201, assessed.text
+    assert _enrollment(enrollment) == ("active", "mid")

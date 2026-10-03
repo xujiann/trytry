@@ -705,6 +705,14 @@ def create_assessment(
             # risk_level 回写），所以它必须是本次请求的最后一步写：这行与下面的
             # commit 之间不许再插入"不该提前落库"的写。
             _auto_intervene(db, enrollment, graded["risk_level"])
+        else:
+            # 低 / 中危只回写风险分层，同样在档案行锁里按列复判在管（P2-1179 跟进，与 `_auto_intervene` 同一句）：读到在管
+            # 之后别人登记死亡并提交，原先风险分层照写进死者档案；复判不在管的只丢掉这一列回写，评估记录照存。
+            # 与上面一样是本次请求的最后一步写
+            with serialized_on(db, SpdEnrollment, enrollment.id):
+                if not enrollment_still_active(db, enrollment.id):
+                    db.expire(enrollment, ["risk_level"])
+                db.commit()
     db.commit()
     patient = db.get(Patient, body.patient_id)
     return _assess_out(record, patient.name if patient else "")
@@ -1628,26 +1636,32 @@ def create_case_report(
     program_problem = unknown_program(db, program_code)  # 病种编码先查在不在（P1-120）
     if program_problem:
         raise HTTPException(status_code=404, detail=program_problem)
-    report = SpdCaseReport(
-        **body.model_dump(exclude={"program_code"}), program_code=program_code,
-        reporter_id=user.id, org_id=user.org_id, status="pending",
-    )
-    db.add(report)
-    db.flush()
     enrollment = _managed_enrollment_of(db, body.patient_id, program_code)
-    spawn_task(
-        db, patient_id=body.patient_id,
-        title=f"异常上报处置：{body.content[:40] or body.report_type}",
-        task_type="report", program_code=program_code, enrollment=enrollment,
-        org_id=user.org_id, due_days=3, priority=2, source="report",
-    )
-    if enrollment is not None:
-        award_points(
-            db, enrollment.village_doctor_id or user.id, "abnormal_report",
-            ref_type="case_report", ref_id=report.id, note="异常上报",
-            org_id=enrollment.org_id,
+    # 「在管」与派任务、记分圈进这份档案那一行的临界区、锁里按列再判（P2-1179 跟进）：在管是锁外读的，读到之后别人登记
+    # 死亡并提交（收尾已经跑过），原先处置任务照挂死者档案、照给原村医记分；与顺序发生时一样，上报照存、任务照建、
+    # 不挂档案也不记分。锁在第一次写库（上报落库）之前拿，理由同 `create_measurement`
+    with serialized_on(db, SpdEnrollment, enrollment.id) if enrollment is not None else nullcontext():
+        if enrollment is not None and not enrollment_still_active(db, enrollment.id):
+            enrollment = None
+        report = SpdCaseReport(
+            **body.model_dump(exclude={"program_code"}), program_code=program_code,
+            reporter_id=user.id, org_id=user.org_id, status="pending",
         )
-    db.commit()
+        db.add(report)
+        db.flush()
+        spawn_task(
+            db, patient_id=body.patient_id,
+            title=f"异常上报处置：{body.content[:40] or body.report_type}",
+            task_type="report", program_code=program_code, enrollment=enrollment,
+            org_id=user.org_id, due_days=3, priority=2, source="report",
+        )
+        if enrollment is not None:
+            award_points(
+                db, enrollment.village_doctor_id or user.id, "abnormal_report",
+                ref_type="case_report", ref_id=report.id, note="异常上报",
+                org_id=enrollment.org_id,
+            )
+        db.commit()
     return {"id": report.id, "status": report.status}
 
 
@@ -1937,10 +1951,15 @@ def consult_to_followup(
     enrollment = _managed_enrollment_of(
         db, consult.patient_id, body.program_code or consult.program_code
     )
-    task = spawn_task(
-        db, patient_id=consult.patient_id, title=body.title, task_type="followup",
-        program_code=body.program_code or consult.program_code, enrollment=enrollment,
-        assignee_id=user.id, org_id=user.org_id, due_days=body.due_days, source="manual",
-    )
-    db.commit()
+    # 「在管」与派随访任务圈进档案行的临界区、锁里按列再判（P2-1179 跟进）：读到在管之后别人登记死亡并提交，原先任务照挂
+    # 死者档案；与顺序发生时一样，任务照建、不挂档案
+    with serialized_on(db, SpdEnrollment, enrollment.id) if enrollment is not None else nullcontext():
+        if enrollment is not None and not enrollment_still_active(db, enrollment.id):
+            enrollment = None
+        task = spawn_task(
+            db, patient_id=consult.patient_id, title=body.title, task_type="followup",
+            program_code=body.program_code or consult.program_code, enrollment=enrollment,
+            assignee_id=user.id, org_id=user.org_id, due_days=body.due_days, source="manual",
+        )
+        db.commit()
     return {"task_id": task.id, "due_date": task.due_date}
