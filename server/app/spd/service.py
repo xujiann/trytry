@@ -518,7 +518,10 @@ def referral_ends(db: Session, cases: list[SpdReferralCase]) -> dict[int, tuple[
     """每张转诊单的（上转目的机构, 下转目标机构）（P2-558）。
 
     下转时 `target_org_id` / `current_org_id` 都改写成下转目标——上转去的是哪家县医院只剩轨迹里有：县级医院接收那一步的
-    机构；没有（全域账号代接收不带机构）就退到下转那一步的机构（下转由当时的持有机构办）。没下转过的，目标就是 `target_org_id`。
+    机构；没有（全域账号代接收不带机构）就退到下转那一步的机构（下转由当时的持有机构办）。
+    没下转过的同样先取县级医院接收那一步的机构（P2-1191）：`target_org_id` 只是发起时填的目标，可以留空（「由审核环节
+    定」），接收权又按机构树、不按目标——原先一律取它，留空的接收、到院后「转入」仍是空，填了别家的写成没接收的那家。
+    轨迹里没有这一步的机构（还没接收、被退回，或全域账号代接收不带机构）才取 `target_org_id`。
     """
     accept_org: dict[int, int] = {}
     down_actor_org: dict[int, int] = {}
@@ -537,7 +540,7 @@ def referral_ends(db: Session, cases: list[SpdReferralCase]) -> dict[int, tuple[
                 down_actor_org[case_id] = org_id
     return {
         c.id: ((accept_org.get(c.id) or down_actor_org.get(c.id)), c.target_org_id) if c.id in downed
-        else (c.target_org_id, None)
+        else (accept_org.get(c.id) or c.target_org_id, None)
         for c in cases
     }
 
