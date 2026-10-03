@@ -47,8 +47,22 @@ def apply(body: ConsultationCreate, db: Session = Depends(get_db), user: User = 
 
 
 @router.get("", response_model=list[ConsultationOut])
-def list_consultations(status: str | None = None, db: Session = Depends(get_db)):
+def list_consultations(
+    status: str | None = None,
+    patient_id: int | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """会诊清单。`patient_id` 按患者筛（P2-1193）：原先不收、照回全县最新 200 条——县医院出了意见之后全县再来 200 张会诊，
+    申请方就再也找不回这张单子。按患者筛与兄弟清单同一句：先判这位患者看不看得、并留痕，再过滤（与本文件 `_get` 同一资源名）。
+
+    不带患者号时照旧是全县最新 200 条：该按什么范围给看（申请方 / 受邀方 / 全县）随 P1-49 待裁定；在那之前不切翻页——
+    切了就把这份没收口的清单从「最多 200 行」放大成「整表可翻」，再附一个全县总数（P2-8 剩余的 B 类，同一待裁定）。
+    """
     query = db.query(Consultation)
+    if patient_id is not None:
+        assert_patient_visible(db, user, patient_id, resource="consultation")
+        query = query.filter(Consultation.patient_id == patient_id)
     if status:
         query = query.filter(Consultation.status == status)
     return query.order_by(Consultation.id.desc()).limit(200).all()

@@ -81,7 +81,6 @@ UNSCOPABLE_PATIENT_READS = {
     "chronic.py:list_chronic",
     "chronic.py:list_overdue",
     "consents.py:list_corrections",
-    "consultations.py:list_consultations",
     "credentials.py:lookup",
     "credentials.py:resolve_any",
     "disease_programs.py:program_stats",
@@ -113,7 +112,10 @@ UNSCOPABLE_PATIENT_READS = {
 #: （两份合计不变，`docs/闸门现状.md` 两行都列），动态探针（`scripts/probe_list_exposure.py`）把它当「待裁定（已登记）」，
 #: 模块完成度的「收不了口」一列两份一起数。答了 P1-49、按归属收了口的，从这里删掉。
 #: 2026-09-29：P2-829 同一个理由给慢专病生命周期清单补了身份（按行算「这条迁出你能不能确认」），从上面挪来，一行也没收。
+#: 2026-10-03：P2-1193 远程会诊清单收 `patient_id`（按患者筛先判可见性并留痕）补了身份，从上面挪来；不带患者号照旧全县
+#: 最新 200 条，一行也没收。
 BOUND_PENDING_SCOPE_READS = {
+    "consultations.py:list_consultations",
     "medication.py:list_shortages",
     "referrals.py:list_referrals",
     "spd/population.py:list_lifecycle_events",
