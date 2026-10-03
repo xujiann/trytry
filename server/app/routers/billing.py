@@ -667,6 +667,12 @@ def create_deposit(
     # 结算之后预交的钱没有任何去处——居民端照旧显示待支付，收银按默认额（自付 − 冲抵）再收一遍，同一笔自付付两遍，
     # 押金原样挂着。结算后该补缴的走统一支付
     with serialized_on(db, Admission, body.admission_id):
+        # 「在院」在锁里再判一次（P2-1187，与计费 P2-274 同一句）：零费用的住院不结算也能出院，原先锁外判完「在院」、锁里
+        # 只查结算单——与这种出院同时到时，押金照收进已出院的住院，违背上面那句「仅在院患者可预交」
+        # 直接查这一列而不是 `db.get`：会话里那份住院登记是锁外读的，身份映射会把旧对象原样还回来
+        if db.query(Admission.status).filter(Admission.id == body.admission_id).scalar() != "admitted":
+            db.rollback()
+            raise HTTPException(status_code=409, detail="患者已出院，不可预交押金")
         if _inpatient_settlement_id(db, body.admission_id) is not None:
             raise HTTPException(status_code=409, detail="该次住院已办理结算，不再收押金：应补缴的请走统一支付")
         db.add(deposit)
