@@ -578,15 +578,18 @@ def _upsert_candidate(
     )
     if existing is not None:
         if existing.status != "enrolled":
+            values: dict[str, Any] = {"status": status, "risk_level": risk, "matched_rules": matched,
+                                      "screening_id": screening.id}
             # 纳入依据跟着这次的命中规则换（P2-974）：原先只在建行时算一次，复筛换了状态和命中规则、依据还是上一次的——「疑似」
             # 行写着「未成年人不纳入…」、「排除」行写着「确诊高血压」。只换仍是按上次命中规则自动算出来的依据；手写的（手工改状态、
             # 居民申请受理）不动。「纳入依据」该不该放复核说明随 P2-382 定
             if existing.reason == candidate_reason(existing.matched_rules):
-                existing.reason = candidate_reason(matched)
-            existing.status = status
-            existing.risk_level = risk
-            existing.matched_rules = matched
-            existing.screening_id = screening.id
+                values["reason"] = candidate_reason(matched)
+            # 条件写（P2-1177）：「已纳管的不回退」原先只判锁外读到的那份——读到之后别人刚签约建档、把池行置为已纳管并提交，
+            # 这里照旧整行写回疑似 / 排除；批量识别里改过的池行要等下一个命中纳入规则的患者才 flush，窗口更宽。「不是已纳管」
+            # 压进同一条 UPDATE，抢输的不动（与顺序发生时同一个结果）
+            move_row(db, SpdCandidate, existing.id, SpdCandidate.status != "enrolled", **values)
+            db.refresh(existing)   # 走的是 Core UPDATE，会话里那份对象没跟着变（返回给调用方的要是库里的现状）
         return existing
     if actively_enrolled(db, screening.patient_id, screening.program_code):
         # 直接建档纳管的在管患者池里没有行（P2-359）：记成已纳管，不按疑似插——筛查记录照留
@@ -719,10 +722,12 @@ def review_screening(
         .first()
     )
     if candidate is not None and candidate.status != "enrolled":
+        # 条件写（P2-1177）：「不是已纳管」是刚才读的，读到之后别人刚签约建档、把池行置为已纳管并提交的，原先照旧整行写回
+        # 目标 / 排除——档案在管、池行却是排除。压进同一条 UPDATE，抢输的不动池行、复核照记（与顺序发生时同一个结果）
         if body.review_result == "confirmed":
-            candidate.status = "target"
+            move_row(db, SpdCandidate, candidate.id, SpdCandidate.status != "enrolled", status="target")
         elif body.review_result == "excluded":
-            candidate.status = "excluded"
+            move_row(db, SpdCandidate, candidate.id, SpdCandidate.status != "enrolled", status="excluded")
     db.commit()
     return _screening_out(screening)
 
@@ -1008,10 +1013,17 @@ def set_candidate_status(
     assert_org_writable(db, user, candidate.org_id)
     if candidate.status == "enrolled":
         raise HTTPException(status_code=409, detail="已纳管患者请走生命周期接口调整")
-    candidate.status = body.status
+    # 条件写（P2-1177）：上面「已纳管」的预检是锁外读的——读到之后别人刚签约建档、把池行置为已纳管并提交，原先这里照旧整行
+    # 写回疑似 / 目标 / 排除：档案在管、池行却是排除，此后这道 409 也挡不住了（实测再改照样 200）。「不是已纳管」压进同一条
+    # UPDATE（同认领 P2-253 的写法），抢输了回滚、409（与顺序发生时同一句）
+    values: dict[str, Any] = {"status": body.status}
     if body.reason:
-        candidate.reason = body.reason
+        values["reason"] = body.reason
+    if not move_row(db, SpdCandidate, candidate.id, SpdCandidate.status != "enrolled", **values):
+        db.rollback()
+        raise HTTPException(status_code=409, detail="已纳管患者请走生命周期接口调整")
     db.commit()
+    db.refresh(candidate)
     return _candidate_out(candidate)
 
 
