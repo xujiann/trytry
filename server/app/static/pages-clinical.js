@@ -1951,16 +1951,19 @@ async function renderProjects() {
     `)}
     ${panel("里程碑（全部项目）", `
       ${table(["项目", "里程碑", "到期日", "状态", "完成日", "操作"],
-        projects.flatMap((p) => p.milestones.map((m) => ({ project: p.name, m }))), ({ project, m }) =>
+        projects.flatMap((p) => p.milestones.map((m) => ({ project: p.name, closed: p.status === "done" || p.status === "suspended", m }))),
+        ({ project, closed, m }) =>
         `<tr><td>${esc(project)}</td><td>${esc(m.name)}</td><td>${esc(m.due_date) || "—"}</td>
          <td>${statusTag(MS_STATUS, m.done ? "done" : m.overdue ? "overdue" : "open")}</td>
          <td>${esc(m.done_date) || "—"}</td>
-         <td>${m.done
+         <td>${closed ? "—"   // 已完成 / 已中止的项目接口不收完成 / 撤销完成（P2-1223，与加里程碑同一句 409），不给按钮
+           : m.done
            ? `<button class="btn secondary" data-msreopen="${m.id}">撤销完成</button>`
            : `<button class="btn" data-msdone="${m.id}">完成</button>`}</td></tr>`)}
       <p class="desc">逾期是<b>现算</b>的：已完成的不算逾期，没填到期日的也不算。
         完成日留空按业务日期记。<b>撤销完成会把完成日一并清掉</b>——
-        误点了要能改回来，凡是拦得住的都要放得开（后端 reopen 那条 docstring 的原话）。</p>`)}`;
+        误点了要能改回来，凡是拦得住的都要放得开（后端 reopen 那条 docstring 的原话）。
+        已完成 / 已中止的项目不给「完成」「撤销完成」：要改先用「报进度」把状态改回「进行中」。</p>`)}`;
   $("#pj-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/projects", formJson(e.target, ["org_id", "budget_amount"]), "#pj-msg"); };
   $("#page-body").onclick = async (e) => {
     const d = e.target.dataset;

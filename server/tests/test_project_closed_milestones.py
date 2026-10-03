@@ -32,7 +32,15 @@ def test_中止的项目里程碑不算逾期(client, admin, project):
 
 
 def test_中止后撤销完成的里程碑同样不算逾期(client, admin, project):
-    assert client.post(f"/api/projects/milestones/{project['milestone']}/done", headers=admin).status_code == 200
-    reopened = client.post(f"/api/projects/milestones/{project['milestone']}/reopen", headers=admin)
-    assert reopened.status_code == 200, reopened.text
-    assert reopened.json()["overdue"] is False   # 修前 True
+    # 原先这里在中止的项目上先完成、再撤销，钉撤销回执不算逾期（修前 True）。P2-1223 之后中止的项目不再收完成 / 撤销完成
+    # （409，与加里程碑同一句）：改为在办时完成、中止、撤销被拒——里程碑原样，内嵌行照旧不算逾期
+    pid, mid = project["id"], project["milestone"]
+    assert client.patch(f"/api/projects/{pid}", headers=admin, json={"status": "ongoing"}).status_code == 200
+    assert client.post(f"/api/projects/milestones/{mid}/done", headers=admin).status_code == 200
+    assert client.patch(f"/api/projects/{pid}", headers=admin, json={"status": "suspended"}).status_code == 200
+    reopened = client.post(f"/api/projects/milestones/{mid}/reopen", headers=admin)
+    assert reopened.status_code == 409, reopened.text
+    assert reopened.json()["detail"] == "项目已完成或已中止，不能再改里程碑"
+    row = _row(client, admin, pid)
+    assert row["milestone_overdue"] == 0
+    assert [(m["done"], m["overdue"]) for m in row["milestones"]] == [(True, False)]

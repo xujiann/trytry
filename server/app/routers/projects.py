@@ -337,6 +337,11 @@ def complete_milestone(
     user: User = Depends(get_current_user),
 ):
     milestone = _milestone(db, milestone_id, user)
+    # 已完成 / 已中止的项目不再改里程碑（P2-1223，与加里程碑同一句式，P1-104）：原先完成 / 撤销完成不看项目状态——结了项
+    # （完成、进度 100%）的项目撤销「上线验收」的完成照 200，成了「已完成 100%、里程碑完成 1 / 2」；中止的照样标完成。
+    # 要改先用「报进度」把项目状态改回进行中（与加里程碑 P2-597 同一条路）
+    if _project_readonly(db, milestone.project_id).status in _CLOSED_STATUSES:
+        raise HTTPException(status_code=409, detail="项目已完成或已中止，不能再改里程碑")
     if milestone.done:
         raise HTTPException(status_code=409, detail="该里程碑已完成")
     milestone.done = True
@@ -357,6 +362,9 @@ def reopen_milestone(
 ):
     """撤销完成。误点了要能改回来——凡是拦得住的都要放得开。"""
     milestone = _milestone(db, milestone_id, user)
+    # 已完成 / 已中止的项目同样不收（P2-1223，与完成同一句）：放得开的路还在，先把项目状态改回进行中再撤销
+    if _project_readonly(db, milestone.project_id).status in _CLOSED_STATUSES:
+        raise HTTPException(status_code=409, detail="项目已完成或已中止，不能再改里程碑")
     milestone.done = False
     milestone.done_date = ""
     db.commit()
