@@ -17,7 +17,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .. import clock
-from ..concurrency import serialized_on
+from ..concurrency import move_row, serialized_on
 from ..visibility import assert_obj_org_writable, assert_org_writable, assert_patient_visible, scope_org_list
 from ..database import get_db
 from ..numtypes import INT4_MAX
@@ -298,9 +298,15 @@ def approve_request(
         raise HTTPException(status_code=409, detail=f"当前状态 {SURGERY_STATUS_NAMES.get(request.status, request.status)} 不可审批")
     if request.created_by == user.id:
         raise HTTPException(status_code=403, detail="不得审批本人提出的手术申请")
-    request.status = "approved" if body.approved else "cancelled"
-    request.approved_by = user.id
-    request.approved_at = utcnow()
+    # 审批与「还待审批」压进同一条 UPDATE（P2-1184，与物资采购 P2-403、药品采购 P2-759、用血 P2-110 同一个写法）：上面那道
+    # 预检是锁外读的——两位主任一个批准、一个驳回同时到，原先整行写回、后提交的把先提交的结论改掉，两路都 200：驳回的
+    # 主任以为已经否决，申请却成了「已审批」，经办照常排进手术间、患者收到「手术已安排」
+    if not move_row(db, SurgeryRequest, request.id, SurgeryRequest.status == "requested",
+                    status="approved" if body.approved else "cancelled", approved_by=user.id,
+                    approved_at=utcnow()):
+        db.rollback()
+        db.refresh(request)  # 抢输了就按库里的现状措辞
+        raise HTTPException(status_code=409, detail=f"当前状态 {SURGERY_STATUS_NAMES.get(request.status, request.status)} 不可审批")
     db.commit()
     return {"id": request.id, "status": request.status}
 
