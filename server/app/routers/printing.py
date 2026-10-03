@@ -220,7 +220,13 @@ def _render(
     doc_no: str,
     meta_rows: str,
     body_html: str,
+    issuer_org_name: str = "",
 ) -> HTMLResponse:
+    """渲染一张 A4 单据。`issuer_org_name` 是签进验真令牌的「签发机构」（验真页原样这么标），缺省同抬头机构 `org_name`。
+
+    只有检查报告会传（P2-1238）：报告由领取申请单的诊断中心出具，与抬头印的申请机构不是同一家。它必须在纸面上印着
+    （ADR-0015 的最小披露：核验只回纸面已有的字段），报告单在 meta 的「报告机构」一行印它。
+    """
     header_org = (template.header_org_name if template and template.header_org_name else org_name) or "县域医共体"
     footer = (template.footer_note if template and template.footer_note else DEFAULT_FOOTER)
     show_qr = True if template is None else bool(template.show_qr)
@@ -231,7 +237,7 @@ def _render(
         # 令牌放 `#` 片段：不进服务端访问日志，也不被中间设备缓存键收录。
         token = make_verify_token(
             doc_type=doc_type, doc_id=doc_id, doc_no=doc_no,
-            org_name=org_name or header_org, issued_date=printed_at[:10],
+            org_name=issuer_org_name or org_name or header_org, issued_date=printed_at[:10],
         )
         verify_url = f"{str(request.base_url).rstrip('/')}/verify#{token}"
         qr_html = f'<div class="qr">{qr_svg(verify_url)}<div class="cap">扫码验真</div></div>'
@@ -263,7 +269,7 @@ def _render(
 def print_exam_report(
     report_id: int, http_request: Request, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
-    """检查检验报告单打印版：机构抬头、患者信息、项目、所见、结论、危急值标记与报告医师。"""
+    """检查检验报告单打印版：机构抬头、患者信息、项目、所见、结论、危急值标记与报告医师；别家诊断中心出的写明报告机构与诊断医师。"""
     report = db.get(ExamReport, report_id)
     if report is None:
         raise HTTPException(status_code=404, detail="报告不存在")
@@ -275,9 +281,21 @@ def print_exam_report(
     patient = db.get(Patient, request.patient_id)
     org_name = _org_name(db, request.from_org_id)
     center = CENTER_NAMES.get(request.center_type, request.center_type) if request else ""
+    # 出具方（P2-1238）：基层检查、上级诊断——报告由领取申请单的诊断中心（`claimed_org_id`）出具。原先抬头与 meta 只有
+    # 申请机构，中心与诊断医师纸面上一处都没有，验真令牌签的「签发机构」也是申请机构：乡镇申请、县中心出的 CT 报告，
+    # 扫码显示「签发机构 甲乡卫生院」。跨机构出的写明报告机构与诊断医师（报告医师自填的为准，没填取领取人），令牌签中心；
+    # 同机构出的、没领取就直接出的（`claimed_org_id` 为空，随 P2-257）一个字节不变。抬头印谁随 P2-802，不在这里动
+    issuer = _org_name(db, request.claimed_org_id)
+    issuer_rows = (
+        f'<tr><td class="k">报告机构</td><td>{_esc(issuer) or "—"}</td>'
+        f'<td class="k">诊断医师</td><td>{_esc(report.reported_by or request.claimed_by) or "—"}</td></tr>'
+        if request.claimed_org_id is not None and request.claimed_org_id != request.from_org_id
+        else ""
+    )
     meta = _patient_rows(patient, user) + (
         f'<tr><td class="k">申请机构</td><td>{_esc(org_name)}</td>'
         f'<td class="k">检查类别</td><td>{_esc(center)}</td></tr>'
+        f"{issuer_rows}"
         f'<tr><td class="k">检查项目</td><td>{_esc(request.item_name if request else "")}</td>'
         f'<td class="k">项目编码</td><td>{_esc(request.item_code if request else "")}</td></tr>'
         f'<tr><td class="k">临床资料</td><td colspan="3">{_esc(request.clinical_info if request else "") or "—"}</td></tr>'
@@ -318,6 +336,7 @@ def print_exam_report(
         doc_no=f"BG{report.id:08d}",
         meta_rows=meta,
         body_html=body,
+        issuer_org_name=issuer,
     )
 
 
