@@ -108,11 +108,13 @@ def issue_referral_cert(
     referral = db.get(Referral, referral_id)
     if referral is None:
         raise HTTPException(status_code=404, detail="转诊记录不存在")
-    if patient_id is not None and referral.patient_id != patient_id:
-        raise HTTPException(status_code=422, detail="该转诊单不属于此患者")
     # P0-29：原先任一机构的经办都能给别家的转诊签证明。先把与患者毫无关系的第三方挡在外面——
     # 转出、转入两方本身就有转诊关系，照常能签；"到底该哪一方签"另在待裁定清单里。
+    # 先判可见性、再说归属与状态（P2-1247，同 P2-565）：原先「不属于此患者」的 422 排在前面，无关机构拿一张转诊单号
+    # 逐个试患者号，回 403 的那个就是单子的主人（等于知道此人做过上转），还不留调阅痕迹
     assert_patient_visible(db, user, referral.patient_id, resource="referral_cert")
+    if patient_id is not None and referral.patient_id != patient_id:
+        raise HTTPException(status_code=422, detail="该转诊单不属于此患者")
     if referral.status not in ("accepted", "completed"):
         # 状态文案取自转诊模块（P2-413）：原先一律「尚未接诊」，被退回的转诊也这么说，经办以为再等等就能签
         state = "尚未接诊" if referral.status == "pending" else REFERRAL_STATUS_LABELS.get(referral.status, referral.status)
