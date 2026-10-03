@@ -1373,7 +1373,8 @@ def fhir_encounter(
     - serviceProvider.reference = `Organization/{机构id}`；
     - class.code：AMB→门诊 / IMP→住院（缺省按门诊）；
     - reasonCode[0]：coding[0].code→diagnosis_code（ICD-10）、text→diagnosis_name；
-    - participant[0].individual.display→doctor_name。
+    - participant[0].individual.display→doctor_name；
+    - summary 留空，不写来源标记（P2-1249）。
     复用就诊登记路由逻辑（患者/机构校验 + 领域事件发布），入站落 ExchangeLog。
     就诊机构（`serviceProvider`）同样只能是对接账号自己的机构（P0-35，与 ADT 入站把
     `user` 传给 `create_admission` 同一口径）；跨机构批量同步用全域账号。
@@ -1417,6 +1418,9 @@ def _do_fhir_encounter(resource: dict, db: Session, user: User):
     doctor_name = str(
         ((participants[0].get("individual") or {}).get("display", "")) if participants else ""
     )[:64]
+    # 摘要留空（P2-1249）：原先写死「FHIR Encounter 入站同步」——给系统看的来源标记落进了就诊摘要，居民端「我的档案」
+    # 印成「摘要」、慢专病档案时间线当 detail 显示。入站留痕在交换日志（`_run_inbound`：报文类型、来源系统、时间、成败，
+    # 不记落成哪条就诊）；R4 Encounter 没有摘要 / 备注元素，映射里也没定义摘要取自哪里。存量不动（迁移不改业务数据）
     encounter = create_encounter(
         EncounterCreate(
             patient_id=patient.id,
@@ -1425,7 +1429,6 @@ def _do_fhir_encounter(resource: dict, db: Session, user: User):
             encounter_type=encounter_type,
             diagnosis_code=diagnosis_code,
             diagnosis_name=diagnosis_name,
-            summary="FHIR Encounter 入站同步",
         ),
         db,
         user,
