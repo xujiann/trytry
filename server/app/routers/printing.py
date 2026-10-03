@@ -60,6 +60,7 @@ from ..models import (
     ProgressNote,
     Referral,
     ReportRevision,
+    ResidentAccount,
     Settlement,
     User,
     VaccinationRecord,
@@ -778,17 +779,26 @@ def print_consent(
         if record.revoked_at
         else ""
     )
+    # 居民端本人自签的签署凭据（P2-1241）：自签不收佐证，`portal.portal_sign_consent` 写明「记录落 resident_account_id 即可
+    # 回溯到账户」——打印件却不印这个账户：佐证「—」、签署人一栏空线、经办人「—」，整张纸没有任何签署凭据。自签的佐证栏
+    # 印签署账户，手机号一律掩码（账户手机号是登录凭据，纸面认得出是哪个账户即可，管理员打印也一样；只用微信、没绑手机号
+    # 的不带括号），签署人一栏写「电子签署」。窗口代录的一个字节不变
+    evidence, signer = _esc(record.evidence) or "—", "____________"
+    if record.method == "self" and record.resident_account_id is not None:
+        account = db.get(ResidentAccount, record.resident_account_id)
+        phone = f"（{_esc(mask_phone(account.phone))}）" if account is not None and account.phone else " "
+        evidence, signer = f"居民端账户 #{record.resident_account_id}{phone}电子确认", "电子签署"
     meta = _patient_rows(patient, user) + (
         f'<tr><td class="k">同意场景</td><td>{_esc(scene_name)}</td>'
         f'<td class="k">采集方式</td><td>{_esc(CONSENT_METHOD_NAMES.get(record.method, record.method))}</td></tr>'
         f'<tr><td class="k">签署时间</td><td>{_esc(_shown_at(record.created_at))}</td>'
-        f'<td class="k">佐证材料</td><td>{_esc(record.evidence) or "—"}</td></tr>'
+        f'<td class="k">佐证材料</td><td>{evidence}</td></tr>'
         f"{guardian}"
     )
     body = f"""
   <div class="section"><h3>告知内容</h3>{text_html}</div>
   {revoked}
-  <div class="sign"><span>签署人（患者/监护人）：____________</span>
+  <div class="sign"><span>签署人（患者/监护人）：{signer}</span>
     <span>经办人：{_esc(_user_name(db, record.operator_user_id)) or "—"}</span></div>"""
     return _render(
         doc_type="consent",
