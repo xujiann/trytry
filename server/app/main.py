@@ -650,7 +650,7 @@ _configure_logging()
 
 @app.middleware("http")
 async def security_headers_middleware(request, call_next):
-    """安全响应头：等保整改基线（防 MIME 嗅探/点击劫持/来源泄露）。"""
+    """安全响应头：等保整改基线（防 MIME 嗅探/点击劫持/来源泄露/接口响应落进浏览器缓存）。"""
     response = await call_next(request)
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("X-Frame-Options", "DENY")
@@ -671,6 +671,14 @@ async def security_headers_middleware(request, call_next):
         "base-uri 'self'; "
         "object-src 'none'",
     )
+    # 接口响应一律 `Cache-Control: no-store`，不进浏览器缓存（P2-1215）。原先全站不设：附件下载走 FileResponse、
+    # 带 Last-Modified / ETag，浏览器按启发式新鲜度（文件年龄的 10%，30 天前上传的约 3 天）直接用磁盘缓存——
+    # 重复下载到不了服务端，不判可见性、不留 AccessLog（visibility.py：判定与留痕是同一个动作）；同一台电脑换人登录后，
+    # 无权的人 fetch 同一地址照样取回整份文件，附件事后被隔离（410）也挡不住缓存里的副本。档案、打印页这些带证件号 /
+    # 诊断的响应同样会留在共用电脑的磁盘缓存里。只加这个头，不改任何响应体；入口页与 /static 不带患者数据，不归这一条。
+    # setdefault：端点自己设了 Cache-Control 的不覆盖——眼下全仓没有这样的端点，留给以后真要缓存的接口自己声明。
+    if request.url.path.startswith("/api/"):
+        response.headers.setdefault("Cache-Control", "no-store")
     return response
 
 
