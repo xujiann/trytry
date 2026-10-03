@@ -593,11 +593,15 @@ def build_variable_index(db: Session, period: str) -> dict[int, dict[str, float]
     )
     # 「期间诊疗人次」不含住院类就诊记录（P2-199，口径同运行效率的诊疗人次）
     encounters = grouped(Encounter, Encounter.org_id, Encounter.encounter_type != "inpatient", *in_period(Encounter))
+    # 「期间上转人次」数发起的上转申请，含被退回的：与上报 #7「基层向上级机构转诊申请数」同一口径
     referrals_up = grouped(
         Referral, Referral.from_org_id, Referral.direction == "up", *in_period(Referral)
     )
+    # 「期间下转接收人次」只数接收方接了的（已接诊 / 已结案，P2-1194）：原先不看状态，被基层退回的、至今待接诊的下转都
+    # 算作「接收」，期末综合绩效报告据此排名
     referrals_down = grouped(
-        Referral, Referral.to_org_id, Referral.direction == "down", *in_period(Referral)
+        Referral, Referral.to_org_id, Referral.direction == "down",
+        Referral.status.in_(("accepted", "completed")), *in_period(Referral)
     )
     exams = grouped(ExamRequest, ExamRequest.from_org_id, *in_period(ExamRequest))
     prescriptions = grouped(Prescription, Prescription.org_id, *in_period(Prescription))
@@ -653,8 +657,8 @@ def formula_variables(db: Session, org_id: int, period: str) -> dict[str, float]
 
 VARIABLE_DESCRIPTIONS = {
     "encounters": "期间诊疗人次",
-    "referrals_up": "期间上转人次",
-    "referrals_down": "期间下转接收人次",
+    "referrals_up": "期间上转人次（发起的上转申请数，含被退回的，与上报 #7 同口径）",
+    "referrals_down": "期间下转接收人次（已接诊、已结案的下转；被退回、待接诊的不算）",
     "exams": "期间共享中心检查申请数",
     "prescriptions": "期间处方总数",
     "rejected_prescriptions": "期间审核退回处方数",
