@@ -1713,35 +1713,39 @@ def update_recall(
     assert_org_writable(db, user, enrollment.org_id if enrollment else None)
     # 联系记录是 JSON 列整体覆写：两次并发留痕后写的盖掉先写的，召回过程就少一段。
     # 锁住召回记录这一行、重读、再追加（concurrency.serialized_on）。
-    with serialized_on(db, SpdRecall, recall_id):
-        db.refresh(recall)
-        if enrollment is not None:
-            db.refresh(enrollment)
-            # 死者的召回已随死亡收尾（P2-260）：原先照样能改回待联系、登记「已重新纳管」
-            if enrollment.status == "dead":
+    # 锁召回行之前先锁档案行（P2-1178）：登记死亡先改档案行、收尾时再改这份档案没结束的召回（`_end_open_recalls`），这里原先
+    # 只锁召回行、召回成功时再改档案行（`_reactivate`）——PG 上两路加锁次序相反，互等成死锁、一路 500。与死亡一路同一个加锁
+    # 顺序（同 `service.close_open_work`「先实例、后任务」的道理），下面对档案状态的复判也就落在档案行锁里
+    with serialized_on(db, SpdEnrollment, recall.enrollment_id):
+        with serialized_on(db, SpdRecall, recall_id):
+            db.refresh(recall)
+            if enrollment is not None:
+                db.refresh(enrollment)
+                # 死者的召回已随死亡收尾（P2-260）：原先照样能改回待联系、登记「已重新纳管」
+                if enrollment.status == "dead":
+                    db.rollback()
+                    raise HTTPException(status_code=409, detail="患者已登记死亡，召回已终止")
+            # 已结束的召回不再改（P2-501）：页面对「已召回 / 召回失败」早就不给「登记进度」，接口还收——已召回的改成「召回失败」，
+            # 「已重新纳管」的结论被盖掉、档案却还在管。锁内重读之后判：两路同时登记，后到的一路看到的是先到的那路的结论
+            if recall.status in ("returned", "failed"):
                 db.rollback()
-                raise HTTPException(status_code=409, detail="患者已登记死亡，召回已终止")
-        # 已结束的召回不再改（P2-501）：页面对「已召回 / 召回失败」早就不给「登记进度」，接口还收——已召回的改成「召回失败」，
-        # 「已重新纳管」的结论被盖掉、档案却还在管。锁内重读之后判：两路同时登记，后到的一路看到的是先到的那路的结论
-        if recall.status in ("returned", "failed"):
-            db.rollback()
-            raise HTTPException(status_code=409, detail="该召回已结束，不能再登记进度；要再召回请重新发起")
-        recall.status = body.status
-        recall.result = body.result or recall.result
-        if body.contact_note:
-            recall.contacts = (recall.contacts or []) + [
-                {"at": clock.today().isoformat(), "note": body.contact_note}
-            ]
-        if body.status in ("returned", "failed"):
-            recall.closed_at = now_naive()
-        if body.status == "returned":
-            if enrollment is not None and enrollment.status == "recalled":
-                _reactivate(db, enrollment)
-                # 恢复在管同样逐条留痕（P2-501）：生命周期事件「排除 / 迁出 / 死亡 / 召回 / 恢复，逐条留痕」，走生命周期「恢复」
-                # 的记一条，召回成功自动恢复的原先一条不记——生命周期记录里只看得到被召回、看不到什么时候、谁把它恢复的
-                _log_resume(db, enrollment.id, reason="召回成功", detail=recall.result, operator_id=user.id,
-                            occurred_at=clock.today().isoformat())
-        db.commit()
+                raise HTTPException(status_code=409, detail="该召回已结束，不能再登记进度；要再召回请重新发起")
+            recall.status = body.status
+            recall.result = body.result or recall.result
+            if body.contact_note:
+                recall.contacts = (recall.contacts or []) + [
+                    {"at": clock.today().isoformat(), "note": body.contact_note}
+                ]
+            if body.status in ("returned", "failed"):
+                recall.closed_at = now_naive()
+            if body.status == "returned":
+                if enrollment is not None and enrollment.status == "recalled":
+                    _reactivate(db, enrollment)
+                    # 恢复在管同样逐条留痕（P2-501）：生命周期事件「排除 / 迁出 / 死亡 / 召回 / 恢复，逐条留痕」，走生命周期「恢复」
+                    # 的记一条，召回成功自动恢复的原先一条不记——生命周期记录里只看得到被召回、看不到什么时候、谁把它恢复的
+                    _log_resume(db, enrollment.id, reason="召回成功", detail=recall.result, operator_id=user.id,
+                                occurred_at=clock.today().isoformat())
+            db.commit()
     return {"id": recall.id, "status": recall.status, "result": recall.result}
 
 
