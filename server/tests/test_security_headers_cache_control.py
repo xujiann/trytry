@@ -1,6 +1,7 @@
-"""接口响应一律 `Cache-Control: no-store`（P2-1215，第三十五批扫描 T1-2）。
+"""接口响应一律 `Cache-Control: no-store`（P2-1215，第三十五批扫描 T1-2）；入口页与 /static 一律 `no-cache`（P2-1216，
+第三十五批扫描 T1-6）。
 
-修前全站响应都不带 Cache-Control。附件下载走 FileResponse（`routers/attachments.py`），带 Last-Modified / ETag，浏览器
+**P2-1215** 修前全站响应都不带 Cache-Control。附件下载走 FileResponse（`routers/attachments.py`），带 Last-Modified / ETag，浏览器
 按启发式新鲜度（文件年龄的 10%）直接用磁盘缓存：甲医生第二次下载到不了服务端——不判可见性、不留 AccessLog；甲退出、
 与该患者毫无关系的乙卫生院医生登录（列附件 403），fetch 同一地址照样从缓存取回整份 PDF，服务端命中与留痕都不变
 （scan35 t1/r2，真 Chromium 实测）；附件事后被病毒扫描隔离回 410，缓存里的副本照样能取。档案、打印页这些带证件号 /
@@ -9,11 +10,21 @@
 修法：`main.py` 的安全头中间件给 `/api/` 开头的响应统一 setdefault `Cache-Control: no-store`（端点自设的不覆盖，眼下
 没有这样的端点），不改任何响应体。本文件钉住附件下载两支（本地 FileResponse、对象存储流式）、清单 / 详情 / 档案 /
 导出 CSV / 打印页 / 登录，以及 401 / 403 / 404 / 422 错误响应都带 no-store；入口页与 /static 不归这一条。
+
+**P2-1216** 修前入口页（`main.py` 里返回 index.html / m/index.html / m/doctor.html / verify.html 的 FileResponse）与
+`/static` 挂载只带 Last-Modified / ETag、不带 Cache-Control，脚本地址也不带版本号：升级后浏览器在启发式新鲜期内
+（文件年龄的 10%，入口页实测约 23 小时）继续跑旧 JS——地址栏回车、开新标签页都不发请求，F5 也只重验入口页；core.js 与
+pages-*.js 各自计时，可能一新一旧（scan35 t1/r3、r7，真 Chromium 实测：服务端已换新 app.js，同一浏览器地址栏再访 / F5 /
+新标签页看到的都还是旧版）。修法：同一个中间件给 `/api/` 以外的响应 setdefault `Cache-Control: no-cache`——可以存，
+但每次用前带 ETag 重验，没变的 /static 回 304。本文件钉住入口页与 /static 下每个文件都带 no-cache、带 If-None-Match /
+If-Modified-Since 重验回 304。
 """
 import io
 
 import pytest
+from fastapi.routing import APIRoute
 
+from app.main import _STATIC_DIR, app
 from app.storage import LocalStorage, use_storage
 from conftest import login
 
@@ -132,3 +143,59 @@ def test_入口页与静态资源不归这一条(client, path):
     resp = client.get(path)
     assert resp.status_code == 200
     assert "no-store" not in resp.headers.get("cache-control", ""), dict(resp.headers)
+
+
+# ================================================================ P2-1216：入口页与 /static 每次重验
+
+#: 入口页：直接挂在 app 上、不在 /api/ 下的 GET 路由（index / m / m/doctor / verify）。从路由表取，新加的入口页自动纳入
+ENTRY_PAGES = sorted(
+    r.path for r in app.routes
+    if isinstance(r, APIRoute) and "GET" in r.methods and not r.path.startswith("/api/")
+)
+#: /static 下的每一个文件（core.js 与 pages-*.js 各自计时，一个漏了就可能一新一旧）
+STATIC_FILES = sorted(
+    "/static/" + p.relative_to(_STATIC_DIR).as_posix() for p in _STATIC_DIR.rglob("*") if p.is_file()
+)
+
+
+def test_扫描对象没有空转():
+    """取不到入口页 / 静态文件时，下面几条会在空列表上恒绿。"""
+    assert {"/", "/m", "/m/doctor", "/verify"} <= set(ENTRY_PAGES), ENTRY_PAGES
+    assert {"/static/core.js", "/static/app.js", "/static/m/m.js", "/static/m/doctor.js"} <= set(STATIC_FILES)
+
+
+@pytest.mark.parametrize("path", ENTRY_PAGES + STATIC_FILES)
+def test_入口页与静态资源带no_cache(client, path):
+    """修前只有 Last-Modified / ETag：浏览器按启发式新鲜度直接用缓存，升级后照跑旧脚本。"""
+    resp = client.get(path)
+    assert resp.status_code == 200
+    assert resp.headers.get("cache-control") == "no-cache", dict(resp.headers)
+    assert resp.headers.get("etag"), "no-cache 靠 ETag 重验"
+
+
+@pytest.mark.parametrize("path", STATIC_FILES)
+def test_静态资源带ETag重验_没变回304(client, path):
+    """no-cache 的代价：每个文件一次条件请求，没变的回 304、不回文件体。"""
+    first = client.get(path)
+    again = client.get(path, headers={"If-None-Match": first.headers["etag"]})
+    assert again.status_code == 304
+    assert again.content == b""
+    assert again.headers.get("cache-control") == "no-cache", dict(again.headers)
+
+
+def test_静态资源按修改时间重验也回304(client):
+    first = client.get("/static/core.js")
+    again = client.get("/static/core.js", headers={"If-Modified-Since": first.headers["last-modified"]})
+    assert again.status_code == 304
+    assert again.headers.get("cache-control") == "no-cache", dict(again.headers)
+
+
+@pytest.mark.parametrize("path", ENTRY_PAGES)
+def test_入口页重验总拿到当前页(client, path):
+    """入口页走 FileResponse、不做条件请求：带 If-None-Match 也回整页（2～9 KB）——重验总能拿到当前版本。"""
+    first = client.get(path)
+    again = client.get(path, headers={"If-None-Match": first.headers["etag"]})
+    assert again.status_code in (200, 304)
+    if again.status_code == 200:
+        assert again.content == first.content
+    assert again.headers.get("cache-control") == "no-cache", dict(again.headers)

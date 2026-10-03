@@ -650,7 +650,7 @@ _configure_logging()
 
 @app.middleware("http")
 async def security_headers_middleware(request, call_next):
-    """安全响应头：等保整改基线（防 MIME 嗅探/点击劫持/来源泄露/接口响应落进浏览器缓存）。"""
+    """安全响应头：等保整改基线（防 MIME 嗅探/点击劫持/来源泄露/接口响应落进浏览器缓存），外加入口页与静态资源每次重验。"""
     response = await call_next(request)
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("X-Frame-Options", "DENY")
@@ -675,10 +675,19 @@ async def security_headers_middleware(request, call_next):
     # 带 Last-Modified / ETag，浏览器按启发式新鲜度（文件年龄的 10%，30 天前上传的约 3 天）直接用磁盘缓存——
     # 重复下载到不了服务端，不判可见性、不留 AccessLog（visibility.py：判定与留痕是同一个动作）；同一台电脑换人登录后，
     # 无权的人 fetch 同一地址照样取回整份文件，附件事后被隔离（410）也挡不住缓存里的副本。档案、打印页这些带证件号 /
-    # 诊断的响应同样会留在共用电脑的磁盘缓存里。只加这个头，不改任何响应体；入口页与 /static 不带患者数据，不归这一条。
+    # 诊断的响应同样会留在共用电脑的磁盘缓存里。只加这个头，不改任何响应体；入口页与 /static 不带患者数据，见下一段。
     # setdefault：端点自己设了 Cache-Control 的不覆盖——眼下全仓没有这样的端点，留给以后真要缓存的接口自己声明。
+    #
+    # 其余响应（入口页 /、/m、/m/doctor、/verify 与 /static 下的脚本样式；开发档的 /docs 也在内）一律 `no-cache`
+    # （P2-1216）：可以存，但每次用之前带 ETag 回源重验。原先只带 Last-Modified / ETag、脚本地址也不带版本号，升级后
+    # 浏览器按启发式新鲜度（文件年龄的 10%，入口页实测约 23 小时）继续跑旧 JS：地址栏回车、开新标签页都不发请求，
+    # F5 也只重验入口页；core.js 与 pages-*.js 各自计时，可能一新一旧、调用不存在的函数报错——只改前端的修复要等
+    # 这么久才生效。代价：/static 没变的回 304；入口页走 FileResponse、不做条件请求，每次回整页（2～9 KB）。
+    # 放在中间件里而不是逐个路由加：以后新加的入口页、静态文件不用记得再配。
     if request.url.path.startswith("/api/"):
         response.headers.setdefault("Cache-Control", "no-store")
+    else:
+        response.headers.setdefault("Cache-Control", "no-cache")
     return response
 
 
