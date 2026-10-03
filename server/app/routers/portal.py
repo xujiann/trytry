@@ -1534,7 +1534,9 @@ def portal_my_bills(
     settlements = paginate(
         db.query(Settlement)
         .filter(Settlement.patient_id == patient.id)
-        .order_by(Settlement.id.desc()),
+        # 按结算时刻倒序、编号兜底（P2-1195，同 360 的 P2-846）：补导的历史结算单 created_at 是结算日、编号却排在上线
+        # 之后；居民端 H5（m.js renderBills）不翻页，原先按编号倒序，第一页全是几年前的导入单，今天要付的那张看不见
+        .order_by(Settlement.created_at.desc(), Settlement.id.desc()),
         response,
         offset,
         limit,
@@ -1935,7 +1937,9 @@ def portal_my_admissions(
     rows = paginate(
         db.query(Admission)
         .filter(Admission.patient_id == patient.id)
-        .order_by(Admission.id.desc()),
+        # 按入院时刻倒序、编号兜底（P2-1195，同「我的账单」）：补导的历史住院 admitted_at 是入院日、编号更大，
+        # 居民端 H5（m.js renderInpatient）不翻页，原先按编号倒序把今天入院的那次排到全部历史住院之后
+        .order_by(Admission.admitted_at.desc(), Admission.id.desc()),
         response,
         offset,
         limit,

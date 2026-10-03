@@ -4,6 +4,11 @@
 机构上线之后再补导的历史记录编号更大。360 视图、就诊清单、居民端档案、慢专病居民全周期档案、随访前置资料原先一律按编号
 倒序截取：前几十条全是几年前的导入记录，今天那次急性心梗被截掉（360 只标一个 has_more，医生移动端连日期都不印）。
 修后按业务时刻倒序、编号兜底；没有导入数据时顺序不变。
+
+居民端「我的账单」「我的住院」（P2-1195，第三十四批「患者全景与时间轴」扫描 L4-2）：P2-846 当时以「分页清单能翻到」
+为由没改这两处，可居民端 H5（`static/m/m.js` 的 renderBills / renderInpatient）不带 offset、不读总数，只看第一页。
+修前「我的账单」按编号倒序取前 50 条：补导 55 张历史结算单后，第一页从 2023 年排到 2019 年，今天要付的那张不在里面；
+「我的住院」同样按编号倒序，今天入院的那次排在全部历史住院之后。
 """
 from datetime import datetime, timedelta
 
@@ -109,3 +114,23 @@ def test_随访前置资料_最近就诊与住院按时刻取(client, admin, wor
     body = context.json()
     assert body["encounters"][0]["diagnosis_name"] == "急性心肌梗死", body["encounters"][:2]
     assert body["admissions"][0]["id"] == world["admission"], body["admissions"][:2]   # 修前 5 条全是历史住院
+
+
+def test_居民端我的账单_补导历史单后今天那张在第一页首位(client, world):
+    """P2-1195：与 m.js renderBills 同一个请求（不带 offset / limit，缺省 50 条），页面只看这一页。"""
+    resp = client.get("/api/portal/me/bills", headers=world["me"])
+    assert resp.status_code == 200, resp.text
+    rows = resp.json()
+    assert resp.headers["X-Total-Count"] == str(IMPORTED + 1) and len(rows) == 50
+    assert rows[0]["id"] == world["settlement"], rows[:2]   # 修前是编号最大的那张导入单，今天那张根本不在这 50 条里
+    assert world["settlement"] not in [row["id"] for row in rows[1:]]
+    assert [row["date"] for row in rows] == sorted((row["date"] for row in rows), reverse=True)
+
+
+def test_居民端我的住院_今天入院的那次在第一页首位(client, world):
+    """P2-1195：m.js renderInpatient 同样不翻页；按入院时刻倒序，补导的历史住院排在后面。"""
+    resp = client.get("/api/portal/me/admissions", headers=world["me"])
+    assert resp.status_code == 200, resp.text
+    rows = resp.json()
+    assert rows[0]["id"] == world["admission"], rows[:2]   # 修前是编号最大的那次历史住院，今天这次排在最后
+    assert [row["admitted_date"] for row in rows] == sorted((row["admitted_date"] for row in rows), reverse=True)
