@@ -20,6 +20,7 @@ Mock 同步语义，既有测试与演示不受影响。
 import json
 import logging
 import secrets
+import threading
 from datetime import timedelta
 from typing import Protocol, cast
 
@@ -33,7 +34,7 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..datetypes import OptionalDateStr
 from ..concurrency import insert_or_conflict, serialized_on
-from ..egress import egress_url_allowed, verify_signature
+from ..egress import UnresolvedHost, egress_url_rejection, verify_signature
 from ..numtypes import INT4_MAX, MONEY_MAX, MoneyFloat
 from ..texttypes import NON_BLANK
 from ..payments import HttpGatewayPaymentGateway, yuan_to_fen
@@ -1199,7 +1200,25 @@ MOCK_GATEWAY = MockGateway()
 _GATEWAYS: dict[str, PaymentGateway] = {}
 
 
+#: 网关上一次没注册上，是因为主机名这一次没解析出来（P2-1221 跟进）：DNS 抖一下不等于地址配错——原先 import 时注册一次，
+#: 那一刻解析失败，这个 worker 此后的网关下单、退款、对账一律 503，DNS 恢复也不重查，直到重启（短信通道同形，P2-1221）。
+#: 用到 gateway 渠道时补注册一次；解析到内网 / 环回、协议不对的照旧永久拒绝，不重试
+_GATEWAY_RETRY_ON_USE = False
+_GATEWAY_RETRY_LOCK = threading.Lock()
+
+
+def _ensure_http_gateway() -> None:
+    """用到 gateway 渠道前，上一次注册只败在解析失败的，补注册一次（锁里再判，并发只注册一回）。"""
+    if "gateway" in _GATEWAYS or not _GATEWAY_RETRY_ON_USE:
+        return
+    with _GATEWAY_RETRY_LOCK:
+        if "gateway" not in _GATEWAYS and _GATEWAY_RETRY_ON_USE:
+            register_http_gateway()
+
+
 def _gateway(channel: str) -> PaymentGateway:
+    if channel == "gateway":
+        _ensure_http_gateway()
     return _GATEWAYS.get(channel, MOCK_GATEWAY)
 
 
@@ -1212,6 +1231,7 @@ def _needs_real_gateway(channel: str) -> bool:
     当日对账拿本地镜像比本地单，绿灯「差异 0 笔」。`cash` / `card` / `insurance` 是窗口当面收退 / 基金结算，本来就没有
     网关，它们走 Mock 正是真实语义。"""
     if channel == "gateway":
+        _ensure_http_gateway()
         return "gateway" not in _GATEWAYS
     return settings.is_production and channel == "online" and "online" not in _GATEWAYS
 
@@ -1222,11 +1242,17 @@ def register_http_gateway() -> bool:
     URL 未过出网校验（仅 http(s)、禁内网/环回，见 app/egress.py）时拒绝注册并
     log——带病注册比该渠道不可用更糟。下单入参 channel 缺省仍走 Mock，向后兼容；
     测试可 monkeypatch settings 后重呼本函数（幂等，先摘再挂）。
+
+    没过校验只因为主机名这一次没解析出来（`UnresolvedHost`）的，记下「用到时再试」（P2-1221 跟进，见 `_ensure_http_gateway`）。
     """
+    global _GATEWAY_RETRY_ON_USE
     _GATEWAYS.pop("gateway", None)
+    _GATEWAY_RETRY_ON_USE = False
     if not settings.payment_gateway_url:
         return False
-    if not egress_url_allowed(settings.payment_gateway_url, "MEDPLAT_PAYMENT_GATEWAY_URL"):
+    problem = egress_url_rejection(settings.payment_gateway_url, "MEDPLAT_PAYMENT_GATEWAY_URL")
+    if problem is not None:
+        _GATEWAY_RETRY_ON_USE = isinstance(problem, UnresolvedHost)
         return False
     _GATEWAYS["gateway"] = HttpGatewayPaymentGateway(
         settings.payment_gateway_url, settings.payment_gateway_key
