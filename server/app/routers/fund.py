@@ -28,7 +28,7 @@ from sqlalchemy.orm import Session
 
 from ..clock import now_local
 from ..datetypes import OptionalDateStr, PeriodStr
-from ..concurrency import insert_or_conflict, upsert_unique
+from ..concurrency import insert_or_conflict, move_row, serialized_on, upsert_unique
 from ..database import get_db
 from ..deps import get_current_user, month_bounds, require_roles, resolve_org_scope
 from ..formula import FormulaError, evaluate, validate
@@ -279,10 +279,17 @@ def update_pool(pool_id: int, body: PoolUpdate, db: Session = Depends(get_db)):
     pool = _pool(db, pool_id)
     if pool.status == "settled":
         raise HTTPException(status_code=409, detail="已清算的基金池不可修改")
-    for field, value in body.model_dump(exclude_unset=True).items():
-        if value is not None:
-            setattr(pool, field, value)
-    db.commit()
+    # 「未清算」在池子这一行的临界区里、刷新之后再判一次（P2-1185，理由见 `settle`）：上面那次在锁外，与年终清算同时到，
+    # 清算按旧筹资总额结出结余之后，这里照旧把总额改掉——清算单与池子账面对不上，清算单又不能重做
+    with serialized_on(db, FundPool, pool_id):
+        db.refresh(pool)
+        if pool.status == "settled":
+            db.rollback()
+            raise HTTPException(status_code=409, detail="已清算的基金池不可修改")
+        for field, value in body.model_dump(exclude_unset=True).items():
+            if value is not None:
+                setattr(pool, field, value)
+        db.commit()
     return _pool_out(pool, db)
 
 
@@ -314,8 +321,15 @@ def add_prepayment(
     pool = _pool(db, pool_id)
     if pool.status != "active":
         raise HTTPException(status_code=409, detail=f"基金池状态为 {POOL_STATUS_NAMES.get(pool.status, pool.status)}，不可再预付")
-    db.add(FundPrepayment(pool_id=pool_id, created_by=user.id, **body.model_dump()))
-    db.commit()
+    # 「执行中」在池子这一行的临界区里再判一次（P2-1185，理由见 `settle`）：与年终清算同时到，原先照旧把一笔预付记在
+    # 已清算的池子上
+    with serialized_on(db, FundPool, pool_id):
+        db.refresh(pool)
+        if pool.status != "active":
+            db.rollback()
+            raise HTTPException(status_code=409, detail=f"基金池状态为 {POOL_STATUS_NAMES.get(pool.status, pool.status)}，不可再预付")
+        db.add(FundPrepayment(pool_id=pool_id, created_by=user.id, **body.model_dump()))
+        db.commit()
     out = _pool_out(pool, db)
     if out["planned_prepay"] and out["prepaid_amount"] > out["planned_prepay"]:
         out["warning"] = (
@@ -393,12 +407,26 @@ def close_period(pool_id: int, body: PeriodIn, db: Session = Depends(get_db)):
         else _collect_expense(db, pool, body.period)
     )
     source = "manual" if body.actual_amount is not None else "auto"
-    upsert_unique(
-        db,
-        FundPeriod,
-        keys={"pool_id": pool_id, "period": body.period},
-        values={"actual_amount": amount, "source": source, "note": body.note},
-    )
+    # 「执行中」在池子这一行的临界区里再判一次、写完在锁里提交（P2-1185，理由见 `settle`）：原先锁外判完就写，与年终清算
+    # 同时到时，清算按改之前的各期之和结出结余，这一期随后照旧改掉——账面结余与清算单对不上。
+    # 重跑已有的一期在锁里按唯一键原地覆盖：`upsert_unique` 撞约束的那一路要先回滚，PG 上回滚连这把行锁一起放掉，
+    # 覆盖那一笔就落在锁外、清算照样插得进来。没有这一期才交给它插（锁里不会有第二路同时插同一期）
+    with serialized_on(db, FundPool, pool_id):
+        db.refresh(pool)
+        if pool.status != "active":
+            db.rollback()
+            raise HTTPException(status_code=409, detail=f"基金池状态为 {POOL_STATUS_NAMES.get(pool.status, pool.status)}，不可再预结")
+        rerun = (
+            db.query(FundPeriod)
+            .filter(FundPeriod.pool_id == pool_id, FundPeriod.period == body.period)
+            .update({FundPeriod.actual_amount: amount, FundPeriod.source: source, FundPeriod.note: body.note},
+                    synchronize_session=False)
+        )
+        if rerun:
+            db.commit()
+        else:
+            upsert_unique(db, FundPeriod, keys={"pool_id": pool_id, "period": body.period},
+                          values={"actual_amount": amount, "source": source, "note": body.note})
     out = _pool_out(pool, db)
     return {
         "period": body.period,
@@ -469,32 +497,48 @@ def settle(
     """年终清算：结出结余或超支，一个池子只能清算一次。
 
     超支（balance < 0）**不自动扣减任何机构**，只记录处置选择。
+
+    判定、取数与置已清算圈在池子这一行的临界区里（P2-1185）：原先锁外判「执行中」、按当时各期预结之和算发生额，
+    与重跑 12 月预结同时到时，清算单按旧发生额结出结余——实测清算单结余 120 万、池子账面结余 80 万，分配按清算单
+    多分 40 万，而清算单一个池子只有一张、不能重做。改池子的四个写入口（改池子、预付、预结、清算）都进同一把
+    `serialized_on(FundPool)`、锁里刷新之后再判：清算先拿到锁，另外几路等它提交后读到「已清算」、与顺序发生一样 409；
+    另外几路先拿到锁，清算锁到手时读到的就是它们提交之后的各期与总额。
     """
     pool = _pool(db, pool_id)
     if pool.status != "active":
         raise HTTPException(status_code=409, detail=f"基金池状态为 {POOL_STATUS_NAMES.get(pool.status, pool.status)}，不可清算")
-    expense = (
-        body.total_expense
-        if body.total_expense is not None
-        else float(
-            db.query(func.coalesce(func.sum(FundPeriod.actual_amount), 0.0))
-            .filter(FundPeriod.pool_id == pool_id)
-            .scalar()
-            or 0.0
+    with serialized_on(db, FundPool, pool_id):
+        db.refresh(pool)
+        if pool.status != "active":
+            db.rollback()
+            raise HTTPException(status_code=409, detail=f"基金池状态为 {POOL_STATUS_NAMES.get(pool.status, pool.status)}，不可清算")
+        expense = (
+            body.total_expense
+            if body.total_expense is not None
+            else float(
+                db.query(func.coalesce(func.sum(FundPeriod.actual_amount), 0.0))
+                .filter(FundPeriod.pool_id == pool_id)
+                .scalar()
+                or 0.0
+            )
         )
-    )
-    settlement = FundSettlement(
-        pool_id=pool_id,
-        total_income=pool.total_amount,
-        total_expense=expense,
-        balance=round(pool.total_amount - expense, 2),
-        overrun_action=body.overrun_action,
-        created_by=user.id,
-    )
-    # 先改池状态再插清算单：insert_or_conflict 内部 commit，两者同一次提交，
-    # 撞约束时一起回滚（D-1 的教训）。并发重复清算撞的正是 pool_id 唯一约束。
-    pool.status = "settled"
-    settlement = insert_or_conflict(db, settlement, "该基金池已清算")
+        settlement = FundSettlement(
+            pool_id=pool_id,
+            total_income=pool.total_amount,
+            total_expense=expense,
+            balance=round(pool.total_amount - expense, 2),
+            overrun_action=body.overrun_action,
+            created_by=user.id,
+        )
+        # 先改池状态再插清算单：insert_or_conflict 内部 commit，两者同一次提交，
+        # 撞约束时一起回滚（D-1 的教训）。并发重复清算撞的正是 pool_id 唯一约束。
+        # 置已清算与「还在执行中」同一条 UPDATE（P2-1185）：哪天有改池子状态的写法没进这把锁，抢输的一路也只改到 0 行、
+        # 按库里的现状 409，不把别人刚写下的状态盖掉
+        if not move_row(db, FundPool, pool_id, FundPool.status == "active", status="settled"):
+            db.rollback()
+            db.refresh(pool)
+            raise HTTPException(status_code=409, detail=f"基金池状态为 {POOL_STATUS_NAMES.get(pool.status, pool.status)}，不可清算")
+        settlement = insert_or_conflict(db, settlement, "该基金池已清算")
     return _settlement_out(settlement, db)
 
 
