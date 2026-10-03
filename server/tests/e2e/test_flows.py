@@ -305,8 +305,20 @@ def test_login_rejects_bad_password(page, base_url):
     page.fill("#login-username", "admin")
     page.fill("#login-password", "wrong-password")
     page.click("#login-form button[type=submit]")
-    expect(page.locator("#login-error")).not_to_be_empty()
+    # 报的是后端的原话（P2-1225）：原先登录请求的 401 也走「会话过期」分支，口令敲错写成「登录已过期」
+    expect(page.locator("#login-error")).to_have_text("用户名或密码错误")
     expect(page.locator("#login-view")).to_be_visible()
+
+
+def test_医生移动端口令错_报用户名或密码错误_不说登录已失效(page, base_url):
+    """P2-1225：医生移动端的 api() 把登录请求的 401 也当会话失效，口令敲错时登录框写「登录已失效，请重新登录」。"""
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.goto(f"{base_url}/m/doctor")
+    page.fill("#lg-user", "e2e_no_such_doctor")   # 不存在的账号：不给 admin 记失败次数
+    page.fill("#lg-pass", "wrong-password")
+    page.click("#login-form button[type=submit]")
+    expect(page.locator("#login-error")).to_have_text("用户名或密码错误")
+    expect(page.locator("#workbench")).to_be_hidden()
 
 
 def _todos_fail(route):

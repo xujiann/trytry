@@ -27,7 +27,9 @@ async function api(path, options = {}) {
   }
   const resp = await fetch(path, { ...options, credentials: "same-origin", headers });
   const data = await resp.json().catch(() => ({}));
-  if (resp.status === 401) { logout(); throw new Error("登录已失效，请重新登录"); }
+  // 登录请求本身的 401 是「用户名或密码错误」这类，原样报后端的话、不走登出（P2-1225，与管理端 core.js 同一句）：原先一律
+  // 当会话失效，口令敲错了登录框却写「登录已失效，请重新登录」
+  if (resp.status === 401 && path !== "/api/auth/login") { logout(); throw new Error("登录已失效，请重新登录"); }
   if (!resp.ok) throw new Error(errorText(data.detail, `请求失败(${resp.status})`));
   return data;
 }

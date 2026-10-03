@@ -32,7 +32,9 @@ async function api(path, options = {}) {
   // Cookie 模式的写请求：双提交 CSRF（读请求服务端不强制）
   if (!token && method !== "GET" && method !== "HEAD") headers["X-CSRF-Token"] = csrfToken();
   const resp = await fetch(path, { ...options, credentials: "same-origin", headers });
-  if (resp.status === 401) { logout(); throw new Error("登录已过期"); }
+  // 登录请求本身的 401 是「用户名或密码错误」这类，原样报后端的话、不走登出（P2-1225）：原先一律当会话过期，口令敲错了
+  // 登录框却写「登录已过期」，还顺手发一次登出。只有已登录态下的 401 才是登录过期
+  if (resp.status === 401 && path !== "/api/auth/login") { logout(); throw new Error("登录已过期"); }
   const data = await resp.json().catch(() => ({}));
   if (!resp.ok) {
     // 状态码挂在错误上（居民端 m.js 的 api 早就这么做）：调用方要分得清
