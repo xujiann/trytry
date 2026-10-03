@@ -895,7 +895,7 @@ def print_discharge_summary(
 ):
     """出院小结打印版：仅限已出院者（在院打印的"出院小结"没有出院时间，是伪造文书）。
 
-    诊疗经过取出院病程记录（ProgressNote note_type="discharge"），未书写留"—"。
+    诊疗经过取出院病程记录（ProgressNote note_type="discharge"），未书写留"—"；签名行署它的记录医师与记录时间（P2-1240）。
     """
     admission = _get_admission(db, admission_id)
     assert_patient_visible(db, user, admission.patient_id, resource="print:discharge")   # 先于状态判断（P2-565）
@@ -927,12 +927,20 @@ def print_discharge_summary(
         f'<tr><td class="k">住院天数</td><td>{_esc(days)} 天</td>'
         f'<td class="k">转归</td><td>{_esc(summary.outcome if summary else "") or "—"}</td></tr>'
     )
+    # 署写出院记录的人（P2-1240）：原先 meta 与签名行都只取入院登记时选填的主管医师（页面缺省为空），出院病程取了却只用
+    # 正文——主管医师没填时整张纸没有一个医师名。签名行加署出院病程的记录医师与记录时间（病案首页署填写医师 / 填写时间的
+    # 同一个位置），主管医师那一栏照旧留着（meta 里也还有）；记录时间没填的存量病程按落库时刻换本地时间（与病程清单
+    # `clinical_docs._shown_time` 同一个取法），没写出院病程的两栏写「—」
+    recorder = discharge_note.doctor_name if discharge_note else ""
+    recorded = (discharge_note.recorded_at or _shown_at(discharge_note.created_at)) if discharge_note else ""
     body = f"""
   <div class="section"><h3>入院诊断</h3><div class="body">{_esc(admission.diagnosis_name) or "—"}</div></div>
   <div class="section"><h3>出院诊断</h3><div class="body">{_esc(summary.discharge_diagnosis if summary else "") or "—"}</div></div>
   <div class="section"><h3>手术及操作</h3><div class="body">{_esc(summary.operation if summary else "") or "—"}</div></div>
   <div class="section"><h3>诊疗经过（出院病程记录）</h3><div class="body">{_esc(discharge_note.content if discharge_note else "") or "—"}</div></div>
-  <div class="sign"><span>主管医师：{_esc(admission.doctor_name) or "—"}</span>
+  <div class="sign"><span>记录医师：{_esc(recorder) or "—"}</span>
+    <span>记录时间：{_esc(recorded) or "—"}</span>
+    <span>主管医师：{_esc(admission.doctor_name) or "—"}</span>
     <span>打印核对：____________</span></div>"""
     return _render(
         doc_type="discharge_summary",
