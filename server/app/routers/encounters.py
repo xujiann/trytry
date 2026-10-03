@@ -19,6 +19,7 @@ from ..models import (
     User,
 )
 from ..visibility import assert_org_writable, assert_patient_visible, visible_org_ids
+from .checkups import _abnormal_item_names, abnormal_text as checkup_abnormal_text  # 体检异常项与体检清单同一口径（P2-1197）
 from .patients import find_by_ehc_no
 from ..schemas import EncounterCreate, EncounterOut
 
@@ -182,6 +183,9 @@ class ArchivePhysicalExam(BaseModel):
     package_name: str
     has_abnormal: bool
     abnormal_items: str
+    #: 给人看的异常项（P2-1197，只加键）：汇总串选填，只在分项上标了异常的体检 `abnormal_items` 是空串，360 原先只给它——
+    #: 「有异常」却看不出哪项。与体检清单、异常清单、打印件同一口径（`checkups.abnormal_text`，P2-422）
+    abnormal_text: str
 
 
 class Archive360Out(BaseModel):
@@ -232,6 +236,7 @@ def patient_360_view(
     checkups, checkups_more = _section(
         db.query(PhysicalExam).filter(PhysicalExam.patient_id == patient.id).order_by(PhysicalExam.id.desc())
     )
+    checkup_abnormal_names = _abnormal_item_names(db, [e.id for e in checkups])   # 一条 SQL 取回（P2-1197）
     # 医疗费用记录（指南 #2 病历概要要求的第三类内容）。
     # 取结算单而非费用明细：明细是一次就诊几十上百条，塞进 360 视图会把真正
     # 该被看见的临床信息挤下去；要看明细走 /api/billing/details。
@@ -308,6 +313,7 @@ def patient_360_view(
                 "package_name": e.package_name,
                 "has_abnormal": e.has_abnormal,
                 "abnormal_items": e.abnormal_items,
+                "abnormal_text": checkup_abnormal_text(e.abnormal_items, checkup_abnormal_names.get(e.id, [])),
             }
             for e in checkups
         ],
