@@ -414,12 +414,19 @@ def _assert_review_authority(db: Session, user: User, case: SpdReferralCase) -> 
         )
 
 
+def _review_org_id(db: Session, case: SpdReferralCase) -> int | None:
+    """这一格该由哪家机构审核：本单当前机构的直接上级（ADR-0004）。机构树没配上级（或单子没有锚点）的为 None。
+
+    审核权（`_can_review`）与审核通过后锚点推到哪家（`review_referral`，P2-1190）共用这一句。"""
+    current = db.get(Organization, case.current_org_id) if case.current_org_id else None
+    return current.parent_id if current else None
+
+
 def _can_review(db: Session, user: User, case: SpdReferralCase) -> bool:
     """审核权的判据本身（`_assert_review_authority` 与清单行上的 `actions` 共用，P2-794）。"""
     if user.role in GLOBAL_ROLES:
         return True
-    current = db.get(Organization, case.current_org_id) if case.current_org_id else None
-    parent_id = current.parent_id if current else None
+    parent_id = _review_org_id(db, case)
     return user.org_id is not None and parent_id is not None and user.org_id == parent_id
 
 
@@ -428,11 +435,13 @@ def _assert_holds_case(user: User, case: SpdReferralCase) -> None:
 
     与 `_assert_review_authority` 同源（ADR-0004），但这几步不是逐级上收，而是"谁现在
     拿着这张单谁操作"：分级审核逐级把 `current_org` 推到受理机构（`review` 每步将其置为
-    审核者机构），受理后即受理机构、下转后即下转目标机构，故一律以 `current_org_id` 判定。
+    这一格该由的机构，即原当前机构的直接上级），受理后即受理机构、下转后即下转目标机构，
+    故一律以 `current_org_id` 判定。
 
-    注意：`current_org` 的正确性依赖审核链由**机构账号**逐级推进。若审核由全域账号
-    （admin/director，`org_id` 常为空）代驱动，锚点会滞留在发起机构——这类"中心代录"
-    场景本就由全域角色兜底操作（下面直接放行），不受此处机构校验限制。
+    全域账号（admin/director）代审同样按机构树推这一格（P2-1190）：原先取操作人所在机构，
+    不绑机构的代审让锚点滞留在原机构、绑别家机构的推到操作人机构，下一格落到错误的机构。
+    机构树没配上级的照旧（取操作人所在机构，不绑机构的保留原锚点）——那时本就只有全域角色
+    推得动（下面直接放行）。
     """
     if not _holds_case(user, case):
         raise HTTPException(status_code=403, detail="仅本单当前处理机构可执行该操作")
@@ -712,11 +721,17 @@ def review_referral(
         values: dict[str, Any] = {"status": "rejected", "closed_at": now_naive()}
     else:
         values = {"status": next_status, "current_level": level}
-        # 全域角色（admin/director 常不绑机构）代推进时，不要把机构锚点清成 None——
-        # 否则后续环节的 parent 校验（_assert_review_authority 读 current_org_id）会把
-        # 所有非全域账号锁死（ADR-0004）。无机构的代推进保留上一个真实机构锚点。
-        if user.org_id is not None:
-            values["current_org_id"] = user.org_id
+        # 通过即把机构锚点推到这一格该由的机构：原 current 的直接上级（ADR-0004，与 `_can_review` 同一句）。
+        # 本机构账号走得到这里，它的机构就是这个上级；全域角色代审（P2-1190）原先取操作人所在机构——不绑机构的原地不动
+        # （锚点留在村卫生室：县医院接收 403，卫生院按单号「县级医院接收」200、层级写成 county），绑在县医院的推到县医院
+        # （状态停在「卫生院已审核」，县医院、卫生院都 403），都把下一格的非全域账号锁死。
+        # 机构树没配上级的没有「这一格的机构」，本来就只有全域角色推得动（ADR-0004 风险一节），照旧：取操作人所在机构，
+        # 不绑机构的保留上一个真实锚点、别清成 None——否则后续环节的 parent 校验把所有非全域账号锁死。
+        anchor = _review_org_id(db, case)
+        if anchor is None:
+            anchor = user.org_id
+        if anchor is not None:
+            values["current_org_id"] = anchor
         if body.target_org_id is not None:
             values["target_org_id"] = body.target_org_id
     if not _advance_case(db, case.id, expected, **values):

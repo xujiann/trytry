@@ -797,9 +797,15 @@ def test_referral_review_requires_parent_org(client, h, base):
 
 def test_referral_global_review_keeps_org_anchor(client, h, base):
     """回归 ADR-0004：全域角色（admin，无绑定机构）代推进后不得把机构锚点清成 None，
-    否则后续环节的 parent 校验会把所有非全域账号锁死。"""
+    否则后续环节的 parent 校验会把所有非全域账号锁死。
+
+    锚点也不能原地不动（P2-1190，第三十四批扫描 L2-1）：代审「卫生院审核」与本机构账号审核同一个推法，推到村卫生室的
+    上级卫生院，下一格「县级医院接收」归卫生院的上级县医院。这条第二段原先断言「代审后卫生院仍可继续推进」——锚点留在
+    村卫生室时卫生院确实推得动，但它替县医院办了「县级医院接收」（层级写成 county、随后登记到院、村医得有效上转积分），
+    县医院自己反倒 403；那钉的正是这条的错，按 ADR-0004 改成县医院接收 200、卫生院 403。"""
     village_id = base["village"]["id"]
     township_id = base["township"]["id"]
+    county_id = base["county"]["id"]
 
     patient = client.post(
         "/api/patients",
@@ -822,6 +828,16 @@ def test_referral_global_review_keeps_org_anchor(client, h, base):
         "/api/auth/login", json={"username": "ref_tdoc2", "password": "pass123456"}
     ).json()
     tdoc = {"Authorization": f"Bearer {tdoc['access_token']}"}
+    client.post(
+        "/api/users",
+        json={"username": "ref_cdoc2", "password": "pass123456", "role": "doctor",
+              "org_id": county_id},
+        headers=h,
+    )
+    cdoc = client.post(
+        "/api/auth/login", json={"username": "ref_cdoc2", "password": "pass123456"}
+    ).json()
+    cdoc = {"Authorization": f"Bearer {cdoc['access_token']}"}
 
     # village 发起（admin 代发，其 org_id=None，回落到 enrollment 的 village）
     case_id = client.post(
@@ -830,19 +846,24 @@ def test_referral_global_review_keeps_org_anchor(client, h, base):
         headers=h,
     ).json()["id"]
 
-    # admin（全域）做步骤一：不应把 current_org_id 清成 None
+    # admin（全域）做步骤一：不应把 current_org_id 清成 None，也不原地留在 village——推到这一格的机构 township
     step1 = client.post(
         f"/api/spd/referrals/{case_id}/review", json={"action": "pass"}, headers=h
     ).json()
     assert step1["status"] == "township_reviewed"
-    assert step1["current_org_id"] == village_id, "全域代推进须保留机构锚点，不能清 None"
+    assert step1["current_org_id"] == township_id, "全域代推进须把锚点推到这一格的机构，不能清 None、不能原地不动"
 
-    # 非全域的 township（village 的直接上级）仍可继续推进，未被锁死
-    step2 = client.post(
+    # 下一格「县级医院接收」归 township 的直接上级 county：township 不能替它办（P2-1190 修前 200），county 未被锁死
+    wrong = client.post(
         f"/api/spd/referrals/{case_id}/review", json={"action": "pass"}, headers=tdoc
+    )
+    assert wrong.status_code == 403, wrong.text
+    step2 = client.post(
+        f"/api/spd/referrals/{case_id}/review", json={"action": "pass"}, headers=cdoc
     )
     assert step2.status_code == 200, step2.text
     assert step2.json()["status"] == "accepted"
+    assert step2.json()["current_org_id"] == county_id
 
 
 def test_referral_arrive_down_receive_require_current_org(client, h):
