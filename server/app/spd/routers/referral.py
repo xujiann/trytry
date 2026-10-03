@@ -32,7 +32,7 @@ from ...clock import now_naive
 from ...database import get_db
 from ...patchtypes import UNSET
 from ...texttypes import NON_BLANK
-from ...deps import get_current_user, paginate, require_date, require_roles, row_dict, through_day
+from ...deps import get_current_user, paginate, require_date, require_roles, row_dict, rows_by_id, through_day
 from ..platform import Organization, Patient, User, org_level
 from ..models import (
     SpdEnrollment,
@@ -367,8 +367,11 @@ class ReferralIn(BaseModel):
 _level_of = org_level
 
 
-def _case_out(db: Session, c: SpdReferralCase, steps: list[SpdReferralStep] | None = None) -> dict:
-    patient = db.get(Patient, c.patient_id)
+def _case_out(
+    db: Session, c: SpdReferralCase, steps: list[SpdReferralStep] | None = None, patients: dict | None = None
+) -> dict:
+    """`patients` 是清单按页一次 IN 取齐的患者（P2-1157：原先逐行 `db.get`）；单条出参不给，照旧 `db.get`。"""
+    patient = db.get(Patient, c.patient_id) if patients is None else patients.get(c.patient_id)
     out = {
         "id": c.id, "patient_id": c.patient_id,
         "patient_name": patient.name if patient else "",
@@ -654,7 +657,8 @@ def list_referrals(
     if mine:
         query = query.filter(SpdReferralCase.initiator_id == user.id)
     rows = paginate(query.order_by(SpdReferralCase.id.desc()), response, offset, limit)
-    return [{**_case_out(db, r), "actions": _case_actions(db, user, r)} for r in rows]
+    patients = rows_by_id(db, Patient, (r.patient_id for r in rows))
+    return [{**_case_out(db, r, patients=patients), "actions": _case_actions(db, user, r)} for r in rows]
 
 
 @router.get("/referrals/{case_id}", response_model=ReferralCaseDetailOut)

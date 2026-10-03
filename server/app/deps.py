@@ -196,6 +196,19 @@ def row_dict(rows: Iterable[Row[tuple[_K, _V]]]) -> dict[_K, _V]:
     return {key: value for key, value in rows}
 
 
+def rows_by_id(db: Session, model: Any, ids: Iterable[Any]) -> dict[Any, Any]:
+    """按主键一次 IN 取回一批行 `{id: 行}`，空集合不打库（P2-1157）。
+
+    分页清单给每一行配关联（患者、路径模板、手术……）的批量版：原先逐行 `db.get`，一页 100 行就是一两百条查询
+    （N+1）。`db.get` 虽先查会话的身份映射，干净对象在里头只是弱引用、这一行用完就被回收，同一个模板照样每行再查一次。
+    取不到的键与 `db.get` 取不到一样按 None 处理（`字典.get(键)`）。
+    """
+    wanted = {i for i in ids if i is not None}
+    if not wanted:
+        return {}
+    return {row.id: row for row in db.query(model).filter(model.id.in_(wanted))}
+
+
 def keyword_like(column, keyword: str):
     """关键词模糊检索：两边都转小写再 LIKE（P2-66）。
 

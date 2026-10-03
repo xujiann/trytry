@@ -7,7 +7,7 @@ from sqlalchemy import func, update
 from sqlalchemy.engine import CursorResult
 
 from fastapi import APIRouter, Depends, HTTPException, Response
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from .. import clock
 from ..concurrency import appended_text, insert_if_absent, insert_or_conflict
@@ -417,8 +417,11 @@ def list_prescriptions(
     limit: int = 200,
     db: Session = Depends(get_db),
 ):
-    """处方列表（L-3 分页：offset/limit，总数见 X-Total-Count 响应头）。"""
-    query = db.query(Prescription)
+    """处方列表（L-3 分页：offset/limit，总数见 X-Total-Count 响应头）。
+
+    明细按页一次 IN 取齐（`selectinload`，P2-1157）：原先是懒加载，出参时逐张处方再查一次明细，一页 200 张就是 200 条。
+    """
+    query = db.query(Prescription).options(selectinload(Prescription.items))
     if status:
         query = query.filter(Prescription.status == status)
     return paginate(query.order_by(Prescription.id.desc()), response, offset, limit)

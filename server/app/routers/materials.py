@@ -23,7 +23,7 @@ from ..texttypes import NON_BLANK
 from ..visibility import assert_obj_org_writable, assert_org_writable, assert_patient_visible, scope_org_list, visible_org_ids
 from ..database import get_db
 from ..datetypes import OptionalDateStr, check_date
-from ..deps import get_current_user, paginate, require_roles
+from ..deps import get_current_user, paginate, require_roles, rows_by_id
 from ..models import (
     Asset,
     AssetMovement,
@@ -384,9 +384,13 @@ def register_consumable(body: ConsumableIn, db: Session = Depends(get_db), user:
     return _consumable_out(db, item)
 
 
-def _consumable_out(db: Session, c: HighValueConsumable) -> dict:
-    patient = db.get(Patient, c.used_patient_id) if c.used_patient_id else None
-    surgery = db.get(SurgeryRequest, c.used_surgery_id) if c.used_surgery_id else None
+def _consumable_out(db: Session, c: HighValueConsumable, refs: tuple[dict, dict] | None = None) -> dict:
+    """`refs` 是清单按页一次 IN 取齐的（患者、手术），P2-1157：原先逐行各 `db.get` 一次；单条出参不给，照旧逐个取。"""
+    if refs is None:
+        patient = db.get(Patient, c.used_patient_id) if c.used_patient_id else None
+        surgery = db.get(SurgeryRequest, c.used_surgery_id) if c.used_surgery_id else None
+    else:
+        patient, surgery = refs[0].get(c.used_patient_id), refs[1].get(c.used_surgery_id)
     return {
         "id": c.id,
         "barcode": c.barcode,
@@ -528,4 +532,6 @@ def list_consumables(
         if orgs is not None:
             query = query.filter(HighValueConsumable.org_id.in_(orgs))
     rows = paginate(query.order_by(HighValueConsumable.id.desc()), response, offset, limit)
-    return [_consumable_out(db, c) for c in rows]
+    refs = (rows_by_id(db, Patient, (c.used_patient_id for c in rows)),
+            rows_by_id(db, SurgeryRequest, (c.used_surgery_id for c in rows)))
+    return [_consumable_out(db, c, refs) for c in rows]

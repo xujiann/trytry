@@ -31,6 +31,7 @@ from ..deps import (
     require_roles,
     resolve_business_date,
     resolve_org_scope,
+    rows_by_id,
 )
 from ..numtypes import MONEY_MAX, MoneyFloat
 from ..texttypes import NON_BLANK
@@ -301,8 +302,9 @@ def create_outbound_visit(
     return _outbound_out(db, visit)
 
 
-def _outbound_out(db: Session, v: OutboundVisit) -> dict:
-    patient = db.get(Patient, v.patient_id)
+def _outbound_out(db: Session, v: OutboundVisit, patients: dict | None = None) -> dict:
+    """`patients` 是清单按页一次 IN 取齐的患者（P2-1157：原先逐行 `db.get`）；单条出参不给，照旧 `db.get`。"""
+    patient = db.get(Patient, v.patient_id) if patients is None else patients.get(v.patient_id)
     return {
         "id": v.id,
         "patient_id": v.patient_id,
@@ -334,10 +336,9 @@ def list_outbound_visits(
         query = query.filter(OutboundVisit.visit_type == visit_type)
     if external_org_level:
         query = query.filter(OutboundVisit.external_org_level == external_org_level)
-    return [
-        _outbound_out(db, v)
-        for v in paginate(query.order_by(OutboundVisit.id.desc()), response, offset, limit)
-    ]
+    rows = paginate(query.order_by(OutboundVisit.id.desc()), response, offset, limit)
+    patients = rows_by_id(db, Patient, (v.patient_id for v in rows))
+    return [_outbound_out(db, v, patients) for v in rows]
 
 
 @router.get("/patient-flow", response_model=PatientFlowOut)

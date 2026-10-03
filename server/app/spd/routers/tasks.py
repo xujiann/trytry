@@ -24,7 +24,8 @@ from ...concurrency import add_amount, move_row, serialized_on
 from ...database import get_db
 from ...patchtypes import UNSET
 from ...texttypes import NON_BLANK
-from ...deps import get_current_user, paginate, require_date, require_roles, resolve_business_date, row_dict
+from ...deps import (get_current_user, paginate, require_date, require_roles, resolve_business_date, row_dict,
+                     rows_by_id)
 from ..platform import (Patient, User, assignee_outside_org, evidence_urls, notify_user, role_unfit, unusable_user,
                         valid_task_evidence)
 from ..models import (
@@ -275,10 +276,25 @@ def _template_node_keys(db: Session, template_id: int) -> set[str]:
     return {key for (key,) in db.query(SpdPathNode.key).filter(SpdPathNode.template_id == template_id).order_by(SpdPathNode.id)}
 
 
-def _instance_out(db: Session, i: SpdPathInstance) -> dict:
-    template = db.get(SpdPathTemplate, i.template_id)
-    enrollment = db.get(SpdEnrollment, i.enrollment_id)
-    patient = db.get(Patient, enrollment.patient_id) if enrollment else None
+def _instance_refs(db: Session, rows: list[SpdPathInstance]) -> tuple[dict, dict, dict]:
+    """一页路径实例出参要的（模板、纳管档案、患者），各按页一次 IN 取齐（P2-1157）：清单原先逐行 `db.get` 三次，
+    一页 100 行三百来条查询。"""
+    templates = rows_by_id(db, SpdPathTemplate, (i.template_id for i in rows))
+    enrollments = rows_by_id(db, SpdEnrollment, (i.enrollment_id for i in rows))
+    return templates, enrollments, rows_by_id(db, Patient, (e.patient_id for e in enrollments.values()))
+
+
+def _instance_out(db: Session, i: SpdPathInstance, refs: tuple[dict, dict, dict] | None = None) -> dict:
+    """`refs` 是清单按页取齐的那三样（`_instance_refs`）；单条出参不给，照旧逐个 `db.get`。"""
+    if refs is None:
+        template = db.get(SpdPathTemplate, i.template_id)
+        enrollment = db.get(SpdEnrollment, i.enrollment_id)
+        patient = db.get(Patient, enrollment.patient_id) if enrollment else None
+    else:
+        templates, enrollments, patients = refs
+        template = templates.get(i.template_id)
+        enrollment = enrollments.get(i.enrollment_id)
+        patient = patients.get(enrollment.patient_id) if enrollment else None
     return {
         "id": i.id, "enrollment_id": i.enrollment_id, "template_id": i.template_id,
         "template_code": i.template_code,
@@ -389,7 +405,8 @@ def list_path_instances(
         ]
         query = query.filter(SpdPathInstance.template_id.in_(template_ids or [0]))
     rows = paginate(query.order_by(SpdPathInstance.id.desc()), response, offset, limit)
-    return [_instance_out(db, i) for i in rows]
+    refs = _instance_refs(db, rows)
+    return [_instance_out(db, i, refs) for i in rows]
 
 
 def _assert_instance_visible(db: Session, user: User, instance: SpdPathInstance) -> None:

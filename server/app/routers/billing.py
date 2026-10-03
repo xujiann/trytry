@@ -44,7 +44,7 @@ from ..visibility import (
     scope_patient_list,
 )
 from ..database import get_db
-from ..deps import get_current_user, paginate, require_admin, require_date, require_roles, row_dict
+from ..deps import get_current_user, paginate, require_admin, require_date, require_roles, row_dict, rows_by_id
 from ..models import (
     Admission,
     BillDetail,
@@ -802,13 +802,17 @@ def deposit_alerts(
         .scalar_subquery()
     )
     gap_expr = func.round(balance_sq - unsettled_sq, 2)
-    q = db.query(Admission).filter(Admission.status == "admitted", gap_expr < threshold)
+    # 余额、未结费用就是上面筛与排用的那两个子查询，随这一页一起取回；患者按页一次 IN（P2-1157）：原先每行再查余额、
+    # 未结、患者三次，一页 500 行一千五百条。取回后照 `deposit_balance` / `unsettled_amount` 同一句取两位小数
+    q = db.query(Admission, balance_sq, unsettled_sq).filter(Admission.status == "admitted", gap_expr < threshold)
     q = scope_patient_list(db, user, q, Admission, None, "billing")
+    rows = paginate(q.order_by(gap_expr, Admission.id), response, offset, limit)
+    patients = rows_by_id(db, Patient, (admission.patient_id for admission, _, _ in rows))
     alerts = []
-    for admission in paginate(q.order_by(gap_expr, Admission.id), response, offset, limit):
-        balance = deposit_balance(db, admission.id)
-        unsettled = unsettled_amount(db, admission.id)
-        patient = db.get(Patient, admission.patient_id)
+    for admission, balance_total, unsettled_total in rows:
+        balance = round(balance_total or 0.0, 2)
+        unsettled = round(unsettled_total or 0.0, 2)
+        patient = patients.get(admission.patient_id)
         alerts.append(
             {
                 "admission_id": admission.id,

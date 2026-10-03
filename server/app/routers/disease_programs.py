@@ -21,7 +21,7 @@ from ..datetypes import OptionalDateStr
 from ..texttypes import NON_BLANK
 from ..visibility import assert_org_writable, assert_patient_visible, scope_patient_list
 from ..database import get_db
-from ..deps import get_current_user, paginate, require_admin, require_roles, resolve_org_scope
+from ..deps import get_current_user, paginate, require_admin, require_roles, resolve_org_scope, rows_by_id
 from ..models import (
     DiseaseEnrollment,
     DiseasePathRecord,
@@ -287,7 +287,8 @@ def list_enrollments(
     if scope is not None:
         query = query.filter(DiseaseEnrollment.org_id.in_(scope))
     rows = paginate(query.order_by(DiseaseEnrollment.id.desc()), response, offset, limit)
-    return [_enrollment_out(r, db) for r in rows]
+    refs = _enrollment_refs(db, rows)
+    return [_enrollment_out(r, db, refs) for r in rows]
 
 
 @router.post("/enrollments/{enrollment_id}/records", response_model=DiseaseEnrollmentOut,
@@ -434,15 +435,29 @@ def _required_pct(required_keys: list[str], done: set[str]) -> float:
     return round(len([k for k in required_keys if k in done]) * 100 / len(required_keys), 2)
 
 
-def _completion(enrollment: DiseaseEnrollment, db: Session) -> dict:
-    program = db.get(DiseaseProgram, enrollment.program_id)
+def _enrollment_refs(db: Session, rows: list[DiseaseEnrollment]) -> tuple[dict, dict]:
+    """一页入组出参要的（专病目录、按入组分好的路径记录），各按页一次 IN 取齐（P2-1157）：清单原先逐行查两遍路径
+    记录、再 `db.get` 一次专病目录，一页 50 行一百五十来条查询。路径记录先按编号排好再分，每条入组内的先后与逐行查时一样。"""
+    records: dict[int, list[DiseasePathRecord]] = {}
+    if rows:
+        for record in (
+            db.query(DiseasePathRecord)
+            .filter(DiseasePathRecord.enrollment_id.in_([e.id for e in rows]))
+            .order_by(DiseasePathRecord.id)
+        ):
+            records.setdefault(record.enrollment_id, []).append(record)
+    return rows_by_id(db, DiseaseProgram, (e.program_id for e in rows)), records
+
+
+def _completion(enrollment: DiseaseEnrollment, db: Session, refs: tuple[dict, dict] | None = None) -> dict:
+    """`refs` 是清单按页取齐的那两样（`_enrollment_refs`）；单条出参不给，照旧逐条查。"""
+    if refs is None:
+        program = db.get(DiseaseProgram, enrollment.program_id)
+        records = db.query(DiseasePathRecord).filter(DiseasePathRecord.enrollment_id == enrollment.id).all()
+    else:
+        program, records = refs[0].get(enrollment.program_id), refs[1].get(enrollment.id, [])
     nodes = (program.path_nodes or []) if program else []
-    done = {
-        r.node_key
-        for r in db.query(DiseasePathRecord)
-        .filter(DiseasePathRecord.enrollment_id == enrollment.id)
-        .all()
-    }
+    done = {r.node_key for r in records}
     required = [n for n in nodes if n.get("required", True)]
     required_done = [n for n in required if n["key"] in done]
     return {
@@ -457,13 +472,17 @@ def _completion(enrollment: DiseaseEnrollment, db: Session) -> dict:
     }
 
 
-def _enrollment_out(enrollment: DiseaseEnrollment, db: Session) -> dict:
-    records = (
-        db.query(DiseasePathRecord)
-        .filter(DiseasePathRecord.enrollment_id == enrollment.id)
-        .order_by(DiseasePathRecord.id)
-        .all()
-    )
+def _enrollment_out(enrollment: DiseaseEnrollment, db: Session, refs: tuple[dict, dict] | None = None) -> dict:
+    """`refs` 同 `_completion`（P2-1157）。"""
+    if refs is None:
+        records = (
+            db.query(DiseasePathRecord)
+            .filter(DiseasePathRecord.enrollment_id == enrollment.id)
+            .order_by(DiseasePathRecord.id)
+            .all()
+        )
+    else:
+        records = refs[1].get(enrollment.id, [])
     return {
         "id": enrollment.id,
         "program_id": enrollment.program_id,
@@ -477,7 +496,7 @@ def _enrollment_out(enrollment: DiseaseEnrollment, db: Session) -> dict:
         "outcome_name": OUTCOMES.get(enrollment.outcome, "未评价"),
         "outcome_note": enrollment.outcome_note,
         "exit_reason": enrollment.exit_reason,
-        "completion": _completion(enrollment, db),
+        "completion": _completion(enrollment, db, refs),
         "records": [
             {"node_key": r.node_key, "performed_at": r.performed_at,
              "operator_name": r.operator_name, "result": r.result, "note": r.note}

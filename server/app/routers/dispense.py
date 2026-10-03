@@ -97,14 +97,31 @@ def _required_quantity(daily_dose: float, days: int) -> int:
     return max(1, math.ceil(round(daily_dose * days, 6)))
 
 
-def _dispense_out(db: Session, record: DispenseRecord) -> dict:
-    items = (
-        db.query(DispenseItem, DrugBatch)
-        .join(DrugBatch, DispenseItem.batch_id == DrugBatch.id)
-        .filter(DispenseItem.dispense_id == record.id)
-        .order_by(DispenseItem.id)
-        .all()
-    )
+def _dispense_items(db: Session, records: list[DispenseRecord]) -> dict[int, list]:
+    """一页发药记录的明细（连同批号），按页一次 IN 取齐、按记录分好（P2-1157）：清单原先逐条记录再查一次明细。
+    先按明细编号排好再分，每条记录内的先后与逐条查时一样。"""
+    grouped: dict[int, list] = {}
+    if records:
+        for row in (
+            db.query(DispenseItem, DrugBatch)
+            .join(DrugBatch, DispenseItem.batch_id == DrugBatch.id)
+            .filter(DispenseItem.dispense_id.in_([r.id for r in records]))
+            .order_by(DispenseItem.id)
+        ):
+            grouped.setdefault(row[0].dispense_id, []).append(row)
+    return grouped
+
+
+def _dispense_out(db: Session, record: DispenseRecord, items: list | None = None) -> dict:
+    """`items` 是清单按页取齐的这条记录的明细（`_dispense_items`）；单条出参不给，照旧现查。"""
+    if items is None:
+        items = (
+            db.query(DispenseItem, DrugBatch)
+            .join(DrugBatch, DispenseItem.batch_id == DrugBatch.id)
+            .filter(DispenseItem.dispense_id == record.id)
+            .order_by(DispenseItem.id)
+            .all()
+        )
     return {
         "id": record.id,
         "prescription_id": record.prescription_id,
@@ -335,7 +352,8 @@ def list_dispenses(
     if status:
         q = q.filter(DispenseRecord.status == status)
     rows = paginate(q.order_by(DispenseRecord.id.desc()), response, offset, limit)
-    return [_dispense_out(db, r) for r in rows]
+    items = _dispense_items(db, rows)
+    return [_dispense_out(db, r, items.get(r.id, [])) for r in rows]
 
 
 @router.post(
