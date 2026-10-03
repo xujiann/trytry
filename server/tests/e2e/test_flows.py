@@ -4936,6 +4936,43 @@ def test_审方规则的改动记录在规则表上查得到(page, base_url):
     expect(box.locator("tr", has_text="新建")).to_contain_text("平台管理员")
 
 
+def test_集中审方页开方可开多行_同方相互作用转药师审(page, base_url, seed):
+    """P2-1214（第三十五批扫描 T4-5）：开方表单原先只有一组药品框（面板标题「开方（单药演示）」），一张方只开得出一味药，
+    同方相互作用、同方重复两条审方规则在页面上永远触发不到。改成可增删的多行明细：「添加一行」加一行、「删除本行」删自己
+    那行，只剩一行时不摆删除；提交送出全部行，天数留空不送（后端缺省 1）。华法林 B01AA03 的种子规则把布洛芬 M01AE01
+    列为相互作用药，两行开进同一张方即转药师审。"""
+    _login(page, base_url)
+    _open_page(page, "rx", "集中审方")
+    form = page.locator("#rx-form")
+    rows = form.locator(".rx-item")
+    expect(rows).to_have_count(1)
+    expect(rows.nth(0).locator("[data-rxdelrow]")).to_be_hidden()   # 只剩一行：不摆「删除本行」
+    form.locator('[name="patient_id"]').fill(str(seed["patient"]["id"]))
+    form.locator('[name="org_id"]').fill(str(seed["org"]["id"]))
+    form.locator('[name="diagnosis_name"]').fill("E2E心房颤动;腰痛")
+    form.locator("#rx-add-item").click()
+    form.locator("#rx-add-item").click()
+    expect(rows).to_have_count(3)
+    expect(rows.nth(0).locator("[data-rxdelrow]")).to_be_visible()
+    for i, (code, name, dose) in enumerate((
+            ("B01AA03", "华法林", "3"), ("M01AE01", "布洛芬", "1200"), ("E2E-EXTRA", "E2E多加的一行", "1"))):
+        rows.nth(i).locator('[name="drug_code"]').fill(code)
+        rows.nth(i).locator('[name="drug_name"]').fill(name)
+        rows.nth(i).locator('[name="daily_dose"]').fill(dose)
+    rows.nth(1).locator('[name="days"]').fill("")                    # 天数留空：不送，后端缺省 1
+    rows.nth(2).locator("[data-rxdelrow]").click()                   # 多加的一行删掉
+    expect(rows).to_have_count(2)
+    expect(rows.nth(1).locator('[name="drug_code"]')).to_have_value("M01AE01")
+    _submit(page, '#rx-form button:has-text("提交处方")')
+    msg = page.locator("#rx-msg")
+    expect(msg).to_contain_text("转入药师审核")
+    expect(msg).to_contain_text("药物相互作用：华法林 与 布洛芬")           # 修前页面只开得出一味，两张各自系统审通过
+    made = page.evaluate("""async () => (await api('/api/prescriptions?limit=200'))
+      .filter((p) => p.diagnosis_name === 'E2E心房颤动;腰痛')""")
+    assert [(p["status"], [(i["drug_code"], i["days"]) for i in p["items"]]) for p in made] == [
+        ("pending_review", [("B01AA03", 7), ("M01AE01", 1)])], made
+
+
 @pytest.fixture(scope="session")
 def consult_seed(base_url, seed):
     """一条待回复的续方咨询，以及同一患者一张已自动通过审方的处方（续方要关联它）。"""

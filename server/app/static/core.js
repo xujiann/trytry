@@ -1714,6 +1714,27 @@ async function renderReferrals() {
 // 与本页其余状态列同一种写法（别在表格里直接写三元的中文）
 const RULE_STATUS = { on: ["生效中", "green"], off: ["已停用", "red"] };
 
+// 开方明细的一行（P2-1214）：原先表单只有一组药品框、一张方只开得出一味药——接口本来收多行（`PrescriptionCreate.items`
+// 是列表），没有 HIS 的村卫生室只能在这一页开方，会相互作用的两味药只能分两张开，而系统审不跨方比，同方相互作用、
+// 同方重复两条审方规则在页面上永远触发不到。写法照规则编辑器（pages-spd.js `spdRuleEditor`）：一行一个 div，「添加一行」
+// 往后插、「删除本行」删自己那行，提交时逐行取值。按钮写明 type="button"：缺省是提交按钮，在框里按回车会先「点」到它
+const RX_ITEM_ROW = `<div class="rx-item" style="display:flex;gap:8px;margin:4px 0;flex-wrap:wrap;align-items:center">
+  <input name="drug_code" placeholder="药品编码" required>
+  <input name="drug_name" placeholder="药品名称" required>
+  <input name="daily_dose" type="number" step="any" placeholder="日剂量" required>
+  <input name="days" type="number" value="7" min="1" placeholder="天数" style="min-width:70px">
+  <button type="button" class="btn secondary" data-rxdelrow>删除本行</button></div>`;
+
+/** 开方明细逐行取值（P2-1214）：表单上有几行就送几项。 */
+function rxItems(form) {
+  return [...form.querySelectorAll(".rx-item")].map((row) => {
+    const v = (name) => row.querySelector(`[name="${name}"]`).value;
+    return { drug_code: v("drug_code"), drug_name: v("drug_name"), daily_dose: Number(v("daily_dose")),
+      // 同上：清空 `days` 送 0，后端 `Field(default=1, ge=1)` 直接 422。
+      ...(v("days") ? { days: Number(v("days")) } : {}) };
+  });
+}
+
 async function renderRx() {
   $("#page-desc").textContent = "“系统+药师”双重审方，每方必审；事后处方点评（药师）与合理率监管";
   const [recent, pending, rules, cstats, creviews] = await Promise.all([
@@ -1731,15 +1752,13 @@ async function renderRx() {
   const canRule = currentRole() === "admin";
   const commented = new Set(creviews.map((c) => c.prescription_id));
   $("#page-body").innerHTML = `
-    ${panel("开方（单药演示）", `
+    ${panel("开方", `
       <form class="inline" id="rx-form">
         <input name="patient_id" type="number" placeholder="患者ID" required>
         <input name="org_id" type="number" placeholder="机构ID" required>
         <input name="diagnosis_name" placeholder="诊断">
-        <input name="drug_code" placeholder="药品编码" required>
-        <input name="drug_name" placeholder="药品名称" required>
-        <input name="daily_dose" type="number" step="any" placeholder="日剂量" required>
-        <input name="days" type="number" value="7" min="1" style="min-width:70px">
+        <div id="rx-items" style="flex-basis:100%">${RX_ITEM_ROW}</div>
+        <button type="button" class="btn secondary" id="rx-add-item">添加一行</button>
         <button>提交处方</button>
       </form><p class="msg" id="rx-msg"></p>`)}
     ${panel("用药规则库", `
@@ -1791,17 +1810,27 @@ async function renderRx() {
         `<tr><td>${c.prescription_id}</td>
          <td><span class="tag ${c.grade === "reasonable" ? "green" : "red"}">${c.grade === "reasonable" ? "合理" : "不合理"}</span></td>
          <td>${esc(c.issues) || "—"}</td><td>${esc(c.comment) || "—"}</td><td>${esc(c.at.slice(0, 16).replace("T", " "))}</td></tr>`)}`)}`;
+  // 「添加一行」「删除本行」（P2-1214）：只剩一行时不摆「删除本行」——处方至少一味药（后端 `items` 至少一项），
+  // 删空了这张方交不出去（用不了的按钮不摆，同问卷异常规则编辑器的「添加」）
+  const rxRows = $("#rx-items");
+  const syncRxDel = () => {
+    const dels = rxRows.querySelectorAll("[data-rxdelrow]");
+    dels.forEach((b) => { b.style.display = dels.length > 1 ? "" : "none"; });
+  };
+  syncRxDel();
+  $("#rx-add-item").onclick = () => { rxRows.insertAdjacentHTML("beforeend", RX_ITEM_ROW); syncRxDel(); };
+  rxRows.onclick = (e) => {
+    if (e.target.dataset.rxdelrow === undefined || rxRows.children.length < 2) return;
+    e.target.closest(".rx-item").remove();
+    syncRxDel();
+  };
   $("#rx-form").onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
     try {
       const p = await api("/api/prescriptions", { method: "POST", body: JSON.stringify({
         patient_id: Number(f.get("patient_id")), org_id: Number(f.get("org_id")),
-        diagnosis_name: f.get("diagnosis_name"),
-        items: [{ drug_code: f.get("drug_code"), drug_name: f.get("drug_name"),
-          // 同上：清空 `days` 送 0，后端 `Field(default=1, ge=1)` 直接 422。
-          daily_dose: Number(f.get("daily_dose")),
-          ...(f.get("days") ? { days: Number(f.get("days")) } : {}) }] }) });
+        diagnosis_name: f.get("diagnosis_name"), items: rxItems(e.target) }) });
       const base = p.status === "auto_passed" ? "系统审通过" : `转入药师审核：${p.review_comment}`;
       // 块2：肝肾功能提示为非拦截提醒，附在审方结论之后
       const tips = (p.advisories || []).length ? `｜${p.advisories.join("；")}` : "";
