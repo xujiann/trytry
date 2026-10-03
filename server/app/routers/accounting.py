@@ -14,6 +14,7 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from ..concurrency import move_row
 from ..numtypes import MONEY_MAX, MoneyFloat
 from ..texttypes import NON_BLANK
 from ..visibility import (
@@ -391,9 +392,14 @@ def post_voucher(voucher_id: int, db: Session = Depends(get_db), user: User = De
     assert_obj_org_writable(db, user, voucher)
     if voucher.status != "draft":
         raise HTTPException(status_code=409, detail=f"当前状态 {VOUCHER_STATUS_NAMES.get(voucher.status, voucher.status)} 不可过账")
-    voucher.status = "posted"
-    voucher.posted_by = user.id
-    voucher.posted_at = utcnow()
+    # 过账与「还是草稿」压进同一条 UPDATE（P2-1186，与作废 P2-522 同一个写法）：上面那道预检是锁外读的——与作废同时到，
+    # 作废带条件先提交，这里原先照旧整行写回「已过账」：已作废的凭证计进试算平衡，作废人与原因还挂在上面、详情却不再
+    # 显示（只有作废状态才出作废留痕），作废重录之后同一笔收入记了两遍
+    if not move_row(db, Voucher, voucher.id, Voucher.status == "draft",
+                    status="posted", posted_by=user.id, posted_at=utcnow()):
+        db.rollback()
+        db.refresh(voucher)  # 抢输了就按库里的现状措辞
+        raise HTTPException(status_code=409, detail=f"当前状态 {VOUCHER_STATUS_NAMES.get(voucher.status, voucher.status)} 不可过账")
     db.commit()
     return {"id": voucher.id, "status": voucher.status}
 
