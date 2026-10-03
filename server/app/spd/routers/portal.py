@@ -6,6 +6,7 @@
 居民端的每个接口都必须经 `accessible_patient` 解析"这次要看谁的档案"，
 包括为家人代管的那份。
 """
+from contextlib import nullcontext
 from datetime import timedelta
 from typing import Any
 
@@ -1621,42 +1622,47 @@ def start_consult(
         )
         .first()
     )
-    if consult is None:
-        # 会话派给这个病种档案的主管医生，在管的那份优先（P2-299）：原先按「患者 + 病种」不排序取第一条，结案后重新
-        # 纳管的患者取到的是早先那份已结案档案——咨询派给了当年的医生。与其余挂档案的业务同一个取法
-        enrollment = enrollment_for(db, patient.id, body.program_code)[1] if body.program_code else None
-        consult = SpdConsult(
-            patient_id=patient.id, program_code=body.program_code,
-            # 主管医生已停用的不派给他（第十五批 S1-1）：落成空，本机构医护在会话清单里照样看得见、接得起。角色回复不了咨询
-            # 的同样（第二十二批 X3-1）：改成了经办 / 公卫 / 药师的，派给他回复 403
-            doctor_id=usable_or_none(db, enrollment.doctor_user_id, roles=CONSULT_ROLES) if enrollment else None,
-            status="open",
-        )
-        if not insert_if_absent(db, consult):
-            # 并发抢输：另一路刚建出同病种的开放会话（撞 uq_spd_consult_open_patient_program）。
-            # 与顺序第二次请求同一语义——复用那条，不新开也不 409，本条消息照样落进去；
-            # 否则两条线程各显一半消息，医生列表与工作台也会各看到两条会话。
-            opened = (
-                db.query(SpdConsult)
-                .filter(
-                    SpdConsult.patient_id == patient.id,
-                    SpdConsult.program_code == body.program_code,
-                    SpdConsult.status == "open",
-                )
-                .first()
+    # 追加与医生「结束咨询」用同一把会话行锁、锁里按列复核仍开放（P2-1180）：上面查开放会话是锁外读的，读到之后医生刚结束
+    # 并提交，原先这条追问照旧落进已结束的会话——医生的开放清单里没有它，没人看到。已结束的与顺序发生时一样，新开一条承接
+    with serialized_on(db, SpdConsult, consult.id) if consult is not None else nullcontext():
+        if consult is not None and db.query(SpdConsult.status).filter(SpdConsult.id == consult.id).scalar() != "open":
+            consult = None
+        if consult is None:
+            # 会话派给这个病种档案的主管医生，在管的那份优先（P2-299）：原先按「患者 + 病种」不排序取第一条，结案后重新
+            # 纳管的患者取到的是早先那份已结案档案——咨询派给了当年的医生。与其余挂档案的业务同一个取法
+            enrollment = enrollment_for(db, patient.id, body.program_code)[1] if body.program_code else None
+            consult = SpdConsult(
+                patient_id=patient.id, program_code=body.program_code,
+                # 主管医生已停用的不派给他（第十五批 S1-1）：落成空，本机构医护在会话清单里照样看得见、接得起。角色回复不了
+                # 咨询的同样（第二十二批 X3-1）：改成了经办 / 公卫 / 药师的，派给他回复 403
+                doctor_id=usable_or_none(db, enrollment.doctor_user_id, roles=CONSULT_ROLES) if enrollment else None,
+                status="open",
             )
-            if opened is None:
-                # 病态窗口：赢家刚提交、医生又立刻把会话关了。抛之前先退事务——
-                # SAVEPOINT 回滚只退掉那一行，外层写事务还开着（见 insert_if_absent 文档）
-                db.rollback()
-            consult = ensure_present(opened, "开放咨询会话")
-    db.add(
-        SpdConsultMessage(
-            consult_id=consult.id, sender="patient", sender_id=account.id,
-            content=body.content,
+            if not insert_if_absent(db, consult):
+                # 并发抢输：另一路刚建出同病种的开放会话（撞 uq_spd_consult_open_patient_program）。
+                # 与顺序第二次请求同一语义——复用那条，不新开也不 409，本条消息照样落进去；
+                # 否则两条线程各显一半消息，医生列表与工作台也会各看到两条会话。
+                opened = (
+                    db.query(SpdConsult)
+                    .filter(
+                        SpdConsult.patient_id == patient.id,
+                        SpdConsult.program_code == body.program_code,
+                        SpdConsult.status == "open",
+                    )
+                    .first()
+                )
+                if opened is None:
+                    # 病态窗口：赢家刚提交、医生又立刻把会话关了。抛之前先退事务——
+                    # SAVEPOINT 回滚只退掉那一行，外层写事务还开着（见 insert_if_absent 文档）
+                    db.rollback()
+                consult = ensure_present(opened, "开放咨询会话")
+        db.add(
+            SpdConsultMessage(
+                consult_id=consult.id, sender="patient", sender_id=account.id,
+                content=body.content,
+            )
         )
-    )
-    db.commit()
+        db.commit()
     return {"consult_id": consult.id, "status": consult.status}
 
 
