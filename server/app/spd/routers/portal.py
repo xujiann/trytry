@@ -335,6 +335,12 @@ class SpdArchiveOut(BaseModel):
     timeline: list[SpdTimelineItemOut]
 
 
+#: 全周期档案时间线的条数上限：就诊与随访两源各取这么多，合并、排序之后再截（P2-1183）。原先先各自截（就诊 30、随访 20）
+#: 再合并，就诊多的居民第 31 次以后的就诊没进来、紧接着的是更早的随访，时间线中间静默断档——平台居民端两个聚合接口的口径是
+#: 「条数上限是合并之后才截的」
+ARCHIVE_TIMELINE_LIMIT = 50
+
+
 @router.get("/archive", response_model=SpdArchiveOut)
 def archive(
     patient_id: int | None = None,
@@ -350,11 +356,11 @@ def archive(
     encounters = (
         db.query(Encounter)
         .filter(Encounter.patient_id == patient.id)
-        .order_by(Encounter.created_at.desc(), Encounter.id.desc())   # 按就诊时刻取最近 30 次（P2-846）
-        .limit(30)
+        .order_by(Encounter.created_at.desc(), Encounter.id.desc())   # 按就诊时刻取最近的（P2-846）
+        .limit(ARCHIVE_TIMELINE_LIMIT)
         .all()
     )
-    # 按执行日期取最近 20 次，与医护端「历史随访」同一个取法（P2-691）：编号是建计划时成批给的，不是执行先后
+    # 按执行日期取最近的，与医护端「历史随访」同一个取法（P2-691）：编号是建计划时成批给的，不是执行先后
     followups = (
         db.query(SpdFollowupRecord)
         .filter(
@@ -362,7 +368,7 @@ def archive(
             SpdFollowupRecord.status == "done",
         )
         .order_by(SpdFollowupRecord.executed_at.desc(), SpdFollowupRecord.id.desc())
-        .limit(20)
+        .limit(ARCHIVE_TIMELINE_LIMIT)
         .all()
     )
     timeline = [
@@ -387,7 +393,7 @@ def archive(
              "complications": e.complications or [], "tags": e.tags or []}
             for e in enrollments
         ],
-        "timeline": timeline[:50],
+        "timeline": timeline[:ARCHIVE_TIMELINE_LIMIT],
     }
 
 

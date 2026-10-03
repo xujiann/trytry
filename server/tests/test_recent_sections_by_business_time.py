@@ -18,7 +18,7 @@ from app.database import SessionLocal
 from app.models import Admission, Bed, Encounter, Prescription, Settlement, SmsCode, User, Ward
 
 B = "/api/spd"
-IMPORTED = 55   # 比每段上限（360 / 居民端 50、慢专病档案 30、随访前置资料 10 / 5）都多
+IMPORTED = 55   # 比每段上限（360 / 居民端 50、慢专病档案 50（P2-1183 前是 30）、随访前置资料 10 / 5）都多
 
 
 def _old(k: int) -> datetime:
