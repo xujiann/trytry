@@ -1474,6 +1474,12 @@ async function renderExams() {
         actions += ` <button class="btn secondary" data-printreport="${esc(r.report_id)}">打印报告</button>`
           + ` <button class="btn secondary" data-revs="${esc(r.report_id)}">修订史</button>`;
       }
+      // 互认单不另出报告，依据的是源申请单那份（P2-1200）：原先这一行既打不开依据的报告、也查不了它的修订史——
+      // 源报告事后被修订，互认方无从得知改了什么
+      if (r.recognized_report_id) {
+        actions += ` <button class="btn secondary" data-printreport="${esc(r.recognized_report_id)}">查看依据报告</button>`
+          + ` <button class="btn secondary" data-revs="${esc(r.recognized_report_id)}">依据报告修订史</button>`;
+      }
       // 样本物流只有检验类有，且只在出报告前走（后端两处分别 422 / 409）；已核收即到头
       const flow = r.center_type === "lab" && ["pending", "diagnosing"].includes(r.status)
         && SAMPLE_NEXT[r.sample_status || ""]

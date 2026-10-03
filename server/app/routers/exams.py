@@ -320,10 +320,15 @@ def list_requests(
         query = query.filter(ExamRequest.status == status)
     rows = paginate(query.order_by(ExamRequest.id.desc()), response, offset, limit)
     # 带上报告号（第十六批 T1-6）：报告打印、附件、修订史都按报告号取，清单原先只给申请单号——两套编号各自递增、
-    # 先出报告的未必是先开的单，照着申请单号填进「报告ID」打出来的是别人的报告
+    # 先出报告的未必是先开的单，照着申请单号填进「报告ID」打出来的是别人的报告。
+    # 互认单另给依据那份报告的报告号（P2-1200）：互认不另出报告，本单的 report_id 恒空，页面按报告号摆的「打印报告 /
+    # 修订史」在互认方那一行一个都没有——依据的报告事后被修订了也无从查起。report_id 仍只是本单自己的报告，语义不变
+    wanted = {r.id for r in rows} | {r.recognized_from_id for r in rows if r.recognized_from_id is not None}
     report_of = row_dict(db.query(ExamReport.request_id, ExamReport.id)
-                         .filter(ExamReport.request_id.in_([r.id for r in rows] or [0])).all())
-    return [{**ExamRequestOut.model_validate(r).model_dump(), "report_id": report_of.get(r.id)} for r in rows]
+                         .filter(ExamReport.request_id.in_(sorted(wanted) or [0])).all())
+    return [{**ExamRequestOut.model_validate(r).model_dump(), "report_id": report_of.get(r.id),
+             "recognized_report_id": report_of.get(r.recognized_from_id) if r.recognized_from_id is not None else None}
+            for r in rows]
 
 
 @router.post(

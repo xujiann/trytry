@@ -399,6 +399,11 @@ def print_exam_request(
         f'<tr><td class="k">检查类别</td><td>{_esc(CENTER_NAMES.get(request.center_type, request.center_type))}</td>'
         f'<td class="k">当前状态</td><td>{_esc(EXAM_REQUEST_STATUS_NAMES.get(request.status, request.status))}</td></tr>'
     )
+    if request.recognized_from_id is not None:
+        # 互认单写明依据的是哪一张（P2-1200）：互认不另出报告，打印件原先只印「已互认」，看不出依据的是哪份报告。
+        # 编号与源申请单打印件的单据编号同一写法；不是互认单的打印件一个字节不变
+        meta += (f'<tr><td class="k">互认依据</td>'
+                 f'<td colspan="3">互认自 SQ{request.recognized_from_id:08d}</td></tr>')
     body = f"""
   <div class="section"><h3>申请项目</h3>
     <table class="items"><thead><tr><th>项目编码</th><th>项目名称</th><th>样本状态</th></tr></thead>

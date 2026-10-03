@@ -436,6 +436,11 @@ def test_开单前互认在页内表单里选_取消即不开单(page, base_url,
     _redrawn(page, lambda: _spd_modal(page, {"decision": "accept"}))
     accepted = orders()[-1]
     assert accepted["status"] == "recognized" and accepted["recognized_from_id"] == source_id, accepted
+    # 互认单那一行打得开依据的报告（P2-1200）：互认不另出报告，修前这一行一个报告按钮都没有
+    with page.expect_popup() as popup:
+        page.locator("tr", has_text="已互认").filter(has_text="E2E互认血常规").locator(
+            "button", has_text="查看依据报告").click()
+    expect(popup.value.locator("body")).to_contain_text("E2E互认源报告：血常规未见异常")
 
 
 @pytest.fixture(scope="session")
