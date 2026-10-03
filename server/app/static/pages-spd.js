@@ -972,10 +972,13 @@ function spdProfileHtml(p) {
   const pt = p.patient || {};
   const programs = (p.programs || []).map((g) => {
     const e = g.enrollment || {};
+    // 下次随访只给在管的档案印（P2-1199，与居民端 P2-973 同一口径）：结案、迁出、死亡时档案这一列不清，原先不看状态照印，
+    // 已登记死亡的卡片上还写着「下次随访 2026-12-29」
+    const nextFollowup = e.status === "active" ? ` · 下次随访 ${esc(e.next_followup_at || "—")}` : "";
     return `<div style="margin:8px 0;padding:8px;border:1px solid #e5e7eb;border-radius:6px">
       <b>${esc(g.program_name || e.program_code || "")}</b>
       ${spdTag(SPD_RISK, e.risk_level)} <span class="tag">${esc(SPD_ENROLL_STATUS[e.status] || e.status || "")}</span>
-      阶段 ${esc(e.stage || "—")} · 待办 ${g.open_tasks ?? 0} · 下次随访 ${esc(e.next_followup_at || "—")}
+      阶段 ${esc(e.stage || "—")} · 待办 ${g.open_tasks ?? 0}${nextFollowup}
       <div class="desc">路径：${(g.paths || []).map((i) =>
         `#${i.id} ${esc(i.template_code)} ${esc(i.current_node_key || "—")} ${i.progress}%`).join("；") || "—"}</div>
       <div class="desc">服务包：${(g.packages || []).map((b) =>

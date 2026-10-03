@@ -2329,8 +2329,13 @@ def patient_profile(
             .filter(SpdTask.enrollment_id == enrollment.id, SpdTask.status.in_(TASK_OPEN_STATUSES))
             .count()
         )
+        card = _enroll_out(enrollment)
+        if enrollment.status != "active":
+            # 下次随访只给在管的（P2-1199）：与居民端聚合（`service.enrollment_feed`，P2-973）同一口径——结案、迁出、死亡时
+            # 档案这一列不清，原样给，已登记死亡的卡片上照挂一个早已作废的「下次随访」。只改出参，库里那一列不动
+            card["next_followup_at"] = ""
         programs.append({
-            "enrollment": _enroll_out(enrollment),
+            "enrollment": card,
             "program_name": program_names.get(enrollment.program_code, enrollment.program_code),
             "paths": [
                 {"id": i.id, "template_code": i.template_code, "status": i.status,
