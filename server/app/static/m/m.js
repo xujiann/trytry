@@ -71,10 +71,9 @@ async function authApi(path, options = {}) {
     // 现在 api() 会把 `status` 挂在错误上，这里只认它：后端新增任何一种 401
     // 都自动覆盖，改文案也不影响。管理端 core.js:35 与医生端 doctor.js:30
     // 本来就是先判 `resp.status === 401`——这次是把居民端这个异类拉齐。
-    if (err.status === 401) {
-      clearAuth();
-      renderArchiveTab();
-    }
+    // 掉线与点「退出」走同一段（P2-1219）：原先这里只重画档案页，后台 5 分钟一次的红点轮询碰上会话过期，
+    // 别的登录态页签（慢专病的本人档案）照旧挂在屏幕上
+    if (err.status === 401) signOutLocally();
     throw err;
   }
 }
@@ -270,14 +269,23 @@ $("#btn-logout").addEventListener("click", async () => {
   } catch (err) {
     // 令牌本就失效时忽略，本地照样退出
   }
+  signOutLocally();
+});
+
+/* 退出与掉线（authApi 的 401）共用这一段：清本地登录态，五个登录态页签一起按未登录重画（P2-1219）。原先退出只重画了档案、
+ * 服务、问卷、通知四个，漏了慢专病——在「慢专病」页签点退出，已登录标记清了、退出按钮藏了，#spd-body 照旧显示本人的姓名、
+ * 卡号、电话、诊断，登录引导反而藏着。慢专病结果区一并清空：本人档案不只是藏起来，也不留在页面里。 */
+function signOutLocally() {
   clearAuth();
   viewingPatientId = null;
   renderArchiveTab();
   renderServiceTab();
   renderSurveyTab();
   renderNotifyTab();
+  $("#spd-result").innerHTML = "";
+  renderSpdTab();
   refreshNotifyDot();
-});
+}
 
 /* ---------------- 我的档案 ---------------- */
 

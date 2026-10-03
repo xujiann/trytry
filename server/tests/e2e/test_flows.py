@@ -5533,6 +5533,38 @@ def test_居民端退回重做的任务_卡片上能重新填报提交(page, bas
     assert (detail["status"], detail["result"]) == ("submitted", {"note": "已补齐 7 天血压"}), detail
 
 
+def test_居民端在慢专病页签退出或掉线_本人档案不留在屏幕上(page, base_url, admin_call):
+    """P2-1219（第三十五批扫描 T1-5）：居民端退出原先重画了档案、服务、问卷、通知四个登录态页签，漏了慢专病——在「慢专病」
+    页签点退出，已登录标记已清，#spd-body 照旧显示本人的姓名、卡号、电话、诊断，登录引导反而藏着；authApi 的 401 分支只重画
+    档案页，后台红点轮询碰上会话过期同样留着。修后两条路走同一段：五个页签一起重画，慢专病结果区清空、登录引导露出来。
+
+    两位居民各用一个手机号：验证码单号冷却 60 秒，同一个号紧挨着登两次收不到码。"""
+    leaver = {"name": "退出E2E居民", "id_card": "320981196802183013", "phone": "13788990121"}
+    expired = {"name": "掉线E2E居民", "id_card": "320981196903194029", "phone": "13788990122"}
+    admin_call("POST", "/api/patients", {**leaver, "gender": "男", "birth_date": "1968-02-18"})
+    admin_call("POST", "/api/patients", {**expired, "gender": "女", "birth_date": "1969-03-19"})
+
+    def open_spd_archive(person):
+        _resident_login(page, base_url, person)
+        page.click('[data-tab="spd"]')
+        page.click('[data-spd="archive"]')
+        expect(page.locator("#spd-result")).to_contain_text(person["name"])
+
+    def signed_out():
+        expect(page.locator("#spd-guard")).to_be_visible()   # 修前登录引导藏着
+        expect(page.locator("#spd-body")).to_be_hidden()   # 修前照旧显示
+        expect(page.locator("#spd-result")).to_have_text("")
+
+    open_spd_archive(leaver)
+    page.click("#btn-logout")
+    signed_out()
+    # 掉线：会话 Cookie 没了，后台 5 分钟一次的红点轮询碰上 401
+    open_spd_archive(expired)
+    page.context.clear_cookies()
+    page.evaluate("refreshNotifyDot()")
+    signed_out()
+
+
 def test_spd_doctor_mobile_todo_and_referral(page, base_url, spd_seed):
     """医生移动端：登录 → 慢专病待办接收 → 转诊复核通过（prompt 应答意见）。
 
