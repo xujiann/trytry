@@ -136,8 +136,9 @@ def overdue(world):
     old = utcnow() - timedelta(hours=100)
     with SessionLocal() as db:
         creator = db.query(User).filter(User.username == "admin").one().id
+        # 状态用状态机里的「待卫生院审核」：原先写的 pending 不是转诊单的状态，超时预警只数审核环节之后（P2-1192）就不算了
         db.execute(insert(SpdReferralCase), [
-            {"patient_id": world["patient"], "program_code": "p6_hyp", "direction": "up", "status": "pending",
+            {"patient_id": world["patient"], "program_code": "p6_hyp", "direction": "up", "status": "submitted",
              "reason": "分页第六批", "initiator_org_id": world["org"], "current_org_id": world["org"],
              "current_level": "county", "created_by": creator, "created_at": old}
             for _ in range(5)

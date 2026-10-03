@@ -545,6 +545,13 @@ def referral_ends(db: Session, cases: list[SpdReferralCase]) -> dict[int, tuple[
     }
 
 
+#: 转诊「审核环节」的状态：待卫生院审核（含收敛前存量的服务站已复核）、待县级医院接收——即 `routers/referral.py` 状态机
+#: `_NEXT` 的键（`tests/test_spd_referral_review_overdue.py` 钉住两边同一组）。「转诊审核超时」只数这几态（P2-1192）：
+#: 转诊页的超时预警与医生移动端「超时督办」原先按「不是终态」数，已接收待到院、已到院、已下转的都算超时——到院之后的
+#: 下一步是「病情稳定再下转」，没有 48 小时时限，住得越久越排在前面，真卡在审核上的被挤到后面
+REFERRAL_REVIEW_STATUSES = ("submitted", "station_reviewed", "township_reviewed")
+
+
 def referral_last_moved_at():
     """转诊单最近一次推进的时刻：最后一条环节轨迹的时间（发起也写一条）；没有轨迹的存量单退回建单时间。
 

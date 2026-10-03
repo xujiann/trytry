@@ -41,8 +41,8 @@ from ..models import (
     SpdReferralStep,
 )
 from ..rules import RuleError, evaluate, validate_conditions
-from ..service import (REFERRAL_ACCEPT_STEP, REFERRAL_ACTION_NAMES, REFERRAL_DOWN_STEP, award_points, build_facts, enrollment_for,
-                       referral_last_moved_at, spawn_task, unknown_code, unknown_program)
+from ..service import (REFERRAL_ACCEPT_STEP, REFERRAL_ACTION_NAMES, REFERRAL_DOWN_STEP, REFERRAL_REVIEW_STATUSES, award_points,
+                       build_facts, enrollment_for, referral_last_moved_at, spawn_task, unknown_code, unknown_program)
 from ...visibility import GLOBAL_ROLES, assert_patient_visible, visible_org_ids
 
 router = APIRouter(
@@ -967,9 +967,10 @@ def referral_alerts(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """转诊审核超时预警（医生移动端 #19）：超过 N 小时未推进的在途单。
+    """转诊审核超时预警（医生移动端 #19）：停在审核环节（待卫生院审核 / 待县级医院接收）超过 N 小时未推进的单子。
 
     「未推进」从最近一次推进（最后一条环节轨迹）起算，不是从建单起算（P2-140）。
+    只数审核环节（P2-1192）：原先按「不是终态」数，已接收 / 已到院 / 已下转的都算超时，见 `REFERRAL_REVIEW_STATUSES`。
     """
     # 阈值收在 1～720 小时；回执与页面标题「超过 N 小时未推进」写的是实际采用的阈值（P2-333）：原先按收紧后的值筛、
     # 回显原参数——带 hours=10000 筛的是 720 小时，标题却说「超过 10000 小时」
@@ -977,7 +978,7 @@ def referral_alerts(
     cutoff = now_naive() - timedelta(hours=threshold)
     last_moved = referral_last_moved_at()
     query = db.query(SpdReferralCase).filter(
-        SpdReferralCase.status.notin_(_TERMINAL),
+        SpdReferralCase.status.in_(REFERRAL_REVIEW_STATUSES),
         last_moved < cutoff,
     )
     orgs = visible_org_ids(db, user)
@@ -994,8 +995,10 @@ def referral_alerts(
     # 最久未推进的那些（与临期预警那两处相反，那边升序 + 只有上界才砍错了端）；
     # 其余的往后翻（P2-8 第六批）。`count` 与 `X-Total-Count` 是同一次计数。
     rows = paginate(query.order_by(last_moved, SpdReferralCase.id), response, offset, limit)
+    # 患者按页一次 IN 取齐（P2-1192 顺带，与转诊清单 P2-1157 同一写法）：原先逐行 `db.get`，一页 200 行 200 条 SQL
+    patients = rows_by_id(db, Patient, (r.patient_id for r in rows))
     return {
         "threshold_hours": threshold,
         "count": int(response.headers["X-Total-Count"]),
-        "items": [_case_out(db, r) for r in rows],
+        "items": [_case_out(db, r, patients=patients) for r in rows],
     }

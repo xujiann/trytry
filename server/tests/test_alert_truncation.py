@@ -63,9 +63,10 @@ def seeded(client, admin):
             for pid in pids
         ])
         old = utcnow() - timedelta(hours=200)
+        # 状态用状态机里的「待卫生院审核」：原先写的 pending 不是转诊单的状态，超时预警只数审核环节之后（P2-1192）就不算了
         db.execute(insert(SpdReferralCase), [
             {"patient_id": pids[0], "program_code": "al_hyp", "direction": "up",
-             "status": "pending", "reason": "预警用", "initiator_org_id": org["id"],
+             "status": "submitted", "reason": "预警用", "initiator_org_id": org["id"],
              "current_org_id": org["id"], "current_level": "township",
              "created_by": 1, "created_at": old}
             for _ in range(260)

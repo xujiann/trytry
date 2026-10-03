@@ -49,7 +49,7 @@ from ..models import (
     SpdVillageDoctor,
 )
 from ..reporting import latest_plan_period_scores, score_in_orgs
-from ..service import (FOLLOWUP_OPEN_STATUSES, MIGRATION_VOID_STATUSES, REVISIT_OPEN_STATUSES,
+from ..service import (FOLLOWUP_OPEN_STATUSES, MIGRATION_VOID_STATUSES, REFERRAL_REVIEW_STATUSES, REVISIT_OPEN_STATUSES,
                        TASK_OPEN_STATUSES, _age_of, candidate_undistributed,
                        followup_abnormal, followup_overdue, referral_last_moved_at, sweep_overdue_on_read,
                        task_overdue, task_unclaimed)
@@ -1382,7 +1382,7 @@ def doctor_mobile_workbench(
 
     my_tasks = _task_stats(db, orgs, assignee_id=user.id, today=business_day)
     referral_query = db.query(SpdReferralCase).filter(
-        SpdReferralCase.status.notin_(["closed", "rejected", "withdrawn"])
+        SpdReferralCase.status.in_(REFERRAL_REVIEW_STATUSES)
     )
     if orgs is not None:
         referral_query = referral_query.filter(
@@ -1450,7 +1450,8 @@ def doctor_mobile_workbench(
             "mine": db.query(SpdReferralCase).filter(
                 SpdReferralCase.initiator_id == user.id
             ).count(),
-            # 与转诊页的超时预警同一口径：48 小时没推进过（从最近一次推进起算，不是从建单起算——P2-140）
+            # 与转诊页的超时预警同一口径：停在审核环节、48 小时没推进过（从最近一次推进起算，不是从建单起算——P2-140）。
+            # 只数审核环节（P2-1192）：原先按「不是终态」数，已接收 / 已到院 / 已下转的都算超时督办
             "overdue": referral_query.filter(
                 referral_last_moved_at() < now_naive() - timedelta(hours=48)
             ).count(),
