@@ -80,6 +80,19 @@ class ExamRequest(Base):
 
 class ExamReport(Base):
     __tablename__ = "exam_reports"
+    __table_args__ = (
+        # 只收危急值的部分索引（P2-1156）：待办铃铛（每人每 30 s 一次）、驾驶舱、运营报表、危急值清单与催办的判据都是
+        # 「critical 为真 AND critical_status IN (…, '')」，而普通报告的 critical_status 缺省就是 ''，那一列的索引一条也
+        # 筛不掉。危急值在报告里是极少数，这个索引很小。判据要写成 `critical == true()`（SQLite 编译成 `critical = 1`、
+        # PG 编译成 `critical = true` 并规范成 `critical`）才用得上；`.is_(True)` 编译成 `IS 1` / `IS true`，两个库都
+        # 认不出它蕴含索引谓词（2026-09-30 在 SQLite 3.45 与 PG 16 上实测）。
+        Index(
+            "ix_exam_reports_critical",
+            "critical",
+            sqlite_where=text("critical = 1"),
+            postgresql_where=text("critical"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     request_id: Mapped[int] = mapped_column(

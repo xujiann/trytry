@@ -11,6 +11,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
+from sqlalchemy import true
 from sqlalchemy.orm import Session
 
 from ..database import get_db
@@ -94,9 +95,10 @@ def _stock_alerts(db: Session) -> dict:
 
 
 def _critical_reports(db: Session) -> dict:
-    # 未闭环危急值：notified/acknowledged（含存量迁移前空串），resolved 不再计入
+    # 未闭环危急值：notified/acknowledged（含存量迁移前空串），resolved 不再计入。
+    # `== true()` 而不是 `.is_(True)`：只有这么写才用得上危急值部分索引（P2-1156，见 `ExamReport` 的 __table_args__）
     query = db.query(ExamReport).filter(
-        ExamReport.critical.is_(True),
+        ExamReport.critical == true(),
         ExamReport.critical_status.in_(["notified", "acknowledged", ""]),
     )
     rows = query.order_by(ExamReport.id.desc()).limit(PREVIEW).all()
@@ -127,7 +129,7 @@ def _unacknowledged_critical(db: Session, user: User) -> dict:
         db.query(ExamReport)
         .join(ExamRequest, ExamRequest.id == ExamReport.request_id)
         .filter(
-            ExamReport.critical.is_(True), ExamReport.critical_status.in_(["notified", ""])
+            ExamReport.critical == true(), ExamReport.critical_status.in_(["notified", ""])   # 写法同上（P2-1156）
         )
     )
     orgs = visible_org_ids(db, user)

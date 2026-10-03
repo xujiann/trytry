@@ -13,7 +13,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import func
+from sqlalchemy import func, true
 from sqlalchemy.orm import Session
 
 from ..concurrency import ensure_present, insert_if_absent
@@ -536,7 +536,7 @@ def _record_context(db: Session, record: MedicalRecord) -> tuple[dict, dict]:
     has_critical = (
         db.query(ExamReport.id)
         .join(ExamRequest, ExamReport.request_id == ExamRequest.id)
-        .filter(ExamRequest.patient_id == patient_id, ExamReport.critical.is_(True))
+        .filter(ExamRequest.patient_id == patient_id, ExamReport.critical == true())   # 危急值判据同一写法（P2-1156）
         .first()
         is not None
     )

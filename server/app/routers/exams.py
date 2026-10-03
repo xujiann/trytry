@@ -4,7 +4,7 @@ from typing import cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import String, and_, case, func, update
+from sqlalchemy import String, and_, case, func, true, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -488,7 +488,7 @@ def list_critical_reports(db: Session = Depends(get_db)):
     「处置反馈」再也点不到，这条危急值永远闭不了环（与 P1-148 审方队列同一个形状）。"""
     return (
         db.query(ExamReport)
-        .filter(ExamReport.critical.is_(True))
+        .filter(ExamReport.critical == true())   # 不写 `.is_(True)`：那样用不上危急值部分索引（P2-1156）
         .order_by(case((ExamReport.critical_status == "resolved", 1), else_=0), ExamReport.id.desc())
         .limit(CRITICAL_LIST_LIMIT)
         .all()
@@ -626,7 +626,7 @@ def list_unacknowledged_critical(
     """
     # M-1 整改：存量危急报告（critical_status=''）同样计入催办清单
     query = db.query(ExamReport).filter(
-        ExamReport.critical.is_(True), ExamReport.critical_status.in_(["notified", ""])
+        ExamReport.critical == true(), ExamReport.critical_status.in_(["notified", ""])   # 写法同上（P2-1156）
     )
     candidates = query.all()
     # 超时从「最近一次通知」起算（第十五批 S3-2）：修订改判为危急值、或改了危急值报告的结论，闭环复位为「已通知」并重新

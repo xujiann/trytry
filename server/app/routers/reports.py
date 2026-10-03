@@ -12,7 +12,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy import func
+from sqlalchemy import func, true
 from sqlalchemy.orm import Session
 
 from ..clock import now_aware
@@ -119,7 +119,7 @@ def _monitoring_indicators(db: Session) -> list[dict]:
     critical_open = (
         db.query(func.count(ExamReport.id))
         .filter(
-            ExamReport.critical.is_(True),
+            ExamReport.critical == true(),   # 不写 `.is_(True)`：那样用不上危急值部分索引（P2-1156）
             ExamReport.critical_status.in_(["notified", "acknowledged", ""]),
         )
         .scalar()

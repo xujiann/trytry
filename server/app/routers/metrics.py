@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel
-from sqlalchemy import func
+from sqlalchemy import func, true
 from sqlalchemy.orm import Session
 
 from .. import clock
@@ -177,9 +177,9 @@ INFECTIOUS_WINDOW_DAYS = 7
 
 
 def q_critical_values(db: Session):
-    """未闭环危急值报告。"""
+    """未闭环危急值报告。`== true()` 而不是 `.is_(True)`：只有这么写才用得上危急值部分索引（P2-1156）。"""
     return db.query(ExamReport).filter(
-        ExamReport.critical.is_(True),
+        ExamReport.critical == true(),
         ExamReport.critical_status.in_(OPEN_CRITICAL_STATUSES),
     )
 

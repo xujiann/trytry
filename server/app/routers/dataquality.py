@@ -12,6 +12,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import inspect as sa_inspect
+from sqlalchemy import true
 from sqlalchemy.orm import Session
 
 from .. import clock
@@ -157,7 +158,7 @@ def _check_critical_closed_loop(db: Session, rule: QcRule, model) -> list[tuple[
     """危急值报告未走到处置反馈（critical_status != resolved）。"""
     rows = _scan(
         db.query(ExamReport.id, ExamReport.critical_status)
-        .filter(ExamReport.critical.is_(True), ExamReport.critical_status != "resolved"),
+        .filter(ExamReport.critical == true(), ExamReport.critical_status != "resolved"),   # 用得上危急值部分索引（P2-1156）
         ExamReport,
     )
     return [
