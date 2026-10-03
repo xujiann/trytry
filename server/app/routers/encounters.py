@@ -134,6 +134,9 @@ class ArchiveEncounter(BaseModel):
     encounter_type: str
     diagnosis_name: str
     summary: str
+    #: 就诊时刻（P2-1196，只加键）：本段正是按它截取的（P2-846），原先不给，看的人看不到排序依据；
+    #: 与同一响应里结算段的 `created_at` 同一写法（`isoformat()`）
+    created_at: str
 
 
 class ArchiveExamReport(BaseModel):
@@ -141,6 +144,12 @@ class ArchiveExamReport(BaseModel):
     request_id: int
     conclusion: str
     critical: bool
+    #: 以下三个键是 P2-1196 加的（只加键）：原先只有结论与「是否危急值」，分不清是哪项检查、哪天出的、危急值处置了没有。
+    #: 检查项目取自申请单；报告时刻同结算段的写法；危急值闭环状态给码（""=非危急值 / notified / acknowledged / resolved，
+    #: 存量危急报告的空串等同 notified）——文案各端自有一套，医生移动端是接收方视角的 `CRITICAL_TAGS`（见 exams.CRITICAL_STATUS_NAMES）
+    item_name: str
+    reported_at: str
+    critical_status: str
 
 
 class ArchiveChronic(BaseModel):
@@ -154,6 +163,8 @@ class ArchivePrescription(BaseModel):
     id: int
     diagnosis_name: str
     status: str
+    #: 开方时刻（P2-1196，只加键）：同就诊段
+    created_at: str
 
 
 class ArchiveSettlement(BaseModel):
@@ -206,8 +217,9 @@ def patient_360_view(
         db.query(Encounter).filter(Encounter.patient_id == patient.id)
         .order_by(Encounter.created_at.desc(), Encounter.id.desc())
     )
+    # 检查项目在申请单上（P2-1196）：本来就 join 申请单判患者，顺带取出项目名，不逐行再查
     reports, reports_more = _section(
-        db.query(ExamReport)
+        db.query(ExamReport, ExamRequest.item_name)
         .join(ExamRequest, ExamReport.request_id == ExamRequest.id)
         .filter(ExamRequest.patient_id == patient.id)
         .order_by(ExamReport.id.desc())
@@ -250,6 +262,7 @@ def patient_360_view(
                 "encounter_type": e.encounter_type,
                 "diagnosis_name": e.diagnosis_name,
                 "summary": e.summary,
+                "created_at": e.created_at.isoformat(),
             }
             for e in encounters
         ],
@@ -259,14 +272,23 @@ def patient_360_view(
                 "request_id": r.request_id,
                 "conclusion": r.conclusion,
                 "critical": r.critical,
+                "item_name": item_name,
+                "reported_at": r.reported_at.isoformat(),
+                "critical_status": r.critical_status,
             }
-            for r in reports
+            for r, item_name in reports
         ],
         "chronic_diseases": [
             {"id": c.id, "disease": c.disease, "level": c.level, "next_due": c.next_due} for c in chronic
         ],
         "prescriptions": [
-            {"id": p.id, "diagnosis_name": p.diagnosis_name, "status": p.status} for p in prescriptions
+            {
+                "id": p.id,
+                "diagnosis_name": p.diagnosis_name,
+                "status": p.status,
+                "created_at": p.created_at.isoformat(),
+            }
+            for p in prescriptions
         ],
         "settlements": [
             {

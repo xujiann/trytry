@@ -152,11 +152,13 @@ SECTION_KEYS = {
     "patient": {"ehc_no", "name", "gender", "birth_date"},
 }
 
+#: 行键 = 特征化时的原始键 | 之后只加的键（向后兼容：原始键一个不许少、不许改名，加的键各注条目号）
 ROW_KEYS = {
-    "encounters": {"id", "org_id", "encounter_type", "diagnosis_name", "summary"},
-    "exam_reports": {"id", "request_id", "conclusion", "critical"},
+    # 就诊 / 处方加业务时刻，报告加检查项目、报告时刻与危急值处置状态（P2-1196）
+    "encounters": {"id", "org_id", "encounter_type", "diagnosis_name", "summary"} | {"created_at"},
+    "exam_reports": {"id", "request_id", "conclusion", "critical"} | {"item_name", "reported_at", "critical_status"},
     "chronic_diseases": {"id", "disease", "level", "next_due"},
-    "prescriptions": {"id", "diagnosis_name", "status"},
+    "prescriptions": {"id", "diagnosis_name", "status"} | {"created_at"},
     "settlements": {"id", "bill_type", "total_amount", "insurance_pay", "self_pay", "created_at"},
     "physical_exams": {"id", "exam_date", "package_name", "has_abnormal", "abnormal_items"},
 }

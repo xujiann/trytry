@@ -822,14 +822,20 @@ $("#pt-form").addEventListener("submit", async (e) => {
     const cut = (rows, key) => (rows.length > 20 || more[key]
       ? `<p class="hint">仅显示最近 20 条（共 ${more[key] ? `${data.section_limit} 条以上` : `${rows.length} 条`}），完整记录请到电脑端查询</p>`
       : "");
+    // 印出日期与检查项目（P2-1196）：原先只印诊断 / 类型 / 摘要、结论 / 危急值，分不清是哪天、哪项检查、危急值处置了没有。
+    // 日期取 360 给的就诊 / 报告时刻，照本文件其他时间的写法截串；危急值处置状态用本文件危急值页那张 CRITICAL_TAGS
     const encounters = (data.encounters || []).slice(0, 20).map((en) => card(
+      kv("就诊日期", esc(en.created_at.slice(0, 10))) +
       kv("诊断", esc(en.diagnosis_name || "—")) +
       kv("类型", esc(en.encounter_type === "inpatient" ? "住院" : "门诊")) +
       (en.summary ? kv("摘要", esc(en.summary)) : "")
     )).join("");
     const reports = (data.exam_reports || []).slice(0, 20).map((r) => card(
+      kv("报告日期", esc(r.reported_at.slice(0, 10))) +
+      kv("项目", esc(r.item_name || "—")) +
       kv("结论", esc(r.conclusion)) +
-      (r.critical ? kv("危急值", '<span class="tag red">是</span>') : "")
+      (r.critical ? kv("危急值", '<span class="tag red">是</span>') +
+        kv("危急值处置", statusTag(CRITICAL_TAGS, r.critical_status)) : "")
     )).join("");
     $("#pt-result").innerHTML = `
       <div class="m-card">${kv("姓名", esc(p.name))}${kv("健康卡号", esc(p.ehc_no))}${kv("性别", esc(p.gender || "—"))}</div>
