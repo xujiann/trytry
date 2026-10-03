@@ -59,6 +59,7 @@ from ..models import (
     PrintTemplate,
     ProgressNote,
     Referral,
+    ReferralCert,
     ReportRevision,
     ResidentAccount,
     Settlement,
@@ -866,7 +867,7 @@ def print_vaccine_cert(
 def print_referral(
     referral_id: int, request: Request, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
-    """转诊单打印版：转出/转入机构、方向、事由与当前状态。"""
+    """转诊单打印版：转出/转入机构、方向、事由与当前状态；签了医保转诊证明的写明证明号、签发时间与签发人。"""
     referral = db.get(Referral, referral_id)
     if referral is None:
         raise HTTPException(status_code=404, detail="转诊记录不存在")
@@ -883,8 +884,20 @@ def print_referral(
         f'<td class="k">当前状态</td><td>{_esc(status)}</td></tr>'
         f'<tr><td class="k">申请时间</td><td colspan="3">{_esc(_shown_at(referral.created_at))}</td></tr>'
     )
+    # 已签医保转诊证明的印证明号、签发时间与签发人（P2-1243）：证明签出来只在签发回执里闪一行证明号，没有打印也没有查询，
+    # 窗口能核对的只有转诊单，而转诊单上原先没有证明号。签发人没落库的存量（P2-524 之前签的）写「—」；没签的转诊单一个
+    # 字节不变。转诊单自己的编号前缀不动（换前缀改的是已发出纸面的编号口径，待裁定）
+    cert = db.query(ReferralCert).filter(ReferralCert.referral_id == referral.id).first()
+    cert_html = ""
+    if cert is not None:
+        cert_html = (
+            '\n  <div class="section"><h3>医保转诊证明</h3>'
+            '\n    <table class="items"><thead><tr><th>医保转诊证明号</th><th>签发时间</th><th>签发人</th></tr></thead>'
+            f"\n    <tbody><tr><td>{_esc(cert.cert_no)}</td><td>{_esc(_shown_at(cert.issued_at))}</td>"
+            f'<td>{_esc(_user_name(db, cert.issued_by)) or "—"}</td></tr></tbody></table></div>'
+        )
     body = f"""
-  <div class="section"><h3>转诊事由</h3><div class="body">{_esc(referral.reason) or "—"}</div></div>
+  <div class="section"><h3>转诊事由</h3><div class="body">{_esc(referral.reason) or "—"}</div></div>{cert_html}
   <div class="sign"><span>申请医师：{_esc(_user_name(db, referral.created_by)) or "—"}</span>
     <span>接诊签收：____________</span></div>"""
     return _render(
