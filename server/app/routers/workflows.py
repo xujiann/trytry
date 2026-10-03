@@ -691,7 +691,14 @@ def unified_requests(
     items.sort(key=lambda x: x["created_at"], reverse=True)
     items = items[:limit]
 
-    patient_names = row_dict(db.query(Patient.id, Patient.name).all())
+    # 姓名只按本页的患者号取，本页为空就不查（P2-1153）：原先整张患者表的（id, 姓名）读进内存，一条单据都没有也照读。
+    # 照随访中心 `followups._name_maps` 的写法：机构名照旧整表取（几十行的量）；姓名不是加密列，PII 加密开态下照旧直读
+    patient_ids = {item["patient_id"] for item in items}
+    patient_names = (
+        row_dict(db.query(Patient.id, Patient.name).filter(Patient.id.in_(patient_ids)).all())
+        if patient_ids
+        else {}
+    )
     org_names = row_dict(db.query(Organization.id, Organization.name).all())
     for item in items:
         item["patient_name"] = patient_names.get(item["patient_id"], "")

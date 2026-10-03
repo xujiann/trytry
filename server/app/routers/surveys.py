@@ -140,7 +140,14 @@ def list_surveys(
     if max_score is not None:
         query = query.filter(SatisfactionSurvey.score <= max_score)
     rows = paginate(query.order_by(SatisfactionSurvey.id.desc()), response, offset, limit)
-    names = row_dict(db.query(Patient.id, Patient.name).all())
+    # 姓名只按本页的患者号取，本页为空就不查（P2-1153）：原先为了给一页配姓名把整张患者表的（id, 姓名）读进内存。
+    # 照随访中心 `followups._name_maps` 的写法；姓名不是加密列，PII 加密开态下照旧直读
+    patient_ids = {s.patient_id for s in rows}
+    names = (
+        row_dict(db.query(Patient.id, Patient.name).filter(Patient.id.in_(patient_ids)).all())
+        if patient_ids
+        else {}
+    )
     return [
         {
             "id": s.id,
