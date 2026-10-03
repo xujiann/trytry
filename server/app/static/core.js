@@ -2000,9 +2000,18 @@ async function renderPharmacy() {
   const stockTag = (s) => alertIds.has(s.id) ? '<span class="tag red">缺药</span>'
     : s.quantity <= 0 ? '<span class="tag orange">无库存</span>'
     : s.threshold ? '<span class="tag green">正常</span>' : '<span class="tag">未设预警</span>';
+  // 缺药按可发量判（P2-1250）：过了效期的批次还算在汇总里，缺药行只印汇总就是「库存 100 / 阈值 20」却标缺药——
+  // 两者不等时同一格里跟上可发量
+  const dispensableOf = new Map(alerts.map((a) => [a.id, a.dispensable_quantity]));
+  const stockQty = (s) => dispensableOf.has(s.id) && dispensableOf.get(s.id) !== s.quantity
+    ? `${s.quantity}（可发 ${dispensableOf.get(s.id)}）` : `${s.quantity}`;
   // 取值真源是 models/pharmacy.py:DrugBatch.status——只有这两个值，
   // 且它只表达"人决定召回"，过没过期是按效期现算的另一回事（见该列的注释）
   const BATCH_STATUS = { normal: ["正常", "green"], recalled: ["已召回", "red"] };
+  // 过了效期的批次 status 照旧是 normal，台账原先照印「正常 / 可用 100」，发药却一片不取它（P2-1250）：
+  // 状态列标「已过期」（与近效期表同一个红标签），可用列印 dispensable（此刻能发多少）
+  const batchStatus = (b) => b.status === "normal" && b.expired
+    ? '<span class="tag red">已过期</span>' : statusTag(BATCH_STATUS, b.status);
   // 表单与按钮只给接口收的角色（P2-430）：汇总入库只收管理员（require_admin）；批次入库 / 发药 / 退药 / 调拨只收
   // 经办 / 药师；召回只收药师 / 管理层——管理员都放行。原先谁打开都摆着，点下去一次 403
   const role = currentRole();
@@ -2013,8 +2022,8 @@ async function renderPharmacy() {
     table(["ID", "机构", "药品", "批号", "效期", "总量/已用", "可用", "不可发", "状态", "操作"], rows, (b) =>
       `<tr><td>${b.id}</td><td>${b.org_id}</td><td>${esc(b.drug_name)}（${esc(b.drug_code)}）</td>
        <td>${esc(b.batch_no)}</td><td>${esc(b.expire_date)}</td><td>${b.quantity} / ${b.used_quantity}</td>
-       <td>${b.available}</td><td>${b.blocked_quantity}</td>
-       <td>${statusTag(BATCH_STATUS, b.status)}${b.recall_reason
+       <td>${b.dispensable}</td><td>${b.blocked_quantity}</td>
+       <td>${batchStatus(b)}${b.recall_reason
          ? `<br><span class="desc">${esc(b.recall_reason)}</span>` : ""}</td>
        <td>${b.status === "normal" && canRecall ? `<button class="btn danger" data-recall="${b.id}">召回</button>` : ""}
            <button class="btn" data-trace="${b.id}">发给了谁</button></td></tr>`);
@@ -2066,7 +2075,7 @@ async function renderPharmacy() {
       </form>` : ""}<p class="msg" id="pharm-msg"></p>`) : ""}
     <div class="panel"><h3>库存${alerts.length ? `（<span style="color:#c62828">${alerts.length} 项缺药预警</span>）` : ""}</h3>
       ${table(["机构ID", "药品", "数量", "阈值", "状态"], stocks, (s) =>
-        `<tr><td>${s.org_id}</td><td>${esc(s.drug_name)}（${esc(s.drug_code)}）</td><td>${s.quantity}</td><td>${s.threshold}</td>
+        `<tr><td>${s.org_id}</td><td>${esc(s.drug_name)}（${esc(s.drug_code)}）</td><td>${stockQty(s)}</td><td>${s.threshold}</td>
          <td>${stockTag(s)}</td></tr>`)}
       <h3 style="margin-top:14px">近效期批次（90 天）</h3>
       ${table(["机构ID", "药品", "批号", "效期", "余量", "剩余天数"], expiring, (b) =>
@@ -2090,10 +2099,11 @@ async function renderPharmacy() {
          含已冲销的行（冲销的不计入"仍在外面"的量，但行还在）。</p>
          <p class="msg" id="batch-msg"></p>`)}
     <div class="panel hidden" id="trace-panel"><h3>按批号反查发药去向</h3><div id="trace-body"></div></div>
-    ${panel("采购建议（近 30 天处方用量 − 当前全网库存，只列差值为正的品种；退回处方不计入用量）",
+    ${panel("采购建议（近 30 天处方用量 − 当前全网可发库存，只列差值为正的品种；退回处方不计入用量，过期与已召回批次不算可发）",
       table(["药品编码", "药品", "近 30 天用量", "当前库存", "建议采购量"], suggestions, (g) =>
         `<tr><td>${esc(g.drug_code)}</td><td>${esc(g.drug_name)}</td><td>${g.usage_30d}</td>
-         <td>${g.current_stock}</td><td><b>${g.suggested_quantity}</b></td></tr>`))}`;
+         <td>${g.current_stock}${g.dispensable_stock !== g.current_stock ? `（可发 ${g.dispensable_stock}）` : ""}</td>
+         <td><b>${g.suggested_quantity}</b></td></tr>`))}`;
   if (canStock) $("#stock-form").onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);

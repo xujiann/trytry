@@ -608,10 +608,12 @@ function bindNoticeRead(box) {
   });
 }
 
+// 缺药行按可发量判（P2-1250）：`quantity` 是账面汇总、`dispensable` 是此刻能发多少——批次过了效期两者就不等，
+// 只印「库存 100 / 阈值 20」看不出为什么缺药
 const FIELD_NAMES = {
   diagnosis_name: "诊断", review_comment: "审方意见", center_type: "中心", item_name: "项目",
   status: "状态", conclusion: "结论", critical_status: "危急值状态", request_id: "申请单",
-  drug_name: "药品", quantity: "库存", threshold: "阈值", org_name: "机构",
+  drug_name: "药品", quantity: "账面库存", threshold: "阈值", dispensable: "可发", org_name: "机构",
 };
 /** 待办行里的取值按键翻译（P2-371）：原先原样打印——「中心 imaging」「状态 pending」「危急值状态 notified」。
  *  取值表用本文件现成的（检查申请页、危急值页同一套）；带「状态」的只有待诊断申请行 */

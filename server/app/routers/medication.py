@@ -13,7 +13,7 @@ from ..visibility import assert_obj_org_writable, assert_org_writable, assert_pa
 from ..database import get_db
 from ..deps import get_current_user, require_roles, row_dict
 from ..clock import now_naive
-from .dispense import prescription_not_reversed
+from .dispense import prescription_not_reversed, q_dispensable_shortage
 from ..models import (
     DrugShortage,
     DrugStock,
@@ -366,12 +366,14 @@ def supply_risk(db: Session = Depends(get_db)):
 
     「还缺着」= 已登记 / 采购中。原先按 `status != 已配送` 数（P2-127）：流转后来加了取药 / 未取药 / 取消三个终态，
     这三态全被算成缺药——已经取走药的登记让胰岛素照旧挂「高风险」，只剩结案登记的药品也凭空列成中风险。
+
+    「库存告警」按**可发量**低于阈值判，与缺药预警同一个构造（`dispense.q_dispensable_shortage`，P2-1250）：原先比汇总，
+    批次过了效期汇总一片不少，发药 409，这里照旧不算风险。按库存行编号排：左连之后库给的先后不再是表序，同一药品在
+    几家机构的药名不一时，取哪家的名字要稳定。
     """
-    low_stocks = (
-        db.query(DrugStock)
-        .filter(DrugStock.threshold > 0, DrugStock.quantity < DrugStock.threshold)
-        .all()
-    )
+    low_stocks = [
+        s for s, _ in q_dispensable_shortage(db).filter(DrugStock.threshold > 0).order_by(DrugStock.id).all()
+    ]
     open_shortage_rows = (
         db.query(DrugShortage.drug_code, func.count(DrugShortage.id))
         .filter(DrugShortage.status.in_(_SHORTAGE_SHORT))

@@ -16,14 +16,14 @@
    回补之前**——判定与翻转同一条 SQL，抢不到的拿 409。
 """
 import math
-from typing import cast
+from typing import cast, overload
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import ColumnElement, exists, update
+from sqlalchemy import ColumnElement, Subquery, and_, exists, func, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Query, Session
 
 from ..concurrency import add_amount, ensure_present, take_amount
 from ..database import get_db
@@ -174,12 +174,74 @@ def _claim_batch(db: Session, batch_id: int, step: int, *, only_normal: bool = T
     return bool(result.rowcount)
 
 
-def batch_available(batch: DrugBatch) -> int:
+@overload
+def batch_available(batch: DrugBatch) -> int: ...
+@overload
+def batch_available(batch: type[DrugBatch]) -> ColumnElement[int]: ...
+def batch_available(batch: DrugBatch | type[DrugBatch]) -> int | ColumnElement[int]:
     """批次可发余量：累计入库 - 已出库 - 退回后不可发。
 
     不是 `quantity - used_quantity`——那是"还躺在库房里的量"，含退回来的死货。
+
+    传批次行得到这一批的数；传 `DrugBatch` 类本身得到同一个算式的 SQL 表达式（P2-1250）：读侧现算可发量
+    （`dispensable_by_drug`）要在库里按 (机构, 药品) 求和，算式仍只写在这一处（单一判定源守卫第 6 条）。
     """
     return batch.quantity - batch.used_quantity - batch.blocked_quantity
+
+
+def dispensable_clause(today: str) -> ColumnElement[bool]:
+    """批次此刻可发：未召回、未过效期（P2-1250 从 `_fefo_batches` 原样抽出）。
+
+    发药与调拨挑批次（`_fefo_batches`）、读侧现算可发量（`dispensable_by_drug`）共用这一句。缺药预警、待办、驾驶舱、
+    供应风险、采购建议原先读汇总 `DrugStock.quantity`，汇总里留着静置过期的量（ADR-0013「已知边界」：过期没有事件
+    可挂），于是发药这边 409「可发批次库存不足」、预警那边照旧当有货——两边的谓词各写一份，改了一边另一边不会跟。
+    逐行的版本是 `batch_dispensable`，两处改一处要同改另一处。
+    """
+    return and_(DrugBatch.status == "normal", DrugBatch.expire_date >= today)
+
+
+def batch_dispensable(batch: DrugBatch, today: str) -> int:
+    """这一批此刻能发多少（`dispensable_clause` 的逐行版，P2-1250）：已召回、已过效期、余量不为正的一律 0。
+
+    批次台账原先只给 `available`（计入可用汇总的余量），过了效期的批次照印「状态 正常 / 可用 100」，发药却一片不取它。
+    """
+    available = batch_available(batch)
+    if batch.status != "normal" or batch.expire_date < today or available <= 0:
+        return 0
+    return available
+
+
+def dispensable_by_drug() -> Subquery:
+    """各 (机构, 药品) 此刻的可发量：可发批次余量之和，一条 SQL 按 (org_id, drug_code) 聚合（P2-1250）。
+
+    批次的筛法与 `_fefo_batches` 同一份（`dispensable_clause` + 余量为正）：发药按 FEFO 取得到的，就是这里数到的。
+    照 ADR-0013 写好的下一步在读侧现算——不动汇总、不动对账不变式、不加定时任务：汇总回答「账上还有多少可用」，
+    这里回答「此刻能发多少」。「此刻」取业务日，与发药同源。没有可发批次的 (机构, 药品) 不在结果里，左连后按 0 算。
+    """
+    available = batch_available(DrugBatch)
+    return (
+        select(DrugBatch.org_id, DrugBatch.drug_code, func.sum(available).label("dispensable"))
+        .where(dispensable_clause(resolve_business_date(None).isoformat()), available > 0)
+        .group_by(DrugBatch.org_id, DrugBatch.drug_code)
+        .subquery("dispensable_by_drug")
+    )
+
+
+def q_dispensable_shortage(db: Session) -> Query:
+    """可发量低于阈值的库存行（缺药口径的唯一来源，P2-1250），每行 `(DrugStock, 可发量)`。
+
+    `DrugStock` 左连 `dispensable_by_drug`、没有可发批次的按 0 算，比的是 `可发量 < 阈值`；阈值 0（没配预警）照旧永不报。
+    缺药预警（`pharmacy.stock_alerts`）、待办（`todos._stock_alerts`）、驾驶舱（`metrics.q_stock_alerts` 委托这里）、
+    供应风险（`medication.supply_risk`）都走它。原先四处各比 `DrugStock.quantity < threshold`：批次过了效期，汇总一片
+    不少，四处都当有货，发药同时 409。没有过期量时可发量就等于汇总（对账不变式），结果与原先一致。
+    """
+    sub = dispensable_by_drug()
+    dispensable = func.coalesce(sub.c.dispensable, 0)
+    return (
+        db.query(DrugStock, dispensable.label("dispensable"))
+        .outerjoin(sub, and_(sub.c.org_id == DrugStock.org_id, sub.c.drug_code == DrugStock.drug_code))
+        .filter(dispensable < DrugStock.threshold)
+    )
 
 
 def broadcast_shortage(stock: DrugStock) -> None:
@@ -212,14 +274,14 @@ def _fefo_batches(db: Session, org_id: int, drug_code: str, today: str) -> list[
 
     调拨（pharmacy.transfer_stock）复用这一条口径挑批次：调出的必须是**能发的**
     批次，否则调入方拿到的是一片也发不出的幽灵库存。
+    「可发」的谓词与读侧现算可发量共用 `dispensable_clause`（P2-1250）。
     """
     rows = (
         db.query(DrugBatch)
         .filter(
             DrugBatch.org_id == org_id,
             DrugBatch.drug_code == drug_code,
-            DrugBatch.status == "normal",
-            DrugBatch.expire_date >= today,
+            dispensable_clause(today),
         )
         .order_by(DrugBatch.expire_date, DrugBatch.id)
         .all()

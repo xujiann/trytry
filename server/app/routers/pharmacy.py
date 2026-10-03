@@ -61,8 +61,9 @@ from ..models import (
     User,
 )
 from ..schemas import StockOut, StockUpsert, TransferCreate
-from .dispense import (_claim_batch, _fefo_batches, _required_quantity, batch_available, broadcast_if_crossed,
-                       broadcast_shortage, prescription_not_reversed)
+from .dispense import (_claim_batch, _fefo_batches, _required_quantity, batch_available, batch_dispensable,
+                       broadcast_if_crossed, broadcast_shortage, dispensable_by_drug, prescription_not_reversed,
+                       q_dispensable_shortage)
 
 router = APIRouter(prefix="/api/pharmacy", tags=["中心药房"])
 
@@ -335,13 +336,16 @@ def transfer_stock(
 class PurchaseSuggestionOut(BaseModel):
     """采购建议行。`usage_30d` 唯一产地是 `float(row.usage or 0)`——整数用量也以
     30.0 出参，声明 float 才是原样；库存与建议量是 Integer 列/int() 取整，恒 int
-    （契约取证见 tests/test_pharmacy_contract.py）。"""
+    （契约取证见 tests/test_pharmacy_contract.py）。
+
+    `current_stock` 照旧是全网汇总合计；缺口按 `dispensable_stock`（全网此刻可发量合计）算（P2-1250）。"""
 
     drug_code: str
     drug_name: str
     usage_30d: float
     current_stock: int
     suggested_quantity: int
+    dispensable_stock: int
 
 
 @router.get(
@@ -355,6 +359,9 @@ def purchase_suggestions(db: Session = Depends(get_db)):
     用药量按处方明细逐条折成应发量再汇总（退回处方不计入）：每条明细与发药同一个算法（`_required_quantity`：
     日剂量×天数向上取整、至少 1，P2-554）。原先汇总的是没取整的 日剂量×天数，而发药从库存里扣的是取整后的量——
     `_required_quantity` 的 docstring 写着「与采购建议同口径」，实际不是。单位（日剂量是毫克、库存是片）另见 P2-152。
+
+    缺口 = 用量 − 全网此刻的**可发量**（`dispense.dispensable_by_drug`，P2-1250）。原先减的是汇总：批次过了效期汇总一片
+    不少，发药 409「可发批次库存不足」，这里照旧算成不缺、不建议采购。`current_stock` 仍印汇总合计，可发量另给。
     """
     since = now_naive() - timedelta(days=30)
     item_rows = (
@@ -381,12 +388,20 @@ def purchase_suggestions(db: Session = Depends(get_db)):
         .all()
     )
     stock_by_code = {r.drug_code: int(r.quantity or 0) for r in stock_rows}
+    dispensable = dispensable_by_drug()
+    dispensable_rows = (
+        db.query(dispensable.c.drug_code, func.sum(dispensable.c.dispensable))
+        .group_by(dispensable.c.drug_code)
+        .all()
+    )
+    dispensable_by_code = {code: int(total or 0) for code, total in dispensable_rows}
 
     suggestions: list[dict[str, Any]] = []
     for code in sorted(usage_by_code):
         usage = usage_by_code[code]
         current = stock_by_code.get(code, 0)
-        gap = usage - current
+        can_dispense = dispensable_by_code.get(code, 0)
+        gap = usage - can_dispense
         if gap > 0:
             suggestions.append(
                 {
@@ -395,22 +410,39 @@ def purchase_suggestions(db: Session = Depends(get_db)):
                     "usage_30d": float(usage),
                     "current_stock": current,
                     "suggested_quantity": gap,   # 用量已是逐条取整的件数，缺口本身是整数
+                    "dispensable_stock": can_dispense,
                 }
             )
     suggestions.sort(key=lambda s: s["suggested_quantity"], reverse=True)
     return suggestions
 
 
-@router.get("/alerts", response_model=list[StockOut], dependencies=[Depends(get_current_user)])
+class StockAlertOut(StockOut):
+    """缺药预警行：库存行原样（`quantity` 仍是可用汇总）+ 此刻的可发量（P2-1250）。
+
+    预警按可发量判，只给汇总的话页面上就是「库存 100 / 阈值 20」却报缺药。"""
+
+    dispensable_quantity: int
+
+
+@router.get("/alerts", response_model=list[StockAlertOut], dependencies=[Depends(get_current_user)])
 def stock_alerts(
     org_id: int | None = None,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """缺药预警：库存低于阈值的品种清单（按可见机构过滤）。"""
-    q = db.query(DrugStock).filter(DrugStock.quantity < DrugStock.threshold)
-    q = scope_org_list(db, user, q, DrugStock, org_id)
-    return q.order_by(DrugStock.org_id).all()
+    """缺药预警：**可发量**低于阈值的品种清单（按可见机构过滤）。
+
+    可发量按批次现算、与发药同一个口径（`dispense.q_dispensable_shortage`，P2-1250）：原先比汇总，而汇总里留着静置过期
+    的量（ADR-0013「已知边界」）——唯一的批次过了效期，发药 409「可发批次库存不足」，这里一条不报。
+    同一机构内按库存行编号排：原先只按机构，左连之后库给的先后不再是表序（同 todos 的 P2-971）。
+    """
+    q = scope_org_list(db, user, q_dispensable_shortage(db), DrugStock, org_id)
+    return [
+        {"id": s.id, "org_id": s.org_id, "drug_code": s.drug_code, "drug_name": s.drug_name,
+         "quantity": s.quantity, "threshold": s.threshold, "dispensable_quantity": int(dispensable)}
+        for s, dispensable in q.order_by(DrugStock.org_id, DrugStock.id).all()
+    ]
 
 
 # ---------- 工程包 B1：药品批号效期台账（对齐疫苗 VaccineBatch 先例） ----------
@@ -430,7 +462,10 @@ class BatchReceiveIn(BaseModel):
     quantity: int = Field(gt=0, le=INT4_MAX)
 
 
-class BatchOut(BaseModel):
+class _BatchFields(BaseModel):
+    """批次台账与近效期预警共有的字段。单拎一层是为了键序（P2-1250）：台账新增的 `expired` 若写进 `BatchOut` 再让
+    近效期继承，pydantic 会把子类重声明的 `expired` 留在父类的位置，近效期那份响应的键序就变了。"""
+
     id: int
     org_id: int
     drug_code: str
@@ -445,13 +480,20 @@ class BatchOut(BaseModel):
     # 退回本批次但已不可发（退回时已召回/已过效期）的量
     blocked_quantity: int
     # 计入可用汇总的余量 = remaining - blocked_quantity。
-    # 注意它不等于"今天发得出去"：批次过没过期按效期现算（见 ADR-0013 的口径边界）
+    # 注意它不等于"今天发得出去"：批次过没过期按效期现算（见 ADR-0013 的口径边界），今天发得出去的是 `dispensable`
     available: int
     status: str
     recall_reason: str
 
 
-class ExpiringBatchOut(BatchOut):
+class BatchOut(_BatchFields):
+    # 按业务日现算（P2-1250）：已过效期的批次 `status` 照旧是 normal（它只表达人的召回决定），原先台账照印「正常 / 可用 100」
+    expired: bool
+    # 此刻能发多少（`dispense.batch_dispensable`）：已召回、已过效期的为 0，与发药按 FEFO 取得到的一致
+    dispensable: int
+
+
+class ExpiringBatchOut(_BatchFields):
     remaining_days: int
     expired: bool
 
@@ -502,7 +544,8 @@ def _batch_of(db: Session, org_id: int, drug_code: str, batch_no: str) -> DrugBa
     )
 
 
-def _batch_out(b: DrugBatch, drug_name: str) -> dict:
+def _batch_out(b: DrugBatch, drug_name: str, today: str) -> dict:
+    """`today` 是判过期、算可发的业务日（P2-1250）：台账与召回取当天业务日（与发药同源），近效期按它自己的 `today` 参数。"""
     return {
         "id": b.id,
         "org_id": b.org_id,
@@ -518,6 +561,8 @@ def _batch_out(b: DrugBatch, drug_name: str) -> dict:
         "available": batch_available(b),
         "status": b.status,
         "recall_reason": b.recall_reason,
+        "expired": b.expire_date < today,
+        "dispensable": batch_dispensable(b, today),
     }
 
 
@@ -589,7 +634,7 @@ def receive_batch(
     stock.drug_name = body.drug_name
     db.commit()
     db.refresh(batch)
-    return _batch_out(batch, body.drug_name)
+    return _batch_out(batch, body.drug_name, resolve_business_date(None).isoformat())
 
 
 @router.get(
@@ -623,7 +668,8 @@ def list_batches(
         limit,
     )
     names = _stock_names(db, rows)
-    return [_batch_out(b, names.get((b.org_id, b.drug_code), "")) for b in rows]
+    today = resolve_business_date(None).isoformat()
+    return [_batch_out(b, names.get((b.org_id, b.drug_code), ""), today) for b in rows]
 
 
 @router.get(
@@ -680,7 +726,7 @@ def expiring_drug_batches(
     names = _stock_names(db, rows)
     return [
         {
-            **_batch_out(b, names.get((b.org_id, b.drug_code), "")),
+            **_batch_out(b, names.get((b.org_id, b.drug_code), ""), today_d.isoformat()),
             "remaining_days": (date.fromisoformat(b.expire_date) - today_d).days,
             "expired": b.expire_date < today_d.isoformat(),
         }
@@ -739,7 +785,7 @@ def recall_batch(
     named = _stock_of(db, batch.org_id, batch.drug_code)
     if named is not None and available > 0:
         broadcast_if_crossed(named, available)   # 召回把可用余量扣到阈值以下，同样推缺药预警（P2-504）
-    return _batch_out(batch, named.drug_name if named else "")
+    return _batch_out(batch, named.drug_name if named else "", resolve_business_date(None).isoformat())
 
 
 @router.get(

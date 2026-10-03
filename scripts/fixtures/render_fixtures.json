@@ -5799,7 +5799,10 @@
       "**顺手改正了近效期那两条的形状**：后端 ExpiringBatchOut 继承 BatchOut，共 15 键；",
       "夹具原先只写了 8 键，缺 id/status/available/blocked_quantity 等——那张表恰好没印这几列，",
       "所以一直没暴露，但新面板要用同一批字段，照旧形状造会连'哪条能召回'都判错。",
-      "批次台账三条照分支造：normal 可召回 / recalled 带召回原因（不摆召回按钮）/ 有不可发余量的一条。"
+      "批次台账三条照分支造：normal 可召回 / recalled 带召回原因（不摆召回按钮）/ 有不可发余量的一条。",
+      "第三十六批（P2-1250）：缺药按可发量判，接口只增不改地加了 dispensable_quantity / expired / dispensable /",
+      "dispensable_stock。夹具跟着补：阿司匹林（53）唯一批次 91 已过效期——汇总 40、可发 0，缺药行印「40（可发 0）」，",
+      "台账那一批标「已过期」、可用列印可发 0；采购建议缺口按可发量算（用量照 P2-554 是逐条取整后的整数值）。"
     ],
     "fn": "renderPharmacy",
     "api": {
@@ -5819,6 +5822,14 @@
           "drug_code": "C08CA01",
           "quantity": 200,
           "threshold": 20
+        },
+        {
+          "id": 53,
+          "org_id": 4,
+          "drug_name": "阿司匹林 &",
+          "drug_code": "B01AC06",
+          "quantity": 40,
+          "threshold": 20
         }
       ],
       "/api/pharmacy/alerts": [
@@ -5828,7 +5839,17 @@
           "drug_name": "二甲双胍 & 缓释片",
           "drug_code": "A10BA02<b>",
           "quantity": 3,
-          "threshold": 20
+          "threshold": 20,
+          "dispensable_quantity": 3
+        },
+        {
+          "id": 53,
+          "org_id": 4,
+          "drug_name": "阿司匹林 &",
+          "drug_code": "B01AC06",
+          "quantity": 40,
+          "threshold": 20,
+          "dispensable_quantity": 0
         }
       ],
       "/api/pharmacy/batches/expiring": [
@@ -5884,7 +5905,9 @@
           "blocked_quantity": 0,
           "available": 40,
           "status": "normal",
-          "recall_reason": ""
+          "recall_reason": "",
+          "expired": true,
+          "dispensable": 0
         },
         {
           "id": 92,
@@ -5900,7 +5923,9 @@
           "blocked_quantity": 0,
           "available": 120,
           "status": "normal",
-          "recall_reason": ""
+          "recall_reason": "",
+          "expired": false,
+          "dispensable": 120
         },
         {
           "id": 93,
@@ -5916,7 +5941,9 @@
           "blocked_quantity": 50,
           "available": 0,
           "status": "recalled",
-          "recall_reason": "厂家通报：同批号检出含量不合格 <script>"
+          "recall_reason": "厂家通报：同批号检出含量不合格 <script>",
+          "expired": false,
+          "dispensable": 0
         }
       ],
       "/api/pharmacy/purchase-suggestions": [
@@ -5925,14 +5952,16 @@
           "drug_name": "二甲双胍 & 缓释片",
           "usage_30d": 900.0,
           "current_stock": 3,
-          "suggested_quantity": 897
+          "suggested_quantity": 897,
+          "dispensable_stock": 3
         },
         {
           "drug_code": "B01AC06",
           "drug_name": "阿司匹林 &",
-          "usage_30d": 120.5,
+          "usage_30d": 121.0,
           "current_stock": 40,
-          "suggested_quantity": 80
+          "suggested_quantity": 121,
+          "dispensable_stock": 0
         }
       ],
       "/api/dispense": [

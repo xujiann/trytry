@@ -30,6 +30,7 @@ from ..models import (
     Prescription,
     Referral,
 )
+from .dispense import q_dispensable_shortage
 from .encounters import ENCOUNTER_TYPE_NAMES
 from .exams import CRITICAL_STATUS_NAMES, EXAM_REQUEST_STATUS_NAMES
 from .infectious import INFECTIOUS_CATEGORY_NAMES
@@ -185,8 +186,12 @@ def q_critical_values(db: Session):
 
 
 def q_stock_alerts(db: Session):
-    """低于阈值的药品库存（缺药预警）。"""
-    return db.query(DrugStock).filter(DrugStock.quantity < DrugStock.threshold)
+    """可发量低于阈值的药品库存（缺药预警），委托 `dispense.q_dispensable_shortage`，每行 `(DrugStock, 可发量)`（P2-1250）。
+
+    原先比的是汇总 `DrugStock.quantity`：静置过期的量一直留在汇总里（ADR-0013「已知边界」），批次过了效期、发药 409，
+    驾驶舱照样 0 条缺药。缺药预警页、待办与这里走同一个构造，口径仍只有一份。
+    """
+    return q_dispensable_shortage(db)
 
 
 def q_chronic_overdue(db: Session):
@@ -285,7 +290,10 @@ def _row_critical(r: ExamReport) -> dict:
     }
 
 
-def _row_stock(s: DrugStock) -> dict:
+def _row_stock(row: tuple[DrugStock, int]) -> dict:
+    """`q_stock_alerts` 的一行是 `(库存, 可发量)`。缺药按可发量判，明细里只有结存（汇总）就是「结存 100 / 阈值 20」却列为
+    缺药——可发量另起一列 `dispensable`，结存照旧原样给（P2-1250）。"""
+    s, dispensable = row
     return {
         "id": s.id,
         "org_id": s.org_id,
@@ -293,6 +301,7 @@ def _row_stock(s: DrugStock) -> dict:
         "drug_name": s.drug_name,
         "quantity": s.quantity,
         "threshold": s.threshold,
+        "dispensable": int(dispensable),
     }
 
 
@@ -405,8 +414,8 @@ METRIC_QUERIES: dict[str, dict] = {
         "query": q_stock_alerts,
         "row": _row_stock,
         "page": "pharmacy",
-        "columns": ["库存ID", "机构", "药品编码", "药品名称", "结存", "阈值"],
-        "fields": ["id", "org_id", "drug_code", "drug_name", "quantity", "threshold"],
+        "columns": ["库存ID", "机构", "药品编码", "药品名称", "结存", "阈值", "可发"],
+        "fields": ["id", "org_id", "drug_code", "drug_name", "quantity", "threshold", "dispensable"],
     },
     "chronic_overdue": {
         "label": "慢病随访超期",

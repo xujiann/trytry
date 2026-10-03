@@ -34,7 +34,8 @@ ORDER_KEYS = ["id", "org_id", "supplier_id", "item_type", "item_code", "item_nam
               "received_quantity"]   # 实收数（P2-852）：验收时记，验收前为 null
 STOCK_TAKE_CREATED_KEYS = ["id", "book_qty", "actual_qty", "diff"]
 STOCK_TAKE_KEYS = ["id", "org_id", "drug_code", "book_qty", "actual_qty", "diff", "note"]
-SUGGESTION_KEYS = ["drug_code", "drug_name", "usage_30d", "current_stock", "suggested_quantity"]
+SUGGESTION_KEYS = ["drug_code", "drug_name", "usage_30d", "current_stock", "suggested_quantity",
+                   "dispensable_stock"]   # P2-1250 加：缺口按全网可发量算，可发量另给（current_stock 照旧是汇总）
 
 
 @pytest.fixture(scope="module")
@@ -278,13 +279,14 @@ def test_采购建议精确_usage恒float_数量恒int(client, admin, seed):
     assert rows == [
         # 用量与发药同一个算法、逐条向上取整（P2-554）：30.5×3=91.5 → 92（原先钉 91.5）；缺口 92−47=45
         {"drug_code": "PHCT-MET", "drug_name": "契约二甲双胍", "usage_30d": 92.0,
-         "current_stock": 47, "suggested_quantity": 45},
+         "current_stock": 47, "suggested_quantity": 45, "dispensable_stock": 47},
         {"drug_code": "PHCT-INTZ", "drug_name": "契约整数用量药", "usage_30d": 30.0,
-         "current_stock": 0, "suggested_quantity": 30},
+         "current_stock": 0, "suggested_quantity": 30, "dispensable_stock": 0},
     ]
     # usage 唯一产地是 float(...)：整数用量也是 30.0，不是 30
     assert isinstance(rows[0]["usage_30d"], float) and isinstance(rows[1]["usage_30d"], float)
     assert type(rows[1]["current_stock"]) is int and type(rows[1]["suggested_quantity"]) is int
+    assert type(rows[0]["dispensable_stock"]) is int and type(rows[1]["dispensable_stock"]) is int
 
 
 # ---------------------------------------------------------------- 错误体

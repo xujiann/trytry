@@ -8,7 +8,7 @@
 
 - 顶层 `{role, total, items}` 与分节 `{type, title, count, list}` 都是固定形状，
   逐字段建模；但分节的 `list` 行随 `type` 换形（审方 3 键 / 待诊断 4 键 /
-  缺药 4 键 / 危急值 4 键 / 待确认 3 键）——这是**真多态**不是条件键：
+  缺药 6 键 / 危急值 4 键 / 待确认 3 键）——这是**真多态**不是条件键：
   逐字段并模会把五种行的键互相注入 null，而 `critical_ack` 行（id/request_id/
   conclusion）还是 `critical_report` 行的真子集，smart union 会静默吞掉
   `critical_status`。照 metrics/drilldown 的先例用 `list[dict[str, Any]]` 宽字典
@@ -147,6 +147,7 @@ def test_管理员四节精确_五种行形各归其位(client, world):
                     "drug_name": "待办缺货药",
                     "quantity": 3,
                     "threshold": 9,
+                    "dispensable": 3,   # P2-1250 加：缺药按可发量判，可发量另给（汇总 quantity 照旧）
                 }],
             },
             {
@@ -165,6 +166,7 @@ def test_管理员四节精确_五种行形各归其位(client, world):
     # Integer 列与计数全 int（宽字典透传不得把它们变形）
     stock_row = body["items"][2]["list"][0]
     assert type(stock_row["quantity"]) is int and type(stock_row["threshold"]) is int
+    assert type(stock_row["dispensable"]) is int   # PG 上 sum 出来是 bigint，照样得是 int
     assert type(body["total"]) is int
 
 
