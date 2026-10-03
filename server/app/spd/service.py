@@ -335,6 +335,16 @@ def actively_enrolled(db: Session, patient_id: int, program_code: str) -> bool:
     )
 
 
+def enrollment_still_active(db: Session, enrollment_id: int) -> bool:
+    """这份档案此刻还在不在管：给 `serialized_on(db, SpdEnrollment, …)` 临界区里复判用（P2-1179）。
+
+    只挂在管档案的新工作（启动路径、手工建任务、绑服务包、异常监测派任务、高危自动干预与复诊，P2-226）原先锁外判在管、
+    锁里只查重或干脆不进锁：读到在管之后别人登记死亡并提交（结案收尾 `close_open_work` 已经跑过），这一路照旧挂上去，
+    之后再没人收。按列直查而不是 `db.get` / `db.refresh`（照 `billing.create_bill_detail` 锁里复判在院的写法）：会话里
+    那份档案是锁外读的，身份映射会把旧对象原样还回来；refresh 又会丢掉调用方挂在档案上、还没 flush 的改动。"""
+    return db.query(SpdEnrollment.status).filter(SpdEnrollment.id == enrollment_id).scalar() == "active"
+
+
 def enrollment_for(db: Session, patient_id: int, program_code: str) -> tuple[str, SpdEnrollment | None]:
     """一条业务记录挂哪份纳管档案（P1-139）：写了病种的，取这个病种的档案（在管的优先）；没写的，患者只在管一个病种
     的挂这份、病种取它的；在管几个病种的不替人猜，返回 ("", None)。

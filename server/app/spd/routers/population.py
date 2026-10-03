@@ -58,7 +58,8 @@ from ..models import (
 from ..rules import RuleError, as_validated, evaluate, is_suspect_risk, score_scale, screen
 from ..service import (ENROLL_STATUS_LABELS, PACKAGE_ITEM_NAME_MAX, paused_enrollment, SCALE_ADVICE_MAX, MEASUREMENT_SOURCE_NAMES, TASK_OPEN_STATUSES, actively_enrolled, award_points, build_facts,
                        MIGRATION_VOID_STATUSES,
-                       candidate_reason, candidate_undistributed, close_open_work, exclusion_problem, match_program, migration_void_reason,
+                       candidate_reason, candidate_undistributed, close_open_work, enrollment_still_active, exclusion_problem,
+                       match_program, migration_void_reason,
                        package_items_ok,
                        scale_program_mismatch, scale_unusable, scale_version_problem, unknown_program)
 
@@ -2080,8 +2081,14 @@ def bind_package(
     )
     if exists is not None:
         raise HTTPException(status_code=409, detail="该服务包已绑定")
-    binding = _bind_package(db, enrollment, body.package_id)
-    db.commit()
+    # 「在管」与绑包圈进这份档案那一行的临界区、锁里按列再判（P2-1179）：上面是锁外读的，读到在管之后别人登记死亡并提交，
+    # 原先照给死者新签服务包
+    with serialized_on(db, SpdEnrollment, enrollment.id):
+        if not enrollment_still_active(db, enrollment.id):
+            db.rollback()   # 放掉行锁再回话
+            raise HTTPException(status_code=409, detail="非在管状态的档案不可绑定服务包，请先恢复管理")
+        binding = _bind_package(db, enrollment, body.package_id)
+        db.commit()
     return _binding_out(db, binding)
 
 

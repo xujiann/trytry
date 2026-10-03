@@ -3,6 +3,7 @@
 对应招标文件：成员端 #7/#12/#14/#15/#16、个案管理师端 #6/#9/#14、
 医生移动端 #8/#9/#12/#13、患者端 #4/#7/#10/#12。
 """
+from contextlib import nullcontext
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -49,8 +50,8 @@ from ..models import (
 )
 from ..rules import score_scale
 from ..service import (SCALE_ADVICE_MAX, ENROLL_STATUS_LABELS, ENROLLMENT_ENDED_STATUSES, MEASUREMENT_SOURCE_NAMES, REVISIT_OPEN_STATUSES,
-                       RISK_LEVEL_NAMES, award_points, enrollment_for, feedback_appended, judge_measurement,
-                       measure_program_for,
+                       RISK_LEVEL_NAMES, award_points, enrollment_for, enrollment_still_active, feedback_appended,
+                       judge_measurement, measure_program_for,
                        measure_value_problem, scale_program_mismatch, scale_unusable, scale_version_problem, spawn_task,
                        touch_device_sync, unknown_program, withdraw_calls)
 from ...visibility import assert_org_writable, assert_patient_visible, scope_patient_list, visible_org_ids
@@ -453,20 +454,26 @@ def create_measurement(
     program_problem = unknown_program(db, body.program_code)  # 病种编码先查在不在（P1-120）
     if program_problem:
         raise HTTPException(status_code=404, detail=program_problem)
-    record = _record_measurement(db, body, user.id)
-    enrollment = _managed_enrollment_of(db, body.patient_id, record.program_code)   # 推断出的病种（P1-138）
-    if record.level in ("high", "low") and enrollment is not None:
-        spawn_task(
-            db,
-            patient_id=body.patient_id,
-            title=f"指标异常处置：{body.metric} {body.value}{body.unit}",
-            task_type="intervention",
-            enrollment=enrollment,
-            due_days=3,
-            priority=2,
-            source="rule",
-        )
-    db.commit()
+    # 推断出的病种（P1-138，与 `_record_measurement` 同一句）下的在管档案。派处置任务与「在管」圈进这份档案那一行的临界区、
+    # 锁里按列再判（P2-1179）：在管是锁外读的，读到之后别人登记死亡并提交（收尾已经跑过），原先照派给原主管医生、三天后
+    # 超期；与顺序发生时一样，监测值照存、不派任务。锁在第一次写库（监测值落库）之前拿：开发库上 serialized_on 是进程内锁，
+    # 先写后拿锁会与 SQLite 的库级写锁交叉等待（同 `tasks._finish_task`）
+    enrollment = _managed_enrollment_of(
+        db, body.patient_id, measure_program_for(db, body.patient_id, body.program_code, body.metric))
+    with serialized_on(db, SpdEnrollment, enrollment.id) if enrollment is not None else nullcontext():
+        record = _record_measurement(db, body, user.id)
+        if record.level in ("high", "low") and enrollment is not None and enrollment_still_active(db, enrollment.id):
+            spawn_task(
+                db,
+                patient_id=body.patient_id,
+                title=f"指标异常处置：{body.metric} {body.value}{body.unit}",
+                task_type="intervention",
+                enrollment=enrollment,
+                due_days=3,
+                priority=2,
+                source="rule",
+            )
+        db.commit()
     return _measure_out(record)
 
 
@@ -737,8 +744,15 @@ def _auto_intervene(db: Session, enrollment: SpdEnrollment, risk_level: str) -> 
 
     抢输的一路重查时看到的是赢家提交后的行，于是跳过 db.add——与顺序发生的
     第二次评估完全一样：不报 409，接口照旧 201，只是不再多写一条。
+
+    「在管」同样在块内按列复判（P2-1179）：调用方取在管档案是锁外读的，之后别人登记死亡并提交（收尾已经跑过），
+    原先照开干预与高危复诊。复判不在管的，与顺序发生（没有在管档案）一样：评估记录照存、不派发、风险分层也不回写。
     """
     with serialized_on(db, SpdEnrollment, enrollment.id):
+        managed = enrollment_still_active(db, enrollment.id)
+        if not managed:
+            # 只丢掉调用方挂在档案上的风险分层回写这一列（expire 不重读整个对象，不是上面说的 refresh）
+            db.expire(enrollment, ["risk_level"])
         # 同病种同等级几套自动模板取编号最小的那套（P2-693）：原先不排序，开哪套由库的返回次序决定；要不要几套都开
         # 与随访方案「命中几套」同一个口径，见 P2-391
         template = (
@@ -751,7 +765,7 @@ def _auto_intervene(db: Session, enrollment: SpdEnrollment, risk_level: str) -> 
             .order_by(SpdInterventionTemplate.id)
             .first()
         )
-        if template is not None:
+        if managed and template is not None:
             exists = (
                 db.query(SpdIntervention)
                 .filter(
@@ -783,7 +797,7 @@ def _auto_intervene(db: Session, enrollment: SpdEnrollment, risk_level: str) -> 
             )
             .first()
         )
-        if already is None:
+        if managed and already is None:
             db.add(
                 SpdRevisit(
                     patient_id=enrollment.patient_id, program_code=enrollment.program_code,

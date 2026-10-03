@@ -46,6 +46,7 @@ from ..service import (
     advance_path,
     award_points,
     enrollment_for,
+    enrollment_still_active,
     mark_task_escalated,
     task_unclaimed,
     move_task,
@@ -344,6 +345,11 @@ def start_path_instance(
     # 「同一档案同一模板只一条在途」的判定与建实例圈进档案这一行的临界区（P2-269）：原先查完没有在途的
     # 再建——两个人同时点启动（或双击），两路都查不到、各建一条，两份并行任务正是 docstring 要防的
     with serialized_on(db, SpdEnrollment, enrollment.id):
+        # 「在管」在锁里再判一次（P2-1179）：上面是锁外读的，读到在管之后别人登记死亡并提交（收尾已经跑过），原先这里只查重，
+        # 照建实例、派首节点任务——死者名下挂上运行中的路径和没人收的任务
+        if not enrollment_still_active(db, enrollment.id):
+            db.rollback()   # 放掉行锁再回话
+            raise HTTPException(status_code=409, detail="非在管患者不能启动路径")
         # 暂停的也算在途（P1-128）：原先只看执行中的，暂停着的时候能再启动一条，恢复后两条并行、各派一份任务
         running = (
             db.query(SpdPathInstance)
@@ -748,23 +754,32 @@ def create_task(
         team = db.get(SpdTeam, body.team_id)
         if team is None or not team.active:
             raise HTTPException(status_code=404, detail="服务团队不存在或已停用")
-    task = spawn_task(
-        db,
-        patient_id=body.patient_id,
-        title=body.title,
-        task_type=body.task_type,
-        program_code=body.program_code,
-        enrollment=enrollment,
-        assignee_id=body.assignee_id,
-        org_id=org_id,
-        team_id=body.team_id,
-        due_days=body.due_days,
-        priority=body.priority,
-        source="manual",
-        form_code=body.form_code,
-        require_evidence=body.require_evidence,
-    )
-    db.commit()
+    # 挂档案的，「在管」与建任务圈进这份档案那一行的临界区、锁里按列再判（P2-1179）：上面两处判在管都是锁外读的，读到在管
+    # 之后别人登记死亡并提交（收尾已经跑过），原先照挂上去、派给原主管医生。显式带档案号的与顺序发生时同一句 409；
+    # 按病种隐式挂的与顺序发生时一样不挂档案，任务照建
+    with serialized_on(db, SpdEnrollment, enrollment.id) if enrollment is not None else contextlib.nullcontext():
+        if enrollment is not None and not enrollment_still_active(db, enrollment.id):
+            if body.enrollment_id is not None:
+                db.rollback()   # 放掉行锁再回话
+                raise HTTPException(status_code=409, detail="非在管状态的档案不可新建任务，请先恢复管理")
+            enrollment = None
+        task = spawn_task(
+            db,
+            patient_id=body.patient_id,
+            title=body.title,
+            task_type=body.task_type,
+            program_code=body.program_code,
+            enrollment=enrollment,
+            assignee_id=body.assignee_id,
+            org_id=org_id,
+            team_id=body.team_id,
+            due_days=body.due_days,
+            priority=body.priority,
+            source="manual",
+            form_code=body.form_code,
+            require_evidence=body.require_evidence,
+        )
+        db.commit()
     return _task_out(task)
 
 
