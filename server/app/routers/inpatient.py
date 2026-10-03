@@ -857,8 +857,17 @@ def record_order_execution(
         note=body.note,
         skin_test_result=body.skin_test_result,
     )
-    db.add(execution)
-    db.commit()
+    # 「医嘱在执行」在这条医嘱那一行的临界区里按列再判一次（P2-1189）：上面那次在锁外，与停医嘱、出院同时到时，执行记录
+    # 照样落在刚停止的医嘱上（出院先提交、随后登记执行 201）。界选医嘱这一行而不是住院登记：停医嘱只改医嘱这一行，
+    # 两条出院路径（平台出院与 HL7 A03）都在置出院的同一事务里把执行中的医嘱整批改成停止——三条路都要改这一行，
+    # PG 上与 `FOR UPDATE` 互斥，锁到手后读到的就是它们提交之后的状态。
+    # 直接查这一列而不是看 `order.status`：会话里那份医嘱是锁外读的，身份映射会把旧对象原样还回来
+    with serialized_on(db, InpatientOrder, order_id):
+        if db.query(InpatientOrder.status).filter(InpatientOrder.id == order_id).scalar() != "active":
+            db.rollback()
+            raise HTTPException(status_code=409, detail="医嘱已停止，不可再登记执行")
+        db.add(execution)
+        db.commit()
     db.refresh(execution)
     return _execution_out(
         execution, user.full_name or user.username, _order_nursing_count(db, order_id)
