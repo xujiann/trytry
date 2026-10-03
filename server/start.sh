@@ -18,6 +18,11 @@ fi
 # A8：MEDPLAT_WORKERS>1 时多 worker 起 uvicorn（多核利用）。默认 1 保持现行为。
 # 注意：进程内状态（如 ws 连接管理）不跨 worker 共享，多 worker 需 Redis 在位。
 #
+# 单 worker 分支也显式写 `--workers 1`（P2-1217）：不写时 uvicorn 的 --workers 缺省取环境变量 $WEB_CONCURRENCY，
+# 托管平台常注入它，结果悄悄起了多个 worker；config.py 的多实例拒启守卫只认 MEDPLAT_WORKERS / MEDPLAT_MIGRATE_ON_START，
+# 认不出这种多 worker——没配 Redis 时登出黑名单、登录锁定、限流各 worker 一份，登出过的令牌在别的 worker 上照样能用。
+# worker 数只认 MEDPLAT_WORKERS 这一个开关。
+#
 # --no-access-log（P2-1142）：uvicorn 自带的访问日志把 path 连查询串整行写 stdout，由 docker/journald 留存——
 # 按身份证号 / 手机号检索患者走的是 `?keyword=`，证件号就这样明文进了日志，PII 加密开关管不到。平台自己的访问日志
 # medplat.access 只记 path，方法、状态、耗时、request_id 都在，关掉 uvicorn 那份不丢排障信息；来源 IP 看反向代理
@@ -26,7 +31,7 @@ WORKERS="${MEDPLAT_WORKERS:-1}"
 if [ "$WORKERS" -gt 1 ] 2>/dev/null; then
   set -- uvicorn app.main:app --host 0.0.0.0 --port "$PORT" --workers "$WORKERS" --no-access-log
 else
-  set -- uvicorn app.main:app --host 0.0.0.0 --port "$PORT" --no-access-log
+  set -- uvicorn app.main:app --host 0.0.0.0 --port "$PORT" --workers 1 --no-access-log
 fi
 
 # 优雅关闭（上线前审计）。容器里 PID 1 就是本脚本，`docker stop` 的 SIGTERM
