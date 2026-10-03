@@ -2223,10 +2223,13 @@ def handle_service_apply(
         excluded = exclusion_problem(db, apply.patient_id, program) if program is not None else ""
         if excluded:
             raise HTTPException(status_code=409, detail=f"{excluded}，只能驳回")
-    apply.status = body.status
-    apply.handle_note = body.handle_note
-    apply.handled_by = user.id
-    apply.handled_at = now_naive()
+    # 条件翻转（P2-1176）：上面「待受理」的预检是锁外读的——读到之后门诊刚直接签约建档、把这条申请办结为「已受理」并提交
+    # （P2-937 那一侧是条件 UPDATE），原先这里照旧整行写：患者在管、池行已纳管，居民端却显示「已驳回」。「还是待受理」
+    # 压进同一条 UPDATE，抢输了回滚、409（与顺序发生时同一句）
+    if not move_row(db, SpdServiceApply, apply.id, SpdServiceApply.status == "pending", status=body.status,
+                    handle_note=body.handle_note, handled_by=user.id, handled_at=now_naive()):
+        db.rollback()
+        raise HTTPException(status_code=409, detail="该申请已处理")
     if body.status == "accepted":
         candidate = (
             db.query(SpdCandidate)
@@ -2250,8 +2253,10 @@ def handle_service_apply(
             # 原先直接把别家的候选改派给调用方——乙院受理一条居民申请，就把甲院认领的人
             # 挪进了自己名下（实测 200，而同样的事走「认领」是 403）。
             assert_org_writable(db, user, candidate.org_id)
-            candidate.status = "target"
-            candidate.assigned_user_id = user.id
+            # 同样条件写（P2-1176）：「未纳管」是刚才读的，读到之后池行被建档置为已纳管的，不写回「目标」——与顺序发生时
+            # （已纳管的不动、申请照常受理）同一个结果
+            move_row(db, SpdCandidate, candidate.id, SpdCandidate.status != "enrolled",
+                     status="target", assigned_user_id=user.id)
     db.commit()
     return {"id": apply.id, "status": apply.status}
 
