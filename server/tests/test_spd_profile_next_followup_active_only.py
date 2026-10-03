@@ -105,3 +105,11 @@ def test_跑一遍_已死亡的卡片没有下次随访_在管的照印():
         html = render(status)
         assert "下次随访" not in html, (status, html)
         assert "2026-12-29" not in html, (status, html)
+
+
+def test_纳管清单的下次随访一列也只给在管档案印():
+    """跟进：纳管页「全部状态」查回来的已死亡、已迁出档案，清单「下次随访」一列原先照印过期日期（接口清单原样给这一列）。"""
+    start = SRC.index("const drawEnrollments = async")
+    body = strip_comments(SRC[start:SRC.index("const showEnrollment = async", start)])
+    assert '<td>${e.status === "active" ? esc(e.next_followup_at || "—") : "—"}</td>' in body
+    assert body.count("next_followup_at") == 1, "清单里下次随访只能出现在在管那一支"

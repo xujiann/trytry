@@ -1607,6 +1607,8 @@ async function renderSpdPatients() {
       setMsg("#spd-enroll-msg", !rows.length && q.keyword && (q.status || "active") === "active"
         ? "在管档案里没有匹配的；已死亡、召回中、已迁出、已排除的请在状态里选「全部状态」再查" : "", false);
     }
+    // 「下次随访」一列只给在管的档案印（P2-1199 跟进，与 360 卡片 `spdProfileHtml` 同一口径）：选「全部状态」查回来的
+    // 已死亡、已迁出档案这一列不清，原先照印一个早已作废的日期
     $("#spd-enroll-list").innerHTML = table(
       ["ID", "患者", "病种", "阶段", "风险", "机构", "团队", "建档", "下次随访", "状态", "操作"],
       rows, (e) =>
@@ -1615,7 +1617,7 @@ async function renderSpdPatients() {
        <td>${spdTag(SPD_RISK, e.risk_level)}</td><td>${e.org_id}</td>
        <td>${e.team_id ?? "—"}</td>
        <td>${e.archived ? '<span class="tag green">已建档</span>' : '<span class="tag orange">待完善</span>'}</td>
-       <td>${esc(e.next_followup_at || "—")}</td>
+       <td>${e.status === "active" ? esc(e.next_followup_at || "—") : "—"}</td>
        <td>${e.status === "active" ? '<span class="tag green">在管</span>'
           : '<span class="tag">' + esc(SPD_ENROLL_STATUS[e.status] || e.status) + "</span>"}</td>
        <td><button class="btn secondary" data-enr-detail="${e.id}">明细</button>
