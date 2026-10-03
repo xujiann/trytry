@@ -29,7 +29,8 @@ def _archive_row():
 def _archive_keys() -> set[str]:
     """`archive` 函数返回体里出现的全部字符串键（含嵌套的 profiles / patient）。"""
     tree = ast.parse(PORTAL.read_text(encoding="utf-8"))
-    func = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "archive")
+    func = next(n for n in ast.walk(tree)
+                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == "archive")
     keys = set()
     for node in ast.walk(func):
         if isinstance(node, ast.Dict):
