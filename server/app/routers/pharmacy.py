@@ -392,6 +392,7 @@ def purchase_suggestions(db: Session = Depends(get_db)):
     dispensable_rows = (
         db.query(dispensable.c.drug_code, func.sum(dispensable.c.dispensable))
         .group_by(dispensable.c.drug_code)
+        .order_by(dispensable.c.drug_code)   # 与上面汇总合计同一个写法：分组键排成全序（闸门 test_groupby_order）
         .all()
     )
     dispensable_by_code = {code: int(total or 0) for code, total in dispensable_rows}
