@@ -10,14 +10,14 @@
   阿里云/腾讯云等各家签名算法不同，此处走"统一网关"这层薄封装，接入方按自家
   网关协议实现一次即可，不把厂商 SDK 拖进本仓库。
 
-新增厂商直连时实现 SmsProvider 协议并在 _build_provider 注册即可。
+新增厂商直连时实现 SmsProvider 协议并在 _assemble_provider 注册即可。
 """
 import json
 import logging
 from typing import Protocol
 
 from .config import settings
-from .egress import egress_url_allowed, signed_headers
+from .egress import UnresolvedHost, egress_url_rejection, signed_headers
 from .privacy import mask_phone
 
 logger = logging.getLogger("medplat.sms")
@@ -84,7 +84,7 @@ class HttpGatewaySmsProvider:
       （SecretId/SecretKey TC3 签名、TemplateId+TemplateParamSet）。
     - 也可绕过统一网关直连：实现本文件的 SmsProvider 协议
       （``send(phone, content) -> bool``，实现内完成厂商签名与模板映射），
-      在 ``_build_provider`` 里按新的 MEDPLAT_SMS_PROVIDER 取值注册。
+      在 ``_assemble_provider`` 里按新的 MEDPLAT_SMS_PROVIDER 取值注册。
     """
 
     name = "http"
@@ -120,26 +120,48 @@ class HttpGatewaySmsProvider:
 
 
 def _build_provider() -> SmsProvider:
+    """按配置装配好的通道本身（不问能否缓存，见 _assemble_provider）。"""
+    return _assemble_provider()[0]
+
+
+def _assemble_provider() -> tuple[SmsProvider, bool]:
+    """按配置装配通道；第二项说明这个结果能不能存进进程单例（P2-1221）。
+
+    网关主机名这次没解析出来（`egress.UnresolvedHost`）时为 False：这一次照旧不予启用、置空网关地址，
+    验证码照旧 502、日志照旧，只是不缓存。DNS 抖一下不等于地址配错——原先这个降级的通道照样存进单例、
+    此后再不重建，这个 worker 的验证码登录、补绑、宣教短信一律 502 到重启，DNS 恢复了也不重查。
+    解析到内网 / 环回 / 保留段、协议不对是配置本身的问题，重试也一样，降级即永久，照旧缓存。
+    """
     if settings.sms_provider == "http":
         url = settings.sms_gateway_url
-        if url and not egress_url_allowed(url, "MEDPLAT_SMS_GATEWAY_URL"):
+        settled = True
+        problem = egress_url_rejection(url, "MEDPLAT_SMS_GATEWAY_URL") if url else None
+        if problem is not None:
             # SSRF 防线（I2）：URL 指向内网/环回等非公网地址时拒绝启用通道。
             # 置空 url 而非回退 console——console 会"成功"，等于把没发出去的
             # 验证码当成已发出；置空后 send 一律失败并 log，语义诚实。
             url = ""
-        return HttpGatewaySmsProvider(url, settings.sms_api_key, settings.sms_sign_name)
-    return ConsoleSmsProvider()
+            settled = not isinstance(problem, UnresolvedHost)
+        return HttpGatewaySmsProvider(url, settings.sms_api_key, settings.sms_sign_name), settled
+    return ConsoleSmsProvider(), True
 
 
 _provider: SmsProvider | None = None
 
 
 def get_sms_provider() -> SmsProvider:
-    """进程内单例；测试可用 set_sms_provider 注入桩件。"""
+    """进程内单例；测试可用 set_sms_provider 注入桩件。
+
+    只缓存定了的结论（P2-1221，见 _assemble_provider）：这次没解析出网关主机名而降级的通道只用这一次，
+    下次调用重建、重新校验；校验通过的、被永久拒绝的照旧缓存，此后不再重复解析。
+    """
     global _provider
-    if _provider is None:
-        _provider = _build_provider()
-    return _provider
+    if _provider is not None:
+        return _provider
+    provider, settled = _assemble_provider()
+    if settled:
+        _provider = provider
+    return provider
 
 
 def set_sms_provider(provider: SmsProvider | None) -> None:

@@ -11,7 +11,10 @@
 - 主机经 socket 解析（IP 直写与域名同一条路径），任一解析结果落在
   环回/内网/链路本地/保留段（即非公网可路由地址）一律拒绝——域名解析到
   内网同样拒绝，DNS rebinding 的第一步在这里挡住；
-- 解析失败视为不可用：起不了通道的 URL 没有放行的意义。
+- 解析失败视为不可用：起不了通道的 URL 没有放行的意义。但那只是**这一次**
+  不可用：原因标成 `UnresolvedHost`，DNS 抖一下不等于地址配错，把通道缓存
+  起来的调用方别把它存成永久结论（P2-1221，短信通道下次调用重建、重新校验）；
+  解析到非公网地址、协议不对、缺主机名是配置本身的问题，永久拒绝。
 
 不通过时调用方应**拒绝启用通道并 log**（billing.register_http_gateway /
 sms._build_provider 均如此），而不是带病运行。
@@ -42,6 +45,15 @@ ALLOWED_SCHEMES = ("http", "https")
 MAX_SIGN_SKEW_SECONDS = 300
 
 
+class UnresolvedHost(str):
+    """「主机名这次没解析出来」这一类不可用原因（P2-1221）。
+
+    文本与原先一字不差，照旧是能写进日志的人话；只多一个类型，让调用方分得出两种不可用：
+    解析到内网 / 环回 / 保留段、协议不对、缺主机名，重试多少次都一样；解析失败可能只是 DNS
+    抖了一下，把通道缓存起来的调用方不该把它存成永久结论（见 sms._assemble_provider）。
+    """
+
+
 def egress_url_problem(url: str) -> str | None:
     """返回该出网 URL 不可用的原因；可用返回 None。
 
@@ -62,7 +74,7 @@ def egress_url_problem(url: str) -> str | None:
     try:
         infos = socket.getaddrinfo(host, parts.port or (443 if parts.scheme == "https" else 80))
     except OSError as exc:
-        return f"主机名解析失败：{exc}"
+        return UnresolvedHost(f"主机名解析失败：{exc}")
     for info in infos:
         try:
             ip = ipaddress.ip_address(info[4][0])
@@ -81,11 +93,18 @@ def egress_url_problem(url: str) -> str | None:
 
 def egress_url_allowed(url: str, label: str) -> bool:
     """校验并落日志的便捷入口：不通过时 log 原因并返回 False。"""
+    return egress_url_rejection(url, label) is None
+
+
+def egress_url_rejection(url: str, label: str) -> str | None:
+    """同 egress_url_allowed（同一条日志），但交回不通过的原因、通过返回 None。
+
+    要分清「这次没解析出来」与「永久拒绝」的调用方用它：原因是 `UnresolvedHost` 即前者（P2-1221）。
+    """
     problem = egress_url_problem(url)
-    if problem is None:
-        return True
-    logger.error("[EGRESS] %s=%r 未通过出网校验：%s；通道不予启用", label, url, problem)
-    return False
+    if problem is not None:
+        logger.error("[EGRESS] %s=%r 未通过出网校验：%s；通道不予启用", label, url, problem)
+    return problem
 
 
 def gateway_sign(key: str, timestamp: int | str, body: bytes) -> str:
