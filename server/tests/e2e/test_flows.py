@@ -309,6 +309,69 @@ def test_login_rejects_bad_password(page, base_url):
     expect(page.locator("#login-view")).to_be_visible()
 
 
+def _todos_fail(route):
+    """取待办恒失败：口令超 90 天的账号除改密 / 登出外一律 428（端到端建不出这种账号，拦截接口模拟）。"""
+    route.fulfill(status=428, content_type="application/json", body='{"detail": "口令已超过 90 天未修改"}')
+
+
+@pytest.fixture()
+def bell_patient(admin_call):
+    """P2-1220 用例的前置：甲院医师 e2e_p21220_a 的铃铛里一条待确认的危急值（本院申请单），乙镇医师 e2e_p21220_b 什么都没有。
+    用完把这条危急值闭环：后面的用例点的是危急值操作台上「第一个」确认接收按钮，留一条待确认的就点到它头上。"""
+    org = admin_call("POST", "/api/organizations", {"name": "E2E铃铛甲县医院", "org_type": "lead_hospital", "level": "county"})
+    other = admin_call("POST", "/api/organizations", {"name": "E2E铃铛乙镇卫生院", "org_type": "township", "level": "township"})
+    for username, org_id in (("e2e_p21220_a", org["id"]), ("e2e_p21220_b", other["id"])):
+        admin_call("POST", "/api/users", {"username": username, "password": "passw0rd1", "role": "doctor", "org_id": org_id})
+    patient = admin_call("POST", "/api/patients", {"name": "E2E铃铛患者", "id_card": "320981197104055262", "gender": "女"})
+    req = admin_call("POST", "/api/exams", {"patient_id": patient["id"], "from_org_id": org["id"], "center_type": "lab",
+                                            "item_code": "E2E-P21220", "item_name": "E2E铃铛血钾"})
+    report = admin_call("POST", f"/api/exams/{req['id']}/report", {
+        "finding": "", "conclusion": "E2E铃铛 血钾 6.9（危急值）", "critical": True, "reported_by": "检验科"})
+    yield patient
+    admin_call("POST", f"/api/exams/reports/{report['id']}/acknowledge")
+    admin_call("POST", f"/api/exams/reports/{report['id']}/resolve", {"note": "E2E 用例收尾"})
+
+
+def test_管理端换人登录_铃铛不留上一位的待办_选过的患者退出即清(page, base_url, bell_patient):
+    """P2-1220（第三十五批扫描 T1-8）：管理端退出原先只删令牌、角色、CSRF 三个键——`stopTodoPolling` 只把铃铛藏起来，
+    角标和面板原样留着，取待办失败又是静默的：换人登录后，取待办恒 428 的后一位一直挂着前一位的条数，点开是前一位机构的
+    危急值结论（todos.py 的 P0-40：别家的危急值不进别人的铃铛）；前一位在「统一申请单中心」筛过的患者成了后一位的默认筛选。
+    修后取待办失败、退出都把角标与面板复原；退出清掉指向具体记录的业务选择。"""
+    patient = bell_patient
+    count, panel = page.locator("#todo-count"), page.locator("#todo-panel")
+    sr_patient = page.locator("#sr-form input[name=patient_id]")
+
+    _login(page, base_url, "e2e_p21220_a", "passw0rd1")
+    expect(count).to_be_visible()
+    expect(panel).to_contain_text("E2E铃铛 血钾 6.9（危急值）")
+    page.route("**/api/todos", _todos_fail)   # 取待办失败：清空，不再留着上一次取到的
+    page.evaluate("pollTodos()")
+    expect(count).to_be_hidden()
+    expect(panel).to_be_empty()
+    page.unroute("**/api/todos")
+    page.evaluate("pollTodos()")
+    expect(panel).to_contain_text("E2E铃铛 血钾 6.9（危急值）")
+    _open_page(page, "servicerequests", "统一申请单中心")
+    sr_patient.fill(str(patient["id"]))
+    _submit(page, "#sr-form button")
+    expect(sr_patient).to_have_value(str(patient["id"]))
+
+    page.click("#logout")
+    expect(page.locator("#login-view")).to_be_visible()
+    expect(panel).to_be_empty()   # 修前退出只藏铃铛，面板里还是前一位的危急值
+    assert "medplat_sr_patient" not in page.evaluate("Object.keys(localStorage)")
+    page.route("**/api/todos", _todos_fail)
+    page.fill("#login-username", "e2e_p21220_b")
+    page.fill("#login-password", "passw0rd1")
+    page.click("#login-form button[type=submit]")
+    expect(page.locator("#app-view")).to_be_visible()
+    page.click("#todo-bell")
+    expect(count).to_be_hidden()   # 修前一直挂着前一位的条数
+    expect(panel).to_be_empty()
+    _open_page(page, "servicerequests", "统一申请单中心")
+    expect(sr_patient).to_have_value("")   # 修前是前一位筛的那位患者
+
+
 def test_exam_order_report_and_critical_closed_loop(page, base_url, seed):
     """开单 → 领取 → 出报告（危急值）→ 确认接收 → 处置反馈全链路。"""
     _login(page, base_url)

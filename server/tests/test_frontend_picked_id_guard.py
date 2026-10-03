@@ -162,6 +162,21 @@ def test_pickedId只有一份且真做了成员校验():
     )
 
 
+def test_指向记录的键管理端退出即清():
+    """P2-1220（第三十五批扫描 T1-8）：管理端退出原先只删令牌、角色、CSRF 三个键，list / typed 两类（指向某条记录的 id）
+    原样留给下一位——前一位在「统一申请单中心」筛过的患者成了后一位的默认筛选，住院 / 门诊文书默认打开前一位看的那一份。
+    这两类键在 `core.js` 的 `logout()` 里都得逐个清掉；state 类（期间、分类、视角、令牌）不指向对象，不归这条管。
+    新加一个 list / typed 键，这条就逼着退出时一并清。行为由端到端 `test_管理端换人登录_铃铛不留上一位的待办_选过的患者退出即清` 盯着。
+    """
+    logout = _body(_code("core.js"), "logout")
+    kept = [key for key, (kind, _why) in KEYS.items()
+            if kind in ("list", "typed") and f'localStorage.removeItem("{key}")' not in logout]
+    assert not kept, (
+        "这些键存的是前一位选中的记录 id，管理端退出（core.js logout()）却不清，下一位登录就默认落在前一位选的那条上：\n  "
+        + "\n  ".join(kept)
+    )
+
+
 def test_手输型id的取数必须容错():
     """`typed` 类没有列表可校验，那就不许让它掀掉整页。
 

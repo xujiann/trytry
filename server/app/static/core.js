@@ -56,6 +56,18 @@ function logout() {
   localStorage.removeItem("medplat_token");
   localStorage.removeItem("medplat_role");
   localStorage.removeItem(CSRF_KEY);
+  // 前一位最后选中的对象一并清掉（P2-1220）：住院（住院文书）、协作分组、基金池、专病目录、就诊（门诊文书）、患者（统一申请单
+  // 中心的筛选）、机构（成本核算）。原先只删上面三个键，前一位最后选的患者成了后一位的默认筛选，文书页默认打开前一位看的那一份。
+  // 清的正是 test_frontend_picked_id_guard 注册表里 list / typed 两类（指向某条记录的 id）；state 类（看哪个月、分组按哪类看、
+  // 团队端视角）不指向任何对象，留着。逐个写键名：那道闸门不认变量键名。不按 medplat_ 前缀一把清：居民端与本端同源、
+  // 共用一个 localStorage，它的登录标记 medplat_portal_csrf 也是这个前缀
+  localStorage.removeItem("medplat_doc_adm");
+  localStorage.removeItem("medplat_group_id");
+  localStorage.removeItem("medplat_fund_pool");
+  localStorage.removeItem("medplat_program");
+  localStorage.removeItem("medplat_od_encounter");
+  localStorage.removeItem("medplat_sr_patient");
+  localStorage.removeItem("medplat_cost_org");
   stopTodoPolling();
   $("#app-view").classList.add("hidden");
   $("#login-view").classList.remove("hidden");
@@ -85,7 +97,20 @@ async function pollTodos() {
             `<div class="todo-item">${esc(row.item_name || row.diagnosis_name || row.drug_name || row.conclusion || `#${row.id}`)}</div>`).join("")
         }`).join("")
       : '<div class="todo-empty">暂无待办事项</div>';
-  } catch (e) { /* 登录过期等由 api() 统一处理 */ }
+  } catch (e) {
+    // 取不到就清空（P2-1220），不再静默留着上一次的：换人登录后，口令超 90 天的账号取待办恒回 428，原先一直挂着前一位的
+    // 条数，点开是前一位机构的危急值结论（todos.py 的 P0-40：别家的危急值不进别人的铃铛）。登录过期等由 api() 统一处理
+    clearTodoBell();
+  }
+}
+
+/** 角标与面板复原成没取过的样子（P2-1220）：退出时、取待办失败时。 */
+function clearTodoBell() {
+  const count = $("#todo-count");
+  if (!count) return;
+  count.textContent = "0";
+  count.classList.add("hidden");
+  $("#todo-panel").innerHTML = "";
 }
 
 function startTodoPolling() {
@@ -97,7 +122,8 @@ function startTodoPolling() {
 function stopTodoPolling() {
   if (todoTimer) { clearInterval(todoTimer); todoTimer = null; }
   const bell = $("#todo-bell");
-  if (bell) { bell.classList.add("hidden"); $("#todo-panel").classList.add("hidden"); }
+  // 原先只把铃铛藏起来（P2-1220）：下一位登录即亮铃铛，第一次轮询回来之前看到的是前一位的条数和面板
+  if (bell) { bell.classList.add("hidden"); $("#todo-panel").classList.add("hidden"); clearTodoBell(); }
 }
 
 function table(cols, rows, renderRow) {
