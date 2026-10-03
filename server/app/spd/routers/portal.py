@@ -12,7 +12,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field, FiniteFloat
-from sqlalchemy import ColumnElement, or_, select
+from sqlalchemy import ColumnElement, and_, or_, select
 from sqlalchemy.orm import Session
 
 from ... import clock
@@ -830,6 +830,8 @@ def journey(
         query = query.filter(SpdEnrollment.program_code == program_code)
     enrollments = query.all()
     names = _program_names(db, [e.program_code for e in enrollments])
+    # 没挂档案的存量转诊单（enrollment_id 为空）挂在哪张卡片：这个病种最新、在管优先的那份档案（P2-1182）
+    legacy_owner = {e.program_code: e.id for e in sorted(enrollments, key=lambda e: (e.status == "active", e.id))}
     out = []
     for enrollment in enrollments:
         instances = (
@@ -849,12 +851,15 @@ def journey(
             .limit(30)
             .all()
         )
+        # 转诊按它挂的档案取，与上面的任务同一个口径（P2-1182）：原先按病种取——跨机构迁出确认（或排除后再签约）之后同病种
+        # 两份档案，同一张转诊单在「已迁出」「在管」两张卡片里各列一次
+        referral_scope = SpdReferralCase.enrollment_id == enrollment.id
+        if legacy_owner[enrollment.program_code] == enrollment.id:
+            referral_scope = or_(referral_scope, and_(SpdReferralCase.enrollment_id.is_(None),
+                                                       SpdReferralCase.program_code == enrollment.program_code))
         referrals = (
             db.query(SpdReferralCase)
-            .filter(
-                SpdReferralCase.patient_id == patient.id,
-                SpdReferralCase.program_code == enrollment.program_code,
-            )
+            .filter(SpdReferralCase.patient_id == patient.id, referral_scope)
             .order_by(SpdReferralCase.id.desc())
             .limit(10)
             .all()
