@@ -57,6 +57,7 @@ from ..models import (
 )
 from ..rules import RuleError, as_validated, evaluate, is_suspect_risk, score_scale, screen
 from ..service import (ENROLL_STATUS_LABELS, PACKAGE_ITEM_NAME_MAX, paused_enrollment, SCALE_ADVICE_MAX, MEASUREMENT_SOURCE_NAMES, TASK_OPEN_STATUSES, actively_enrolled, award_points, build_facts,
+                       MIGRATION_VOID_STATUSES,
                        candidate_reason, candidate_undistributed, close_open_work, exclusion_problem, match_program, migration_void_reason,
                        package_items_ok,
                        scale_program_mismatch, scale_unusable, scale_version_problem, unknown_program)
@@ -1556,9 +1557,21 @@ def confirm_migration(
     void = migration_void_reason(enrollment.status)
     if void:
         raise HTTPException(status_code=409, detail=void)
-    event.confirmed = True
-    event.confirmed_by = user.id
-    enrollment.status = "migrated"
+    # 条件翻转（P2-1175，同 lifecycle_event 的 P2-344）：上面两道预检都是锁外读的——读到「还没确认、原档案没作废」之后，
+    # 原机构刚登记死亡并提交，原先这里照旧整行写成「已迁出」：死亡被抹掉，目标机构给已故患者新建在管档案（实测两路都 200）。
+    # 两道判据各压进同一条 UPDATE，抢输了回滚、按库里的现状给出与顺序发生时同一句 409。先翻事件、再翻档案、再收尾：
+    # 两家同时确认，后到的一路回「该迁出已确认」而不是「原档案已迁出」；档案行在收尾之前锁，与登记死亡同一个加锁顺序
+    if not move_row(db, SpdLifecycleEvent, event.id, SpdLifecycleEvent.confirmed.is_(False),
+                    confirmed=True, confirmed_by=user.id):
+        db.rollback()
+        raise HTTPException(status_code=409, detail="该迁出已确认")
+    if not move_row(db, SpdEnrollment, enrollment.id, SpdEnrollment.status.not_in(MIGRATION_VOID_STATUSES),
+                    status="migrated"):
+        db.rollback()
+        db.refresh(enrollment)   # 抢输了按库里的现状措辞，别拿锁外读到的旧值
+        raise HTTPException(status_code=409, detail=migration_void_reason(enrollment.status)
+                            or "原档案刚被其他操作改变，请刷新后重试")
+    db.refresh(enrollment)   # 状态走的是 Core UPDATE，会话里那份对象没跟着变
     closed = close_open_work(db, enrollment, "迁出至其他机构", keep_org_id=event.target_org_id)
 
     # 目标机构重建档案。唯一性是**部分唯一索引**（仅 status='active'）：
