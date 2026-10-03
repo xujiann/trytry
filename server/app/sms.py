@@ -113,10 +113,17 @@ class HttpGatewaySmsProvider:
             # 号码打掩码：这条 ERROR 恰恰是最会被留存、被贴进工单的日志。
             logger.exception("[SMS-HTTP] 短信网关调用异常 phone=%s", mask_phone(phone))
             return False
-        if resp.status_code >= 400:  # pragma: no cover - 依赖真实网络
-            logger.error("[SMS-HTTP] 网关拒绝 status=%s body=%s", resp.status_code, resp.text[:200])
+        if not resp.is_success:
+            # 只认 2xx（P2-1245），与上面类注释「网关返回 2xx 视为受理」、兄弟通道（告警 webhook、审计锚点、ESB 投递、
+            # 呼叫网关）同一口径：原先只拦 >= 400，而 httpx 默认不跟随跳转——网关地址写成 http 而网关强制 https（301/308）、
+            # 接口路径挪了（302），都算「已发送」：居民获取验证码回 sent:true 却永远收不到，宣教短信记「已发送」，日志一行没有。
+            # 不改成跟随跳转：跳转目标没过出网校验（I2），改地址是部署配置的事。号码照上面打掩码，正文（就是验证码）不进日志。
+            logger.error(
+                "[SMS-HTTP] 网关未受理（HTTP %s，只认 2xx），短信未发送 phone=%s body=%s",
+                resp.status_code, mask_phone(phone), resp.text[:200],
+            )
             return False
-        return True  # pragma: no cover - 依赖真实网络
+        return True
 
 
 def _build_provider() -> SmsProvider:

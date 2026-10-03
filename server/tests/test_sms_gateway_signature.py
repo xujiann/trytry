@@ -15,6 +15,7 @@ from app.sms import ConsoleSmsProvider, HttpGatewaySmsProvider, _build_provider
 
 class DummyResp:
     status_code = 200
+    is_success = True   # 真的 httpx.Response 有这个属性：P2-1245 起按它判受理（只认 2xx）
     text = ""
 
 
