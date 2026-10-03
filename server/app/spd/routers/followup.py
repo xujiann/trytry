@@ -8,7 +8,7 @@
 "纳管"成慢病患者。它们只认患者与场景。
 """
 import zlib
-from contextlib import nullcontext
+from contextlib import AbstractContextManager, nullcontext
 from datetime import date, timedelta
 from typing import Any, cast
 
@@ -1220,6 +1220,7 @@ def create_call_task(
     # 刷新时（别人刚登记死亡、居民刚自助答完、门诊当面办结）点一下「转呼叫」，原先又建出一条待呼叫，坐席照单打给已经随访过
     # 的人、甚至死者家属。随访与执行同一句（失访的照收，还能补录）；复诊同一个口径，原先连存在都不查
     record: SpdFollowupRecord | None = None
+    revisit: SpdRevisit | None = None
     if body.ref_type == "followup" and body.ref_id is not None:
         record = db.get(SpdFollowupRecord, body.ref_id)
         if record is None:
@@ -1256,21 +1257,33 @@ def create_call_task(
     # 先提交也让网关拿到 task_id 立刻回调 result 时查得到这一行（旧写法 flush 未提交）。
     #
     # 随访一类与执行随访用同一把随访记录行锁、锁里重读再判（P2-1181）：上面「已结束不再转呼叫」是锁外读的，读到未结束之后
-    # 别人刚办结并提交（办结只撤当时已在队列里的待呼叫），原先照建待呼叫、派发外拨。与顺序发生时同一句 409
-    with serialized_on(db, SpdFollowupRecord, record.id) if record is not None else nullcontext():
+    # 别人刚办结并提交（办结只撤当时已在队列里的待呼叫），原先照建待呼叫、派发外拨。与顺序发生时同一句 409。
+    # 复诊一类同形（P2-1181 跟进）：与改复诊（办结 / 移除并撤回待呼叫，`care.update_revisit`）用同一把复诊行锁
+    guard: AbstractContextManager[Any] = nullcontext()
+    if record is not None:
+        guard = serialized_on(db, SpdFollowupRecord, record.id)
+    elif revisit is not None:
+        guard = serialized_on(db, SpdRevisit, revisit.id)
+    ended = "该随访已结束" if record is not None else "该复诊已结束"
+    with guard:
         if record is not None:
             db.refresh(record)
             if record.status in ("done", "removed"):
                 db.rollback()   # 放掉行锁再回话
-                raise HTTPException(status_code=409, detail="该随访已结束")
+                raise HTTPException(status_code=409, detail=ended)
+        if revisit is not None:
+            db.refresh(revisit)
+            if revisit.status not in REVISIT_OPEN_STATUSES:
+                db.rollback()   # 放掉行锁再回话
+                raise HTTPException(status_code=409, detail=ended)
         insert_or_conflict(
             db, task, "该患者对同一对象已有待呼叫任务，请先回写其结果（未接通/取消）后再发起"
         )
-    if record is not None:
-        # 提交后仍是待呼叫才派发（P2-1181）：出了临界区、派发之前随访被办结的，办结已把这条撤出队列，不再推给呼叫通道
+    if record is not None or revisit is not None:
+        # 提交后仍是待呼叫才派发（P2-1181）：出了临界区、派发之前随访 / 复诊被办结的，办结已把这条撤出队列，不再推给呼叫通道
         db.refresh(task)
         if task.status != "pending":
-            raise HTTPException(status_code=409, detail="该随访已结束")
+            raise HTTPException(status_code=409, detail=ended)
     # 经呼叫通道派发（manual=等人工外呼，http=推给呼叫中心）。
     # 派发失败不报错：任务留在 pending、结果里记原因——通道抖一下
     # 不该让"发起随访"这个动作失败。原因只在仍待呼叫时记（P2-367）：网关超时之后其实已受理、

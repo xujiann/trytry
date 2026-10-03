@@ -132,3 +132,95 @@ def test_没有竞争时照常转呼叫并派发_办结后再转409(client, admi
     again = client.post(f"{B}/call-tasks", headers=admin, json={"patient_id": patient, "ref_type": "followup", "ref_id": record})
     assert again.status_code == 409 and again.json() == {"detail": "该随访已结束"}, again.text
     assert provider.dispatched == [resp.json()["id"]]
+
+
+# ---------------------------------------------------------------- 跟进：复诊一类同形（与 `care.update_revisit` 同一把复诊行锁）
+def _planned_revisit(client, admin, world):
+    """现造一位有电话的患者 + 一条已排期的复诊，返回 (patient_id, revisit_id)。"""
+    from datetime import date, timedelta
+
+    world["n"] += 1
+    patient = client.post("/api/patients", headers=admin, json={
+        "name": f"P21181 复诊患者{world['n']}", "id_card": f"33012719650505{world['n']:04d}",
+        "phone": f"139111811{world['n']:02d}"})
+    assert patient.status_code == 201, patient.text
+    revisit = client.post(f"{B}/revisits", headers=admin, json={
+        "patient_id": patient.json()["id"], "plan_date": (date.today() + timedelta(days=7)).isoformat(),
+        "items": "P21181 复诊"})
+    assert revisit.status_code == 201, revisit.text
+    return patient.json()["id"], revisit.json()["id"]
+
+
+def _revisit_calls(revisit_id):
+    from app.spd.models import SpdCallTask
+
+    with SessionLocal() as db:
+        return [(t.status, t.result) for t in db.query(SpdCallTask).filter_by(ref_type="revisit", ref_id=revisit_id)]
+
+
+def _revisit_done_by_other(revisit_id):
+    """另一位医生把这条复诊办结并提交：与 `care.update_revisit` 办结同一个效果（办结时撤回挂在它上面的待呼叫）。"""
+    from app.spd.models import SpdRevisit
+    from app.spd.service import withdraw_calls
+
+    with SessionLocal() as other:
+        other.get(SpdRevisit, revisit_id).status = "done"
+        withdraw_calls(other, "revisit", [revisit_id], "复诊已完成，撤出待呼叫")
+        other.commit()
+
+
+def test_复诊判完未结束之后别人刚办结_409_不建待呼叫不派发(client, admin, world, provider, monkeypatch):
+    from app.spd.routers import followup
+
+    patient, revisit = _planned_revisit(client, admin, world)
+    real, fired = followup.SpdCallTask, []
+
+    def racing(**kwargs):   # 锁外判过「未结束」、建待呼叫之前
+        if not fired:
+            fired.append(True)
+            _revisit_done_by_other(revisit)
+        return real(**kwargs)
+
+    monkeypatch.setattr(followup, "SpdCallTask", racing)
+    resp = client.post(f"{B}/call-tasks", headers=admin, json={"patient_id": patient, "ref_type": "revisit", "ref_id": revisit})
+    monkeypatch.undo()
+    assert fired
+    assert resp.status_code == 409, resp.text   # 修前 201：待呼叫、已派发
+    assert resp.json() == {"detail": "该复诊已结束"}   # 与顺序发生时同一句
+    assert _revisit_calls(revisit) == []
+    assert provider.dispatched == []
+
+
+def test_复诊建好待呼叫之后派发之前被办结撤回_不再派发(client, admin, world, provider, monkeypatch):
+    from app.spd.routers import followup
+
+    patient, revisit = _planned_revisit(client, admin, world)
+    real, fired = followup.insert_or_conflict, []
+
+    def racing(*args, **kwargs):   # 待呼叫已提交、派发之前：办结把它撤出队列
+        task = real(*args, **kwargs)
+        if not fired:
+            fired.append(True)
+            _revisit_done_by_other(revisit)
+        return task
+
+    monkeypatch.setattr(followup, "insert_or_conflict", racing)
+    resp = client.post(f"{B}/call-tasks", headers=admin, json={"patient_id": patient, "ref_type": "revisit", "ref_id": revisit})
+    monkeypatch.undo()
+    assert fired
+    assert resp.status_code == 409 and resp.json() == {"detail": "该复诊已结束"}, resp.text   # 修前 201、派发了
+    assert provider.dispatched == []
+    assert _revisit_calls(revisit) == [("withdrawn", "复诊已完成，撤出待呼叫")]
+
+
+def test_复诊没有竞争时照常转呼叫并派发_办结后再转409(client, admin, world, provider):
+    patient, revisit = _planned_revisit(client, admin, world)
+    resp = client.post(f"{B}/call-tasks", headers=admin, json={"patient_id": patient, "ref_type": "revisit", "ref_id": revisit})
+    assert resp.status_code == 201, resp.text
+    assert provider.dispatched == [resp.json()["id"]]
+    done = client.patch(f"{B}/revisits/{revisit}", headers=admin, json={"status": "done"})
+    assert done.status_code == 200, done.text
+    assert _revisit_calls(revisit) == [("withdrawn", "复诊已完成，撤出待呼叫")]
+    again = client.post(f"{B}/call-tasks", headers=admin, json={"patient_id": patient, "ref_type": "revisit", "ref_id": revisit})
+    assert again.status_code == 409 and again.json() == {"detail": "该复诊已结束"}, again.text
+    assert provider.dispatched == [resp.json()["id"]]
