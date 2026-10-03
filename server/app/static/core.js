@@ -1257,6 +1257,24 @@ async function renderOrgs() {
   };
 }
 
+// 建档命中既有档案时，本次所填与档案对不上的项（P2-1244）。只拿回执里有的比，不另查：没填的格（性别留着「未知」）
+// 不算不一致；电话回执按角色掩码（H1，掩码规则同 privacy.mask_phone：前 3 后 2），两边都按掩码比——掩码相同
+// 不等于号码相同，所以只报确实不同的，不说「一致」
+function registerConflicts(f, p) {
+  const typed = (k) => String(f.get(k) || "").trim();
+  const filed = (k) => String(p[k] || "").trim();
+  const mask = (v) => (v.length <= 5 ? v : v.slice(0, 3) + "*".repeat(v.length - 5) + v.slice(-2));
+  const out = [];
+  const check = (k, label, same = (a, b) => a === b) => {
+    if (typed(k) && !same(typed(k), filed(k))) out.push(`${label}（档案：${filed(k) || "未填"}，本次：${typed(k)}）`);
+  };
+  check("name", "姓名");
+  if (typed("gender") !== "未知") check("gender", "性别");
+  check("birth_date", "出生日期");
+  check("phone", "电话", (a, b) => mask(a) === mask(b));
+  return out;
+}
+
 async function renderPatients() {
   $("#page-desc").textContent = "EMPI：身份证号去重，自动签发电子健康卡号";
   const draw = async (keyword = "") => {
@@ -1375,7 +1393,15 @@ async function renderPatients() {
       const p = await api("/api/patients", { method: "POST", body: JSON.stringify({
         name: f.get("name"), id_card: f.get("id_card"), gender: f.get("gender"), phone: f.get("phone"),
         ...(f.get("birth_date") ? { birth_date: f.get("birth_date") } : {}) }) });
-      setMsg("#patient-msg", `建档成功，电子健康卡号：${p.ehc_no}`);
+      // 证件号已建过档（P2-1244）：后端幂等返回既有档案、本次所填一概没写进去（回执 created=false，状态码照旧 201）。
+      // 原先照样报「建档成功」——补填的出生日期、电话被吞掉，证件号录错撞上别人的档案（姓名性别都不同）也看不出来
+      if (p.created === false) {
+        const diffs = registerConflicts(f, p);
+        setMsg("#patient-msg", `该证件号已建档（电子健康卡号：${p.ehc_no}），未按本次所填改动档案`
+          + (diffs.length ? `：${diffs.join("；")}，与档案不一致；如需更正请走档案更正` : ""), !diffs.length);
+      } else {
+        setMsg("#patient-msg", `建档成功，电子健康卡号：${p.ehc_no}`);
+      }
       await draw();
     } catch (err) { setMsg("#patient-msg", err.message, false); }
   };

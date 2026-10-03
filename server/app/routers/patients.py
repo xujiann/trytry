@@ -88,9 +88,17 @@ def _generate_ehc_no(db: Session) -> str:
             return candidate
 
 
+class PatientRegisterOut(PatientOut):
+    """建档回执：档案七键之后多一个 `created`（P2-1244），其余与 `PatientOut` 逐字节相同。"""
+
+    #: 本次新建为 true；证件号已有档案为 false——回的是既有档案，本次所填一概没写进去。
+    #: 与 HL7 / FHIR 入站回执的 `created` 同一口径（同走 `create_patient_idempotent`）
+    created: bool
+
+
 @router.post(
     "",
-    response_model=PatientOut,
+    response_model=PatientRegisterOut,
     status_code=201,
     # L-10 整改：建档纳入角色矩阵（经办/医师/公卫），药师/管理层不建档
     dependencies=[Depends(require_roles("operator", "doctor", "public_health"))],
@@ -103,10 +111,13 @@ def register_patient(
     if body.birth_date and body.birth_date > resolve_business_date(None).isoformat():
         raise HTTPException(status_code=422, detail=f"出生日期（{body.birth_date}）不得晚于今天")
     # 主索引幂等：同一身份证号返回既有档案，不重复建档（并发竞态由唯一约束+重查兜底）
-    patient, _created = create_patient_idempotent(db, body.model_dump())
+    patient, created = create_patient_idempotent(db, body.model_dump())
     # 出口脱敏（H1）：幂等命中时返回的是**别人录入的**那份档案——电话不是本次请求方
     # 提供的信息。原样返回，一个只知道证件号的账号借"建档"就能把号码套出来。
-    return desensitize(patient, user)
+    # 命中与否要告诉调用方（P2-1244）：原先把 created 丢掉，命中照样 201、页面报「建档成功」——窗口补填的出生日期、
+    # 电话被吞掉，证件号录错撞上别人的档案（姓名性别都不同）也看不出来。状态码不改（对接方按 201 判成功，向后兼容），
+    # 只加字段；本次值不替人写进档案，改档案走档案更正（审核后才改主索引）
+    return PatientRegisterOut(**desensitize(patient, user).model_dump(), created=created)
 
 
 @router.get("", response_model=list[PatientOut])

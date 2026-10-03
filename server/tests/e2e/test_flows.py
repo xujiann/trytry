@@ -1580,6 +1580,32 @@ def test_撤销调阅授权先确认(page, base_url, seed, admin_read, admin_cal
     assert status() == "revoked"
 
 
+def test_建档撞上已有证件号_提示不一致的项_不报建档成功(page, base_url, admin_read, admin_call):
+    """P2-1244：证件号已建过档，后端幂等返回既有档案、本次所填一概不写，页面原先照样报「建档成功」——补填的出生日期被吞掉、
+    证件号录错撞上别人的档案（姓名性别都不同）也看不出来。现在据回执的 created 提示与档案不一致的项、指向档案更正。"""
+    old = admin_call("POST", "/api/patients", {"name": "E2E早年建档", "id_card": "320981194603011244", "gender": "男"})
+    _login(page, base_url)
+    _open_page(page, "patients", "患者主索引")
+    form = page.locator("#patient-form")
+    form.locator('[name="name"]').fill("E2E录错证件号")
+    form.locator('[name="id_card"]').fill("320981194603011244")
+    form.locator('[name="gender"]').select_option("女")
+    form.locator('[name="birth_date"]').fill("1950-05-05")
+    form.locator("button").click()
+    msg = page.locator("#patient-msg")
+    expect(msg).to_contain_text(f"该证件号已建档（电子健康卡号：{old['ehc_no']}），未按本次所填改动档案")
+    expect(msg).to_contain_text("姓名（档案：E2E早年建档，本次：E2E录错证件号）")
+    expect(msg).to_contain_text("出生日期（档案：未填，本次：1950-05-05）")
+    expect(msg).to_contain_text("如需更正请走档案更正")
+    expect(msg).not_to_contain_text("建档成功")                    # 修前就是这一句
+    stored = admin_read(f"/api/patients/{old['ehc_no']}")
+    assert (stored["name"], stored["gender"], stored["birth_date"]) == ("E2E早年建档", "男", "")
+    # 新证件号照旧「建档成功」
+    form.locator('[name="id_card"]').fill("320981195005051252")
+    form.locator("button").click()
+    expect(msg).to_contain_text("建档成功，电子健康卡号：")
+
+
 def test_孕产妇保健结案先确认(page, base_url, admin_read, admin_call):
     """P2-43：「结案」原先点一下就结案，页面上没有重开入口。"""
     patient = admin_call("POST", "/api/patients",
