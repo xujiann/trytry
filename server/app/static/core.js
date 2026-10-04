@@ -1027,6 +1027,9 @@ async function renderCssd() {
   // 取值真源是 models/assets.py:CssdRequest.status 的列注释
   const RS = { requested: ["已申领", "orange"], fulfilled: ["已发放", "green"] };
   const orgNames = Object.fromEntries(orgs.map((o) => [o.id, o.name]));
+  // 接收机构印机构名、响应批次印批号（P2-1445）：原先印的是内部编号，召回、核对时还得拿编号回机构表、批次表去对。
+  // 批号按本页已取到的批次表对（最新 200 个加已灭菌、已发放的），对不上的（更早已回收的批次）回显编号
+  const batchNos = new Map(batches.map((b) => [b.id, b.batch_no]));
   // 后端只接受已完成灭菌的批次（sterile / dispatched），其余 409——按状态筛，别摆了等报错
   const usable = batches.filter((b) => ["sterile", "dispatched"].includes(b.status));
   $("#page-body").innerHTML = `
@@ -1041,7 +1044,7 @@ async function renderCssd() {
     ${panel("", table(["ID", "批次号", "器械", "数量", "接收机构", "状态", "操作"], batches, (b) => {
       const next = { sterilizing: "标记已灭菌", sterile: "发放", dispatched: "回收" }[b.status];
       return `<tr><td>${b.id}</td><td><span class="tag">${esc(b.batch_no)}</span></td><td>${esc(b.item_name)}</td>
-        <td>${b.quantity}</td><td>${b.dispatched_to_org_id ?? "—"}</td>
+        <td>${b.quantity}</td><td>${b.dispatched_to_org_id == null ? "—" : esc(orgNames[b.dispatched_to_org_id] || b.dispatched_to_org_id)}</td>
         <td>${statusTag(BS, b.status)}</td>
         <td>${next ? `<button class="btn secondary" data-adv="${b.id}" data-next="${esc(b.status)}">${next}</button>` : "—"}</td></tr>`;
     }))}
@@ -1056,7 +1059,7 @@ async function renderCssd() {
       ${table(["ID", "申领机构", "物品", "数量", "状态", "响应批次", "操作"], requests, (r) =>
         `<tr><td>${r.id}</td><td>${esc(orgNames[r.org_id] || r.org_id)}</td>
          <td>${esc(r.item_name)}</td><td>${r.quantity}</td>
-         <td>${statusTag(RS, r.status)}</td><td>${r.batch_id ?? "—"}</td>
+         <td>${statusTag(RS, r.status)}</td><td>${r.batch_id == null ? "—" : esc(batchNos.get(r.batch_id) || r.batch_id)}</td>
          <td>${r.status === "requested"
            ? `<button class="btn secondary" data-creqful="${r.id}">以批次响应</button>` : "—"}</td></tr>`)}
       <p class="desc">响应时只能选<b>已完成灭菌</b>的批次（已灭菌或已发放，当前 ${usable.length} 个）——
@@ -1124,10 +1127,14 @@ const WASTE_TRACE_STEPS = { "收集": "green", "暂存": "orange", "交接": "" 
 async function renderMedwaste() {
   $("#page-desc").textContent =
     "点位台账 → 收集 → 入暂存 → 交接全过程监管，超2天未交接自动预警；扫码追溯与转运工作量";
-  const [wastes, alerts, locations, stats] = await Promise.all([
+  const [wastes, alerts, locations, stats, orgs] = await Promise.all([
     api("/api/medwaste"), api("/api/medwaste/alerts"),
-    api("/api/medwaste/locations?include_inactive=true"), api("/api/medwaste/handler-stats"),
+    api("/api/medwaste/locations?include_inactive=true"), api("/api/medwaste/handler-stats"), api("/api/organizations"),
   ]);
+  // 机构列一律印机构名（P2-1445）：原先预警、清单、点位台账、产生点下拉与追溯框印的都是机构编号，得拿编号回机构表去对；
+  // 对不上的回显编号
+  const orgNames = new Map(orgs.map((o) => [o.id, o.name]));
+  const orgName = (id) => orgNames.get(id) || id;
   const alertIds = new Set(alerts.map((w) => w.id));
   const WT = { infectious: "感染性", sharp: "损伤性", pathological: "病理性", pharmaceutical: "药物性", chemical: "化学性" };
   const WS = { collected: ["已收集", "orange"], stored: ["已暂存", "orange"], handed_over: ["已交接", "green"] };
@@ -1146,7 +1153,7 @@ async function renderMedwaste() {
     ${panel("收集登记", `
       <form class="inline" id="waste-form">
         <select name="source_location_id" required><option value="">产生点（科室 / 病区）</option>${sources.map((l) =>
-          `<option value="${l.id}">${esc(l.name)}（机构${l.org_id}）</option>`).join("")}</select>
+          `<option value="${l.id}">${esc(l.name)}（${esc(orgName(l.org_id))}）</option>`).join("")}</select>
         <select name="waste_type">${Object.entries(WT).map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>
         <input name="weight_kg" type="number" step="any" placeholder="重量(kg)" required>
         <input name="collected_date" placeholder="收集日期 YYYY-MM-DD" required>
@@ -1155,7 +1162,7 @@ async function renderMedwaste() {
       ${sources.length ? "" : '<p class="desc">还没有在用的产生点：先在下方「点位台账」建一个产生点再登记收集</p>'}`)}
     ${alerts.length ? panel(`⚠ 滞留预警（${alerts.length}）`, `<p class="desc">收集超过2天仍未交接</p>
       ${table(["ID", "机构", "追溯码", "类别", "重量", "收集日期", "暂存点", "超期天数", "状态", "操作"], alerts, (w) =>
-        `<tr><td>${w.id}</td><td>${w.org_id}</td><td><span class="tag">${esc(w.trace_code || "—")}</span></td>
+        `<tr><td>${w.id}</td><td>${esc(orgName(w.org_id))}</td><td><span class="tag">${esc(w.trace_code || "—")}</span></td>
          <td>${esc(WT[w.waste_type] || w.waste_type)}</td><td>${w.weight_kg}kg</td><td>${esc(w.collected_date)}</td>
          <td>${esc(locationName.get(w.storage_location_id) || "—")}</td>
          <td><span class="tag red">${w.overdue_days} 天</span></td><td>${statusTag(WS, w.status)}</td>
@@ -1167,7 +1174,7 @@ async function renderMedwaste() {
       </form><p class="msg" id="trace-msg"></p>
       <div id="trace-box"></div>
       ${table(["ID", "机构", "追溯码", "类别", "重量", "收集日期", "转运人", "状态", "操作"], wastes, (w) => {
-      return `<tr><td>${w.id}</td><td>${w.org_id}</td><td><span class="tag">${esc(w.trace_code || "—")}</span></td>
+      return `<tr><td>${w.id}</td><td>${esc(orgName(w.org_id))}</td><td><span class="tag">${esc(w.trace_code || "—")}</span></td>
         <td>${esc(WT[w.waste_type] || w.waste_type)}</td><td>${w.weight_kg}kg</td>
         <td>${esc(w.collected_date)}${alertIds.has(w.id) ? ' <span class="tag red">滞留</span>' : ""}</td>
         <td>${esc(w.handler_name) || "—"}</td><td>${statusTag(WS, w.status)}</td>
@@ -1185,7 +1192,7 @@ async function renderMedwaste() {
         <button>新建点位</button>
       </form><p class="msg" id="loc-msg"></p>
       ${table(["ID", "机构", "名称", "类型", "负责人", "状态", "操作"], locations, (l) =>
-        `<tr><td>${l.id}</td><td>${l.org_id}</td><td>${esc(l.name)}</td>
+        `<tr><td>${l.id}</td><td>${esc(orgName(l.org_id))}</td><td>${esc(l.name)}</td>
          <td>${esc(l.location_type_name)}</td><td>${esc(l.manager_name) || "—"}</td>
          <td>${l.active ? '<span class="tag green">在用</span>' : '<span class="tag">已停用</span>'}</td>
          <td><button class="btn secondary" data-loc-toggle="${l.id}" data-on="${l.active ? 0 : 1}">${l.active ? "停用" : "启用"}</button></td></tr>`)}`)}
@@ -1221,7 +1228,7 @@ async function renderMedwaste() {
     const code = new FormData(e.target).get("trace_code");
     try {
       const t = await api(`/api/medwaste/trace/${encodeURIComponent(code)}`);
-      $("#trace-box").innerHTML = `<p class="desc">${esc(t.trace_code)} · ${esc(t.waste_type_name)} · ${t.weight_kg}kg · 机构 ${t.org_id}</p>
+      $("#trace-box").innerHTML = `<p class="desc">${esc(t.trace_code)} · ${esc(t.waste_type_name)} · ${t.weight_kg}kg · 机构 ${esc(orgName(t.org_id))}</p>
         ${table(["环节", "时间", "地点 / 经手人"], t.timeline, (s) =>
           `<tr><td><span class="tag ${WASTE_TRACE_STEPS[s.step] || ""}">${esc(s.step)}</span></td>
            <td>${esc(s.at.replace("T", " ").slice(0, 19))}</td><td>${esc(s.location) || "—"}</td></tr>`)}`;
