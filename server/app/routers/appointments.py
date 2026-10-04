@@ -1,7 +1,7 @@
 """预约诊疗：机构发布分时段号源，居民一站式预约（挂号/检查/检验）。"""
 from datetime import date, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
@@ -465,13 +465,31 @@ def book(body: AppointmentCreate, db: Session = Depends(get_db)):
 def list_appointments(
     response: Response,
     patient_id: int | None = None,
+    # 取值照预约状态列注释（booked / cancelled / fulfilled），写错 422，不静默当成「不筛」
+    status: str | None = Query(default=None, pattern="^(booked|cancelled|fulfilled)$"),
+    slot_date: str | None = None,
     offset: int = 0,
     limit: int = 500,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """预约清单：管理端「预约记录」表，到诊核销与取消的唯一入口。
+
+    按状态、按号源日期筛（P2-1300）：原先只收 `patient_id`、按编号倒序缺省 500 条，`?status=` / `?slot_date=` 被静默
+    忽略——约号过 500 条以后，一周前约、今天就诊的那条已被后约的挤出这一页，页面上找不到这一行去核销 / 取消。页面现在
+    先按 `status=booked` 取待办排在最前（同 P2-408 / P2-456）。两个筛选都叠在可见范围（`scope_patient_list`）之后，
+    只收窄、不绕过它；出参与分页不变。
+    """
     query = db.query(Appointment)
     query = scope_patient_list(db, user, query, Appointment, patient_id, "appointment")
+    if status:
+        query = query.filter(Appointment.status == status)
+    if slot_date:
+        # 日期在号源上：join 回号源表等值比；校验与本文件 `list_slots` 同一句（P1-58），留空等于不筛
+        slot_date = require_date(slot_date, field="slot_date")
+        query = query.join(AppointmentSlot, AppointmentSlot.id == Appointment.slot_id).filter(
+            AppointmentSlot.slot_date == slot_date
+        )
     return paginate(query.order_by(Appointment.id.desc()), response, offset, limit)
 
 

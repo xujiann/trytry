@@ -130,6 +130,7 @@ FILTER_PARAMS = [
     ("/api/medwaste/handler-stats", "start_date"),
     ("/api/medwaste/handler-stats", "end_date"),
     ("/api/appointments/slots", "slot_date"),
+    ("/api/appointments", "slot_date"),   # 预约清单按号源日期筛（P2-1300）
     ("/api/mgmt/rosters", "duty_date"),
     ("/api/inpatient/handovers", "handover_date"),
     ("/api/surgery/schedules", "scheduled_date"),

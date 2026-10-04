@@ -675,8 +675,12 @@ async function renderContracts() {
 
 async function renderAppointments() {
   $("#page-desc").textContent = "智能导诊 + 机构发布分时段号源，一站式预约挂号/检查/检验";
-  const [slots, appointments, blacklist] = await Promise.all([
-    api("/api/appointments/slots"), api("/api/appointments"), api("/api/appointments/blacklist")]);
+  // 已预约（待核销 / 可取消）的单独取一遍、排在最前（P2-1300，同 P2-408 / P2-456）：清单按编号倒序只回最新 500 条，约号
+  // 过 500 条以后，一周前约、今天就诊的那条已被后约的挤出这一页——核销与取消只在下面这张表里，这一行就再没处办
+  const [slots, recent, booked, blacklist] = await Promise.all([
+    api("/api/appointments/slots"), api("/api/appointments"), api("/api/appointments?status=booked"),
+    api("/api/appointments/blacklist")]);
+  const appointments = actionableFirst(recent, booked);
   const RT = { outpatient: "门诊", exam: "检查", lab: "检验" };
   const AS = { booked: ["已预约", "green"], cancelled: ["已取消", "red"], fulfilled: ["已就诊", ""] };
   $("#page-body").innerHTML = `
