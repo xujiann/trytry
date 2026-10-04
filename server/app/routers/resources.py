@@ -41,6 +41,7 @@ from ..models import (
     SurgerySchedule,
     User,
 )
+from .surgery import room_occupancy
 
 router = APIRouter(
     prefix="/api/resources", tags=["统一资源与排程"], dependencies=[Depends(get_current_user)]
@@ -520,35 +521,30 @@ def match_operating_rooms(
     )
     if not rooms:
         return {"scheduled_date": day, "rooms": [], "hint": "该机构没有启用中的手术间"}
-    schedules = (
-        db.query(SurgerySchedule)
-        .filter(
-            SurgerySchedule.room_id.in_([r.id for r in rooms]),
-            SurgerySchedule.scheduled_date == day,
-        )
-        .order_by(SurgerySchedule.start_time)
-        .all()
-    )
-    by_room: dict[int, list[SurgerySchedule]] = {}
-    for s in schedules:
-        by_room.setdefault(s.room_id, []).append(s)
+    # 占用照排班判冲突的那一份读（`surgery.room_occupancy`，P2-1401）：原先这里按 `scheduled_date == day` 等值查、时刻按
+    # 字符串比，P1-61 之前存下的「2026-10-6」「０８:００」看不见——撮合说可用，照着排却 409。认不出时刻的按占满当天
+    by_room: dict[int, list[tuple[SurgerySchedule, str, str]]] = {}
+    for taken in room_occupancy(
+            db.query(SurgerySchedule).filter(SurgerySchedule.room_id.in_([r.id for r in rooms])), day):
+        by_room.setdefault(taken[0].room_id, []).append(taken)
 
     result = []
     for room in rooms:
         booked = by_room.get(room.id, [])
+        # 冲突时段印库里存的起止，与排班 409「手术间在 … 已被占用」同一个写法
         conflicts = [
             {"start_time": s.start_time, "end_time": s.end_time}
-            for s in booked
-            if s.start_time < end_time and s.end_time > start_time
+            for s, start, end in booked
+            if start < end_time and end > start_time
         ]
-        # 空档：在请求窗口内，被已排时段切剩下的连续区间
+        # 空档：在请求窗口内，被已排时段切剩下的连续区间（`booked` 已按时刻先后排）
         gaps, cursor = [], start_time
-        for s in sorted(booked, key=lambda x: x.start_time):
-            if s.end_time <= start_time or s.start_time >= end_time:
+        for _, start, end in booked:
+            if end <= start_time or start >= end_time:
                 continue
-            if s.start_time > cursor:
-                gaps.append({"start_time": cursor, "end_time": s.start_time})
-            cursor = max(cursor, s.end_time)
+            if start > cursor:
+                gaps.append({"start_time": cursor, "end_time": start})
+            cursor = max(cursor, end)
         if cursor < end_time:
             gaps.append({"start_time": cursor, "end_time": end_time})
         result.append({

@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import and_, exists, or_
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Query, Session
 
 from .. import clock
 from ..concurrency import move_row, serialized_on
@@ -379,6 +379,32 @@ def _canonical_date(model):
     return model.scheduled_date.like("____-__-__")
 
 
+def room_occupancy(query: Query[SurgerySchedule], day: str) -> list[tuple[SurgerySchedule, str, str]]:
+    """手术间在 `day`（规范的 `YYYY-MM-DD`）占着的时段：`query` 是调用方按手术间筛好的排班查询（排班判同一患者重叠时传按
+    患者筛好的，P2-1397），返回 `[(排班行, 起, 止), …]`，起止读成 `HH:MM`、按时刻先后排。
+
+    排班判冲突（`schedule_surgery`）与手术间撮合（`resources.match_operating_rooms`）共用这一份（P2-1401）：撮合原先自己按
+    `scheduled_date == 当天` 等值查、时刻按字符串比，存量「2026-10-6 08:00-10:00」占着的手术间撮合说可用，照着排却 409——
+    撮合说能排、排班说冲突，比没有撮合更糟。
+
+    同手术间当天的，加上日期不是规范写法的存量行，逐条按日历读了再筛（P2-894）：P1-61 / P2-46 之前日期、时刻都不卡形状，
+    「2026-10-5」等值比不上「2026-10-05」、「０８:００」按字符串比排在一切半角时刻之后——同一手术间同一时段又排进一台（与
+    P1-117 同一个后果）。时刻认不出的按占满当天算，起止记成 00:00 / 24:00（24:00 按字符串比大过一天里的任何时刻）：宁可拦下
+    让人核对，也不把两台排进同一手术间。
+    """
+    taken = []
+    for row in (query.filter(or_(SurgerySchedule.scheduled_date == day, ~_canonical_date(SurgerySchedule)))
+                .order_by(SurgerySchedule.start_time, SurgerySchedule.id).all()):
+        if legacy_date(row.scheduled_date) != day:
+            continue
+        start, end = legacy_time(row.start_time), legacy_time(row.end_time)
+        if start is None or end is None:
+            start, end = "00:00", "24:00"
+        taken.append((row, start, end))
+    taken.sort(key=lambda item: (item[1], item[0].id))
+    return taken
+
+
 class ScheduleIn(BaseModel):
     room_id: int
     scheduled_date: DateStr
@@ -429,45 +455,24 @@ def schedule_surgery(
     # 患者那一行上圈一层。两把锁只在这里一起拿、次序恒为患者在前，PG 上不会两路各握一把互等成死锁；以后别处要同时拿这两把
     # （如改期换台），也照这个次序
     with serialized_on(db, Patient, request.patient_id), serialized_on(db, OperatingRoom, room.id):
-        # 同手术间当天的，加上日期不是规范写法的存量行，逐条按日历读了再判重叠（P2-894）：P1-61 / P2-46 之前日期、时刻
-        # 都不卡形状，「2026-10-5」等值比不上「2026-10-05」、「０８:００」按字符串比排在一切半角时刻之后——同一手术间同一
-        # 时段又排进一台（与 P1-117 同一个后果）。时刻认不出的按占满当天算：宁可拦下让人核对，也不把两台排进同一手术间
-        candidates = (
-            db.query(SurgerySchedule)
-            .filter(
-                SurgerySchedule.room_id == body.room_id,
-                or_(SurgerySchedule.scheduled_date == body.scheduled_date, ~_canonical_date(SurgerySchedule)),
-            )
-            .order_by(SurgerySchedule.start_time, SurgerySchedule.id)
-            .all()
-        )
-        for taken in candidates:
-            start, end = legacy_time(taken.start_time), legacy_time(taken.end_time)
-            if legacy_date(taken.scheduled_date) == body.scheduled_date and (
-                    start is None or end is None or (start < body.end_time and end > body.start_time)):
+        # 当天的占用按 `room_occupancy` 读（存量的非规范日期、时刻照读，认不出的按占满当天，P2-894），与撮合同一份（P2-1401）
+        for taken, start, end in room_occupancy(
+                db.query(SurgerySchedule).filter(SurgerySchedule.room_id == body.room_id), body.scheduled_date):
+            if start < body.end_time and end > body.start_time:
                 raise HTTPException(
                     status_code=409,
                     detail=f"手术间在 {taken.start_time}-{taken.end_time} 已被占用",
                 )
         # 同一患者同一天时段重叠的另一台（P2-1397）：上面只按手术间判，同一患者的两台排进两个手术间的重叠时段原先都 201，
-        # 居民收到两条时段重叠的「手术已安排」。已取消的不算；日期、时刻的存量非规范写法照上面手术间那段的口径读（时刻认不出
-        # 的按占满当天算）。术者、麻醉医师撞台是业务口径（术者是自由文本，按姓名判会误伤同名），不在此列
-        clashes = (
-            db.query(SurgerySchedule)
-            .join(SurgeryRequest, SurgerySchedule.request_id == SurgeryRequest.id)
-            .filter(
-                SurgeryRequest.patient_id == request.patient_id,
-                SurgeryRequest.status != "cancelled",
-                SurgerySchedule.request_id != request.id,
-                or_(SurgerySchedule.scheduled_date == body.scheduled_date, ~_canonical_date(SurgerySchedule)),
-            )
-            .order_by(SurgerySchedule.start_time, SurgerySchedule.id)
-            .all()
-        )
-        for taken in clashes:
-            start, end = legacy_time(taken.start_time), legacy_time(taken.end_time)
-            if legacy_date(taken.scheduled_date) == body.scheduled_date and (
-                    start is None or end is None or (start < body.end_time and end > body.start_time)):
+        # 居民收到两条时段重叠的「手术已安排」。已取消的不算；当天的占用同样按 `room_occupancy` 读（存量非规范写法照读，时刻
+        # 认不出的按占满当天，P2-1401）。术者、麻醉医师撞台是业务口径（术者是自由文本，按姓名判会误伤同名），不在此列
+        for taken, start, end in room_occupancy(
+                db.query(SurgerySchedule)
+                .join(SurgeryRequest, SurgerySchedule.request_id == SurgeryRequest.id)
+                .filter(SurgeryRequest.patient_id == request.patient_id, SurgeryRequest.status != "cancelled",
+                        SurgerySchedule.request_id != request.id),
+                body.scheduled_date):
+            if start < body.end_time and end > body.start_time:
                 raise HTTPException(
                     status_code=409,
                     detail=f"该患者在 {taken.start_time}-{taken.end_time} 已排有另一台手术，同一患者的手术时段不能重叠",
