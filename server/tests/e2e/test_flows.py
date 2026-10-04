@@ -5087,6 +5087,28 @@ def test_住院页的转床_开医嘱_病案首页都在页内表单里录入(pa
     expect(modal).to_have_count(0)
 
 
+def test_住院页出院先确认_取消仍在院_确定才出院(page, base_url, seed, admin_read, admin_call):
+    """P2-1334（第三十九批扫描 AC4-2）：「出院」原先点一下就办完——停掉全部执行中医嘱、释放床位、派出院随访并通知患者、
+    发出院事件，而出院撤不回（P2-753）。现在先弹确认写明后果、标「不可撤销」：先点取消，按接口核对仍在院；再点确定才出院。"""
+    ward = admin_call("POST", "/api/inpatient/wards", {"org_id": seed["org"]["id"], "name": "E2E出院确认病区"})
+    bed = admin_call("POST", "/api/inpatient/beds", {"ward_id": ward["id"], "bed_no": "D-01"})
+    patient = admin_call("POST", "/api/patients", {"name": "E2E出院确认患者", "id_card": "320981198104045552", "gender": "女"})
+    adm = admin_call("POST", "/api/inpatient/admissions", {
+        "patient_id": patient["id"], "ward_id": ward["id"], "bed_id": bed["id"], "diagnosis_name": "社区获得性肺炎"})
+    # 出院门禁：病案首页已填、没有未结清的费用
+    admin_call("POST", f"/api/inpatient/admissions/{adm['id']}/case-summary",
+               {"discharge_diagnosis": "社区获得性肺炎", "outcome": "治愈"})
+
+    def status():
+        (row,) = admin_read(f"/api/inpatient/admissions?patient_id={patient['id']}")
+        return row["status"]
+
+    _login(page, base_url)
+    _open_page(page, "inpatient", "住院管理")
+    _confirm_then(page, lambda: page.click(f'button[data-discharge="{adm["id"]}"]'), "不可撤销",
+                  lambda: status() == "admitted", lambda: status() == "discharged")   # 修前一点就出院，等不到确认框
+
+
 @pytest.fixture(scope="session")
 def consent_seed(base_url, seed):
     """两份待签的门诊告知书：一份用来记签署，一份用来记拒签。"""
