@@ -2833,7 +2833,9 @@ async function renderCritical() {
   $("#page-body").onclick = async (e) => {
     const { ack, resolve, trail } = e.target.dataset;
     try {
-      if (ack) { await api(`/api/exams/reports/${ack}/acknowledge`, { method: "POST" }); route(); }
+      // 确认接收、处置反馈办完即刷新铃铛的「待确认危急值」「未闭环危急值」（P2-1312）：原先只重画本页，铃铛挂旧数最长 30 秒、
+      // 下拉里还列着这一条
+      if (ack) { await api(`/api/exams/reports/${ack}/acknowledge`, { method: "POST" }); route(); pollTodos(); }
       if (resolve) {
         // P2-38：原先弹窗输入框点"取消"照样提交——危急值就此"闭环"，处置说明一个字没有。
         // 框自己提交（P2-607）：反馈写超了（后端 512 字）、别人已先处置，报错写在框里、框不关，写好的反馈不用重填
@@ -2841,7 +2843,7 @@ async function renderCritical() {
           { name: "note", label: "处置反馈说明", type: "textarea", placeholder: "如：已复查、已调整治疗" },
         ], { submit: (form) => api(`/api/exams/reports/${resolve}/resolve`,
           { method: "POST", body: JSON.stringify({ note: form.note }) }) });
-        if (done) route();
+        if (done) { route(); pollTodos(); }
       }
       if (trail) {
         const actions = await api(`/api/exams/reports/${trail}/critical-actions`);

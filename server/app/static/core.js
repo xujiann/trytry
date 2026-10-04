@@ -79,6 +79,9 @@ function logout() {
 
 let todoTimer = null;
 
+/** 取一次待办与未读数、重画铃铛。除了 30 秒一拍的轮询，改变铃铛各节（todos.py：待审处方、待诊断申请、危急值、缺药预警）
+ *  的动作办完也立即调一次（P2-1312，照站内消息页标已读的写法）：原先只 route() 重画本页，药师审完最后一张方，铃铛仍挂着
+ *  「待药师审处方（1）」、下拉里还列着这张方，最长 30 秒。这些写请求由 tests/test_todo_bell_refresh.py 派生地扫 */
 async function pollTodos() {
   try {
     // 待办是"该我处理的活"，站内消息是"该我知道的事"，两者都进同一个铃铛：
@@ -1665,11 +1668,13 @@ async function renderExams() {
           body: JSON.stringify({ ...body, ...(form.decision === "accept"
             ? { accept_recognition_of: check.request_id }
             : { recognition_declined_reason: form.reason || "未填写" }) }) }) });
-        if (ok) route();
+        if (ok) { route(); pollTodos(); }
         return;
       }
       await api("/api/exams", { method: "POST", body: JSON.stringify(body) });
+      // 新开的单进铃铛「待诊断申请」：办完即刷新铃铛（P2-1312），领取、出报告、修订同此
       route();
+      pollTodos();
     } catch (err) { setMsg("#exam-msg", err.message, false); }
   };
   const drawRevisions = async (reportId) => {
@@ -1728,9 +1733,10 @@ async function renderExams() {
         if (!r) return;
         await route();   // 先重画再写回执（P2-1013）：原先写完即被重画冲掉
         setMsg("#exam-msg", `报告 ${r.id} 已修订${r.critical ? `（仍为危急值，闭环状态 ${r.critical_status_name}）` : "（非危急值）"}`);
+        pollTodos();   // 改判危急值复位成「已通知」、解除危急出闭环：两节危急值跟着变（P2-1312）
         return;
       }
-      if (claim) { await api(`/api/exams/${claim}/claim`, { method: "POST" }); route(); }
+      if (claim) { await api(`/api/exams/${claim}/claim`, { method: "POST" }); route(); pollTodos(); }
       if (report) {
         // 框自己提交（P2-1091）：原先点确定就关框、再发请求——别人已出过报告 409、写超了 422，一整段所见随框一起没了。
         // 所见改成多行框（后端上限 2048 字），与医生移动端出报告同一个写法
@@ -1745,7 +1751,7 @@ async function renderExams() {
             body: JSON.stringify({ conclusion: form.conclusion, finding: form.finding || "",
                                    critical: form.critical === "1" }) });
         } });
-        if (done) route();
+        if (done) { route(); pollTodos(); }
       }
     } catch (err) { setMsg("#exam-msg", err.message, false); }
   };
@@ -1938,6 +1944,7 @@ async function renderRx() {
       // 提示「只随本次响应返回、不入库」，页面这一行是它唯一的出口，从来没显示过
       await route();
       setMsg("#rx-msg", base + tips, p.status === "auto_passed");
+      pollTodos();   // 转入药师审核的这张进铃铛「待药师审处方」：办完即刷新铃铛（P2-1312），审方同此
     } catch (err) { setMsg("#rx-msg", err.message, false); }
   };
   $("#rule-form").onsubmit = async (e) => {
@@ -2025,7 +2032,7 @@ async function renderRx() {
       { name: "comment", label: approve === "1" ? "药师意见（可空）" : "驳回理由", type: "textarea" }],
     { submit: (v) => api(`/api/prescriptions/${id}/review`, { method: "POST",
       body: JSON.stringify({ approve: approve === "1", comment: v.comment }) }) });
-    if (ok) route();
+    if (ok) { route(); pollTodos(); }
   };
 }
 
@@ -2159,7 +2166,9 @@ async function renderPharmacy() {
       // 阈值留空 = 不改（P1-146）：原先预填 0 且照送，补一次货就把配好的缺药预警阈值抹成 0
       if (f.get("threshold") !== "") body.threshold = Number(f.get("threshold"));
       await api("/api/pharmacy/stocks", { method: "POST", body: JSON.stringify(body) });
+      // 库存一变就可能越过 / 回到缺药阈值：管理层铃铛的「缺药预警」办完即刷新（P2-1312），入库、发药、冲销、调拨、召回同此
       route();
+      pollTodos();
     } catch (err) { setMsg("#pharm-msg", err.message, false); }
   };
   if (canOperate) $("#batch-form").onsubmit = async (e) => {
@@ -2170,6 +2179,7 @@ async function renderPharmacy() {
         org_id: Number(f.get("org_id")), drug_code: f.get("drug_code"), drug_name: f.get("drug_name"),
         batch_no: f.get("batch_no"), expire_date: f.get("expire_date"), quantity: Number(f.get("quantity")) }) });
       route();
+      pollTodos();
     } catch (err) { setMsg("#pharm-msg", err.message, false); }
   };
   if (canOperate) $("#dispense-form").onsubmit = async (e) => {
@@ -2179,6 +2189,7 @@ async function renderPharmacy() {
       await api("/api/dispense", { method: "POST",
         body: JSON.stringify({ prescription_id: Number(f.get("prescription_id")) }) });
       route();
+      pollTodos();
     } catch (err) { setMsg("#pharm-msg", err.message, false); }
   };
   if (canOperate) $("#reverse-form").onsubmit = async (e) => {
@@ -2188,6 +2199,7 @@ async function renderPharmacy() {
       await api(`/api/dispense/${Number(f.get("dispense_id"))}/reverse`, { method: "POST",
         body: JSON.stringify({ reason: f.get("reason") }) });
       route();
+      pollTodos();
     } catch (err) { setMsg("#pharm-msg", err.message, false); }
   };
   if (canOperate) $("#transfer-form").onsubmit = async (e) => {
@@ -2198,6 +2210,7 @@ async function renderPharmacy() {
         drug_code: f.get("drug_code"), from_org_id: Number(f.get("from_org_id")),
         to_org_id: Number(f.get("to_org_id")), quantity: Number(f.get("quantity")) }) });
       route();
+      pollTodos();
     } catch (err) { setMsg("#pharm-msg", err.message, false); }
   };
   $("#batch-filter").onsubmit = async (e) => {
@@ -2229,6 +2242,7 @@ async function renderPharmacy() {
         // 报出退出可用汇总的量：召回最要紧的后果是"账面上少了多少"，不是"状态翻了"。
         // 召回之后 available 已是 0，原先照印 done.available 永远是「0 → 0」；取召回前台账那一行的可发余量
         setMsg("#batch-msg", `已召回，退出可用汇总 ${batch ? batch.available : "—"} → 0，不可发余量 ${done.blocked_quantity}`, true);
+        pollTodos();
       }
       if (trace) {
         const t = await api(`/api/pharmacy/batches/${trace}/dispenses`);

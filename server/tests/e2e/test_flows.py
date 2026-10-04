@@ -384,6 +384,53 @@ def test_管理端换人登录_铃铛不留上一位的待办_选过的患者退
     expect(sr_patient).to_have_value("")   # 修前是前一位筛的那位患者
 
 
+@pytest.fixture()
+def bell_refresh_report(admin_call):
+    """P2-1312 用例的前置：医师 e2e_p21312 的铃铛里一条待确认的危急值（本院申请单），站内消息里一条未读（这条危急值的通知）。
+    用完把这条危急值闭环：后面的用例点的是危急值操作台上「第一个」确认接收 / 处置反馈按钮。"""
+    from urllib.error import HTTPError
+
+    org = admin_call("POST", "/api/organizations", {"name": "E2E铃铛刷新县医院", "org_type": "lead_hospital", "level": "county"})
+    admin_call("POST", "/api/users", {"username": "e2e_p21312", "password": "passw0rd1", "role": "doctor", "org_id": org["id"]})
+    patient = admin_call("POST", "/api/patients", {"name": "E2E铃铛刷新患者", "id_card": "320981197305055318", "gender": "男"})
+    req = admin_call("POST", "/api/exams", {"patient_id": patient["id"], "from_org_id": org["id"], "center_type": "lab",
+                                            "item_code": "E2E-P21312", "item_name": "E2E铃铛刷新血钾"})
+    report = admin_call("POST", f"/api/exams/{req['id']}/report", {
+        "finding": "", "conclusion": "E2E铃铛刷新 血钾 7.1（危急值）", "critical": True, "reported_by": "检验科"})
+    yield report
+    try:
+        admin_call("POST", f"/api/exams/reports/{report['id']}/acknowledge")
+    except HTTPError:
+        pass   # 用例里已在页面上确认接收
+    admin_call("POST", f"/api/exams/reports/{report['id']}/resolve", {"note": "E2E 用例收尾"})
+
+
+def test_确认接收危急值后铃铛立即刷新_医生移动端标已读角标跟着减(page, base_url, bell_refresh_report):
+    """P2-1312（第三十八批扫描 AB1-8）：铃铛原先只靠 30 秒轮询，危急值确认接收等改变待办的动作办完只重画本页——铃铛照挂
+    「待确认危急值（1）」、下拉里还列着这一条，最长 30 秒；医生移动端标已读后只移除卡片，「未读消息」角标照挂原来的数。"""
+    report = bell_refresh_report
+    _login(page, base_url, "e2e_p21312", "passw0rd1")
+    panel = page.locator("#todo-panel")
+    expect(panel).to_contain_text("待确认危急值（1）")
+    _open_page(page, "critical", "危急值操作台")
+    _redrawn(page, lambda: page.click(f'button[data-ack="{report["id"]}"]'))
+    expect(panel).to_contain_text("待确认危急值（0）")   # 修前要等下一拍轮询（登录起 30 秒），这里 15 秒内等不到
+
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.goto(f"{base_url}/m/doctor")
+    page.fill("#lg-user", "e2e_p21312")
+    page.fill("#lg-pass", "passw0rd1")
+    page.click("#login-form button[type=submit]")
+    expect(page.locator("#workbench")).to_be_visible()
+    notices = page.locator("#todo-list .todo-group", has_text="未读消息")
+    badge = notices.locator(".head .badge")
+    expect(badge).to_have_text("1")
+    notices.locator("button[data-ntread]").first.click()
+    expect(notices.locator(".notice")).to_have_count(0)
+    expect(badge).to_have_text("0")   # 修前卡片没了、角标还是 1
+    expect(badge).to_have_attribute("class", "badge zero")
+
+
 def test_exam_order_report_and_critical_closed_loop(page, base_url, seed):
     """开单 → 领取 → 出报告（危急值）→ 确认接收 → 处置反馈全链路。"""
     _login(page, base_url)

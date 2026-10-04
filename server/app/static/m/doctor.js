@@ -600,10 +600,19 @@ function bindNoticeRead(box) {
       btn.disabled = true;
       try {
         await api(`/api/notifications/${btn.dataset.ntread}/read`, { method: "POST" });
-        btn.closest(".notice").remove();
       } catch (err) {
         btn.disabled = false;
+        return;
       }
+      // 「未读消息」角标跟着改（P2-1312）：原先只移除卡片，角标照挂标记前的数。照取数时的同一个接口重取未读总数（角标是
+      // 未读总数、不是这一屏的条数——P2-374）；取不到就按刚标的这一条减一
+      const badge = btn.closest(".todo-group").querySelector(".badge");
+      btn.closest(".notice").remove();
+      let unread;
+      try { ({ unread } = await api("/api/notifications/unread-count")); }
+      catch (err) { unread = Math.max(0, Number(badge.textContent) - 1); }
+      badge.textContent = unread;
+      badge.className = `badge ${unread ? "warn" : "zero"}`;
     });
   });
 }

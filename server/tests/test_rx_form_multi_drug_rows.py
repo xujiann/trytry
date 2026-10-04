@@ -62,7 +62,8 @@ def page_payload():
     """把页面的提交处理原样拿到 node 里跑一遍：表单两行，看它送出的请求体。
 
     假表单只认页面用到的两样：逐行取值的 `querySelectorAll(".rx-item")` 与每行的 `[name="…"]`；`FormData.get` 与浏览器
-    同一口径——同名的框有几个都只取第一个（修前的写法正是这样只送出第一行）。
+    同一口径——同名的框有几个都只取第一个（修前的写法正是这样只送出第一行）。`pollTodos` 记次数：开出的方转入药师审核，
+    提交成功后立即刷新铃铛（P2-1312）。
     """
     if shutil.which("node") is None:
         pytest.skip("没有 node 可执行这段前端处理")
@@ -78,9 +79,10 @@ def page_payload():
         "const api = async (url, opts) => { sent = { url, method: opts.method, body: JSON.parse(opts.body) };"
         "  return { status: 'pending_review', review_comment: '药物相互作用', advisories: [] }; };"
         "const route = async () => {}; const setMsg = (...args) => msgs.push(args);"
+        "let polled = 0; const pollTodos = () => { polled += 1; };"
         + items_fn + handler +
         "handlers['#rx-form'].onsubmit({ preventDefault() {}, target: form })"
-        "  .then(() => console.log(JSON.stringify({ sent, msgs })));"
+        "  .then(() => console.log(JSON.stringify({ sent, msgs, polled })));"
     )
     out = subprocess.run(["node", "-e", script, json.dumps([HEAD, ROWS], ensure_ascii=False)], capture_output=True,
                          text=True, check=True, timeout=60).stdout
@@ -95,6 +97,7 @@ def test_跑一遍提交处理_表单上几行就送几项(page_payload):
         {"drug_code": "M01AE01", "drug_name": "布洛芬", "daily_dose": 1200},   # 天数留空不送，后端缺省 1
     ], sent["body"]["items"]                                                     # 修前只有第一项
     assert page_payload["msgs"] == [["#rx-msg", "转入药师审核：药物相互作用", False]]
+    assert page_payload["polled"] == 1   # 转入药师审核的这张进铃铛「待药师审处方」：提交成功即刷新（P2-1312）
 
 
 def test_页面送出的两行进同一张方_转药师审命中相互作用(client, admin, page_payload):

@@ -299,7 +299,12 @@ async function renderProcure() {
          <td><span class="tag ${t.diff === 0 ? "green" : "red"}">${t.diff > 0 ? "+" : ""}${t.diff}</span></td></tr>`)}`)}`;
   $("#sup-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/pharmacy/suppliers", formJson(e.target), "#po-msg"); };
   $("#po-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/pharmacy/purchase-orders", formJson(e.target, ["org_id", "supplier_id", "quantity"]), "#po-msg"); };
-  $("#st-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/pharmacy/stock-takes", formJson(e.target, ["org_id", "actual_qty"]), "#po-msg"); };
+  // 盘点、验收入库改了库存，可能越过 / 回到缺药阈值：管理层铃铛的「缺药预警」办完即刷新（P2-1312，照站内消息页标已读的写法）
+  $("#st-form").onsubmit = async (e) => {
+    e.preventDefault();
+    await postAction("/api/pharmacy/stock-takes", formJson(e.target, ["org_id", "actual_qty"]), "#po-msg");
+    pollTodos();
+  };
   $("#page-body").onclick = async (e) => {
     const d = e.target.dataset;
     if (d.poap) return postAction(`/api/pharmacy/purchase-orders/${d.poap}/approve${d.reject ? "?reject=true" : ""}`, null, "#po-msg");
@@ -311,8 +316,9 @@ async function renderProcure() {
       const raw = String(form.received_quantity || "").trim();
       const qty = Number(raw);
       if (raw && !(Number.isInteger(qty) && qty > 0)) return setMsg("#po-msg", "实收数量要填正整数", false);
-      return postAction(`/api/pharmacy/purchase-orders/${d.porec}/receive`, raw ? { received_quantity: qty } : null,
+      await postAction(`/api/pharmacy/purchase-orders/${d.porec}/receive`, raw ? { received_quantity: qty } : null,
         "#po-msg");
+      pollTodos();
     }
   };
 }
