@@ -810,7 +810,7 @@ async function renderTcm() {
   // 适宜技术表加「操作要点」列（P2-1408）：description 入库表单录得进、出参也带，原先表里只列名称、分类、适应症
   $("#page-body").innerHTML = `
     ${panel("智能辨证", `
-      <form class="inline" id="tcm-diag"><input name="symptoms" placeholder="症状（逗号分隔，如：乏力,气短）" required style="min-width:280px"><button>辨证</button></form>
+      <form class="inline" id="tcm-diag"><input name="symptoms" placeholder="症状（逗号、顿号或空格分隔，如：乏力、气短）" required style="min-width:280px"><button>辨证</button></form>
       <div id="tcm-diag-result"></div>`)}
     ${panel("体质辨识（标准化简表）", `
       <p class="desc">${esc(spec.method)}。${esc(spec.item_scoring)}。<br>
@@ -851,7 +851,10 @@ async function renderTcm() {
          <td style="white-space:pre-wrap">${esc(t.description) || "—"}</td></tr>`)}`)}`;
   $("#tcm-diag").onsubmit = async (e) => {
     e.preventDefault();
-    const symptoms = new FormData(e.target).get("symptoms").split(/[,，]/).map((s) => s.trim()).filter(Boolean);
+    // 切词认顿号与空白（P2-1409）：原先只按 /[,，]/ 切，「乏力、气短、自汗」「乏力 气短 自汗」整串当成一个症状送出去，推荐为空表。
+    // 分隔符照抄导诊台（core.js renderAppointments 的 #triage-form）：那是处理函数里的字面量，没有可复用的常量；shared.js 只收
+    // 三套前端都在用的（它自己写明的判据），居民端、医生端都不切症状，故照抄、不往那里抽
+    const symptoms = new FormData(e.target).get("symptoms").split(/[，,、\s]+/).map((s) => s.trim()).filter(Boolean);
     // 先清空、查不到把原因写出来（P2-378，与 P2-358 同一写法）：原先 api() 抛错没人接，上一次的结果照旧挂着
     $("#tcm-diag-result").innerHTML = "";
     let result;

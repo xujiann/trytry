@@ -20,7 +20,7 @@ import calendar
 from datetime import date, timedelta
 from ..datetypes import DateStr, OptionalDateStr
 from ..numtypes import INT4_MAX
-from ..texttypes import NON_BLANK
+from ..texttypes import NON_BLANK, split_list
 from ..visibility import assert_obj_org_writable, assert_org_writable
 
 router = APIRouter(prefix="/api/tcm", tags=["中医药服务"], dependencies=[Depends(get_current_user)])
@@ -204,7 +204,10 @@ class AssistDiagnosisOut(BaseModel):
 @router.post("/assist-diagnosis", response_model=AssistDiagnosisOut)
 def assist_diagnosis(body: DiagnoseBody):
     """智能辨证：按症状匹配度推荐证型、方剂与适宜技术。"""
-    given = set(body.symptoms)
+    # 每一项再拆一遍（P2-1409）：原先拿整项去比——「乏力、气短、自汗」顿号连写、「乏力 气短 自汗」空格连写都被当成**一个**症状，
+    # 推荐为空表（看着像这组症状没有对应证型）；「畏寒，肢冷、腰膝酸软」只认出畏寒。`split_list` 认半角 / 全角逗号与顿号、
+    # 去空白（P1-137），再按空白拆——与页面、导诊台同一组分隔符（知识库里的症状词都不含空白）；收进集合即去重
+    given = {word for item in body.symptoms for part in split_list(item) for word in part.split()}
     candidates: list[dict[str, Any]] = [
         {
             "syndrome": kb["syndrome"],
