@@ -1645,8 +1645,11 @@ async function renderExams() {
       const flow = r.center_type === "lab" && ["pending", "diagnosing"].includes(r.status)
         && SAMPLE_NEXT[r.sample_status || ""]
         ? ` <button class="btn secondary" data-sample="${r.id}">${SAMPLE_NEXT[r.sample_status || ""]}</button>` : "";
+      // 临床资料（检查目的）印在项目下面、空的不印（P2-1367）：申请单出参本来就带，原先只有开单框与申请单打印件上有——
+      // 出报告的医师要另开打印页才看得到开单医生写的「为什么查」
+      const clinical = r.clinical_info ? `<br><small>临床资料：${esc(r.clinical_info)}</small>` : "";
       return `<tr><td>${r.id}</td><td>${r.patient_id}</td><td>${esc(CENTER_NAMES[r.center_type] || r.center_type)}</td>
-        <td>${esc(r.item_name)}</td><td>${statusTag(EXAM_STATUS, r.status)}</td>
+        <td>${esc(r.item_name)}${clinical}</td><td>${statusTag(EXAM_STATUS, r.status)}</td>
         <td>${r.center_type === "lab" ? esc(SAMPLE_STATUS[r.sample_status || ""] || r.sample_status) : "—"}</td>
         <td>${r.report_id ?? "—"}</td><td>${actions}${flow}</td></tr>`;
     }))}
@@ -1796,6 +1799,11 @@ async function renderExams() {
       }
       if (claim) { await api(`/api/exams/${claim}/claim`, { method: "POST" }); route(); pollTodos(); }
       if (report) {
+        // 框头印出申请单、项目与临床资料（P2-1367）：框盖住了申请单表，原先框里只有三个空框——同一项目十几张单时只能凭
+        // 申请单号对着写，开单医生写的检查目的也看不到。框头是纯文本，spdModal 自己转义
+        const req = requests.find((x) => x.id === Number(report));
+        const intro = req ? `申请单 ${req.id} · 患者 ${req.patient_id}\n项目：${req.item_name}（${req.item_code}）\n`
+          + `临床资料：${req.clinical_info || "—"}` : "";
         // 框自己提交（P2-1091）：原先点确定就关框、再发请求——别人已出过报告 409、写超了 422，一整段所见随框一起没了。
         // 所见改成多行框（后端上限 2048 字），与医生移动端出报告同一个写法
         const done = await spdModal("出报告", [
@@ -1803,7 +1811,7 @@ async function renderExams() {
           { name: "finding", label: "影像所见 / 检查所见", type: "textarea" },
           { name: "critical", label: "是否危急值", type: "select", value: "0",
             options: [{ value: "0", label: "否" }, { value: "1", label: "是（进危急值闭环）" }] },
-        ], { submit: (form) => {
+        ], { intro, submit: (form) => {
           if (!form.conclusion) throw new Error("诊断结论必填");
           return api(`/api/exams/${report}/report`, { method: "POST",
             body: JSON.stringify({ conclusion: form.conclusion, finding: form.finding || "",

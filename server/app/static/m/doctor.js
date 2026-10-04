@@ -766,9 +766,12 @@ async function loadExams() {
       const ops = r.status === "pending"
         ? `<button data-claim="${r.id}">领取</button><button class="ghost" data-report="${r.id}">出报告</button>`
         : `<button data-report="${r.id}">出报告</button>`;
+      // 患者号与临床资料（检查目的）印上卡片、临床资料空的不印（P2-1367）：卡片原先只有申请单 / 中心 / 项目 / 状态，同一项目
+      // 十几张单只能凭单号对，临床资料移动端无处可看。出报告的表单开在这张卡片里、就在这几行下面。患者姓名随 P2-681 待裁定
       return card(
-        kv("申请单", esc(r.id)) + kv("中心", esc(CENTER_NAMES[r.center_type] || r.center_type)) +
-        kv("项目", esc(r.item_name)) + kv("状态", statusTag(EXAM_STATUS, r.status)),
+        kv("申请单", esc(r.id)) + kv("患者号", esc(r.patient_id)) +
+        kv("中心", esc(CENTER_NAMES[r.center_type] || r.center_type)) + kv("项目", esc(r.item_name)) +
+        (r.clinical_info ? kv("临床资料", esc(r.clinical_info)) : "") + kv("状态", statusTag(EXAM_STATUS, r.status)),
         ops
       );
     }).join("");

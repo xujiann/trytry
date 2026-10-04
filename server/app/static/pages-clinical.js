@@ -1859,11 +1859,15 @@ async function renderPathology() {
   $("#page-desc").textContent = "病理标本核收（含拒收）、取材制片阅片流转、冷缺血时间质控";
   // 还要流转的（待核收 / 已核收 / 已取材 / 已制片）单独取一遍、排在最前（P2-456，同 P2-408）：清单只回最新 500 个标本，
   // 挤出窗口的就没有一行能核收 / 拒收 / 推进
-  const [recent, stats, ...open] = await Promise.all([
+  // 标本表加申请单号、项目两列（P2-1367）：核收时要比对申请单（拒收原因里就有「申请单信息不符」），表上原先连申请单号都没有。
+  // 病理申请单同一趟取一页：标本出参只带申请单号，项目按申请单号对上，不逐行请求；最新 500 张之外的对不上，印「—」
+  const [recent, stats, requests, ...open] = await Promise.all([
     api("/api/pathology/specimens"), api("/api/pathology/specimen-stats"),
+    api("/api/exams?center_type=pathology&limit=500"),
     ...["pending", "received", "embedded", "slided"].map((st) => api(`/api/pathology/specimens?status=${st}`)),
   ]);
   const specimens = actionableFirst(recent, ...open);
+  const itemOf = Object.fromEntries(requests.map((r) => [r.id, r.item_name]));
   const ci = stats.cold_ischemia;
   $("#page-body").innerHTML = `
     <div class="cards">
@@ -1888,8 +1892,9 @@ async function renderPathology() {
       <p class="msg" id="sp-msg"></p>
       <p class="hint">${esc(stats.caliber)}</p>`)}
     ${panel("标本流转", `
-      ${table(["标本号", "部位", "状态", "冷缺血", "蜡块/切片", "核收人", "操作"], specimens, (s) =>
-        `<tr><td>${esc(s.specimen_no)}</td><td>${esc(s.site || "—")}</td>` +
+      ${table(["标本号", "申请单号", "项目", "部位", "状态", "冷缺血", "蜡块/切片", "核收人", "操作"], specimens, (s) =>
+        `<tr><td>${esc(s.specimen_no)}</td><td>${esc(s.request_id)}</td><td>${esc(itemOf[s.request_id] || "—")}</td>` +
+        `<td>${esc(s.site || "—")}</td>` +
         `<td>${s.status === "rejected" ? '<span class="tag danger">' + esc(s.status_name) + "</span>" : esc(s.status_name)}` +
         `${s.reject_reason ? "<br><small>" + esc(s.reject_reason) + "</small>" : ""}</td>` +
         `<td>${s.cold_ischemia_minutes === null ? "未记录" : s.cold_ischemia_minutes + " 分"}</td>` +
@@ -1898,7 +1903,19 @@ async function renderPathology() {
           ? `<button class="btn sm" data-receive="${s.id}">核收</button><button class="btn sm danger" data-reject="${s.id}">拒收</button>`
           : (s.status === "rejected" || s.status === "read" ? "—" : `<button class="btn sm" data-advance="${s.id}">推进</button>`)}</td></tr>`)}
     `)}`;
-  $("#sp-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/pathology/specimens", formJson(e.target, ["request_id"]), "#sp-msg"); };
+  // 登记成功回显申请单号与项目（P2-1367）：申请单号是手输的，原先走 postAction、成功即重画、什么都不说——敲错一位，标本就挂到
+  // 别人的病理申请上（并按 P2-1239 印进对方的报告单）。申请单号取回执里的，项目按页面已取到的申请单对上，对不上的照实说
+  $("#sp-form").onsubmit = async (e) => {
+    e.preventDefault();
+    try {
+      const r = await api("/api/pathology/specimens", { method: "POST",
+        body: JSON.stringify(formJson(e.target, ["request_id"])) });
+      await route();   // 先重画再写回执（P2-1013）
+      const item = itemOf[r.request_id];
+      setMsg("#sp-msg", `已登记标本 ${r.specimen_no}：申请单 ${r.request_id} · `
+        + `${item ? `项目 ${item}` : "项目未对上（本页取到的病理申请里没有这一张）"}，请与送检单核对`);
+    } catch (err) { setMsg("#sp-msg", err.message, false); }
+  };
   // P2-38：核收 / 拒收 / 推进三处原生弹窗换成页内表单。拒收原因后端只收五个标准项之一（否则 422），
   // 弹窗却让人手打——差一个字就被拒；现在从后端给的标准项里选。推进原先一律问"蜡块数或切片数"、
   // 点取消照样推进；现在按当前环节只问该环节的数（取材问蜡块、制片问切片、阅片不问），取消就是放弃。
