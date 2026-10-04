@@ -903,9 +903,13 @@ async function renderTcm() {
 
 async function renderMedication() {
   $("#page-desc").textContent = "缺药登记流转、供应风险研判、全县用药地图、居民用药画像";
-  const [shortages, stats, risk, sstats] = await Promise.all([
-    api("/api/medication/shortages"), api("/api/medication/usage-stats"),
-    api("/api/medication/supply-risk"), api("/api/medication/shortages/stats")]);
+  // 还没结案的三种单独取一遍、排在最前（P2-1310，同 P2-456）：清单只回最新 200 条，「在途」卡片数的是已登记 + 采购中的全量，
+  // 已配送的正等着结案（已取药 / 未取药只能在已配送之后判）——这三种一被后来结案的挤出窗口，页面上就没有一行能流转 / 结案
+  const [recent, registered, purchasing, delivered, stats, risk, sstats] = await Promise.all([
+    api("/api/medication/shortages"), api("/api/medication/shortages?status=registered"),
+    api("/api/medication/shortages?status=purchasing"), api("/api/medication/shortages?status=delivered"),
+    api("/api/medication/usage-stats"), api("/api/medication/supply-risk"), api("/api/medication/shortages/stats")]);
+  const shortages = actionableFirst(recent, registered, purchasing, delivered);
   // 补齐三个**结案**状态：后端 `_SHORTAGE_CLOSED` 就是这三个，本批把结案接上之后
   // 它们会真的出现在列表里。原先只有流转中的三个，结案行会把英文键直接印给人看。
   const SS = {
