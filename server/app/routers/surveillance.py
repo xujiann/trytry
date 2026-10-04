@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
 
+from .. import clock
 from ..concurrency import upsert_unique
 from ..numtypes import INT4_MAX
 from ..texttypes import NON_BLANK
@@ -51,6 +52,14 @@ SYNDROMES = {
     "neuro": "脑炎脑膜炎",
 }
 RESOURCE_TYPES = {"material": "应急物资", "team": "应急队伍", "equipment": "应急装备"}
+
+
+def _not_after_today(record_date: str) -> None:
+    """日报日期不得晚于今天（P2-1433，与传染病报卡发病日期 P2-454 同一句、同一个业务日）：症候群、病原日报记的是已经过去
+    的那一天，原先只查格式——把 10-04 敲成 10-14，201、回执照写「达到阈值」，多点预警只截到今天、面板上没有它；到 10-14
+    又以「当天 9 例」冒出一条预警，那天机构真报时还会把它当成原上报覆盖掉。"""
+    if record_date > clock.today().isoformat():
+        raise HTTPException(status_code=422, detail=f"日期（{record_date}）不得晚于今天")
 
 
 # ============================================================ 症候群监测
@@ -205,6 +214,7 @@ def report_syndrome(body: SyndromeIn, db: Session = Depends(get_db), user: User 
     assert_org_writable(db, user, body.org_id)
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="机构不存在")
+    _not_after_today(body.record_date)   # P2-1433
     # 先查有没有、没有就插，是 check-then-act：并发下两个请求都查不到就都去插，
     # 唯一约束挡住其中一个，抛出未捕获的 IntegrityError——**实测 8 并发出一个 500**。
     # 改为先试插、撞了再取回来更新，覆盖语义不变，并发下也不会 500。
@@ -313,6 +323,7 @@ def report_pathogen(body: PathogenIn, db: Session = Depends(get_db), user: User 
     assert_org_writable(db, user, body.org_id)
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="机构不存在")
+    _not_after_today(body.record_date)   # P2-1433
     if body.positive_count > body.tested_count:
         raise HTTPException(status_code=422, detail="阳性数不能大于送检数")
     record = PathogenMonitor(**body.model_dump())
