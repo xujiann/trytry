@@ -569,7 +569,9 @@ def create_outpatient_nursing(
         encounter_id=encounter_id,
         nursing_level=body.nursing_level,
         content=body.content,
-        nurse_name=body.nurse_name,
+        # 不填护士取登录人的姓名（P2-1308）：原先照收 body.nurse_name，页面上护士一栏选填，不填整条无署名（清单一律「—」、
+        # 出参不带录入账号）。同一张表的住院入口（clinical_docs.create_nursing_record）一直缺省取登录人，这里照它
+        nurse_name=body.nurse_name or user.full_name,
         recorded_at=body.recorded_at or now_local().strftime("%Y-%m-%d %H:%M"),
         created_by=user.id,
     )
