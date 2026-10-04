@@ -3483,6 +3483,8 @@ async function renderLabQc() {
       <h3>${esc(lj.item_name)} · 批号 ${esc(lj.lot_no)}（靶值 ${lj.target_value} ± SD ${lj.sd}）</h3>
       <p>L-J 参考线：均值 ${lj.lines.mean} ｜ ±1SD [${lj.lines.sd1_lower}, ${lj.lines.sd1_upper}]
         ｜ ±2SD [${lj.lines.sd2_lower}, ${lj.lines.sd2_upper}] ｜ ±3SD [${lj.lines.sd3_lower}, ${lj.lines.sd3_upper}]</p>
+      ${lj.points.length ? "" : `<p class="desc">该批号还没有测定点：靶值 / SD 录错了现在可以改，录入第一个测定值之后就不能再改。
+        <button class="btn secondary" data-baseline="${esc(lotId)}">改靶值 / SD</button></p>`}
       ${lotInactive ? '<p class="desc">该批号已停用，不再录入测定值；历史测定与失控处理照常查看。</p>' : `
       <form class="inline" id="meas-form">
         <input name="value" placeholder="测得值" required style="width:100px">
@@ -3511,7 +3513,19 @@ async function renderLabQc() {
       } catch (err) { setMsg("#meas-msg", err.message, false); }
     };
     panel.onclick = async (e) => {
-      const { handle } = e.target.dataset;
+      const { handle, baseline } = e.target.dataset;
+      // 改靶值 / SD（P2-1368）：靶值 / SD 是 Westgard 判定的基线，原先建好就改不了——SD 多敲一位（0.1 录成 1.0），之后永远
+      // 判不出失控。只在还没有测定点时摆（有点了后端 409：既往判定怎么处理待裁定）；框里预填现值、由框自己提交，打开页面
+      // 之后别人先录了点的，409 的原话写在框里
+      if (baseline) {
+        const saved = await spdModal("改靶值 / SD", [
+          { name: "target_value", label: "靶值", type: "number", value: lj.target_value, required: true },
+          { name: "sd", label: "SD（须大于 0）", type: "number", value: lj.sd, required: true },
+        ], { intro: `${lj.item_name} · 批号 ${lj.lot_no}：还没有测定点，改了之后录入的测定值按新的靶值 / SD 判定。`,
+          submit: (form) => api(`/api/labqc/lots/${lotId}`, { method: "PATCH", body: JSON.stringify(form) }) });
+        if (saved) route();   // 批号台账里的靶值 / SD 一并换成新的
+        return;
+      }
       if (!handle) return;
       // P2-38：原先两连问（失控原因 → 纠正措施）。第二问点取消就交上一个空措施、被后端 422 拒回——
       // 想放弃的人看到的是一句报错。合成一个表单，两项都必填，取消就是放弃。

@@ -862,6 +862,29 @@ def test_室内质控失控处理在页内表单里填_取消即放弃(page, bas
         True, "质控品复溶后放置过久", "更换质控品复测在控"), row
 
 
+def test_室内质控批号还没有测定点时_页内改靶值SD_录了点之后不再摆(page, base_url, seed, admin_call):
+    """P2-1368：批号的靶值 / SD 建好后改不了，SD 多敲一位（0.1 录成 1.0）之后永远判不出失控。还没有测定点的批号在 L-J 面板上
+    摆「改靶值 / SD」，框里预填现值、由框自己提交，改完重画、台账里换成新的；录了第一个测定值之后不再摆（后端 409，既往判定
+    怎么处理待裁定）。"""
+    lot = admin_call("POST", "/api/labqc/lots", {"org_id": seed["org"]["id"], "item_code": "E2E-1368", "item_name": "E2E改靶值批号",
+                                                 "lot_no": "E2E-1368-LOT", "target_value": 4.0, "sd": 1.0})
+    _login(page, base_url)
+    _open_page(page, "labqc", "检验室内质控")
+    page.click(f'button[data-lot="{lot["id"]}"]')
+    page.click(f'button[data-baseline="{lot["id"]}"]')                  # 修前面板上无处可改
+    modal = _modal(page)
+    expect(modal.locator('[name="target_value"]')).to_have_value("4")   # 预填现值
+    expect(modal.locator('[name="sd"]')).to_have_value("1")
+    _redrawn(page, lambda: _spd_modal(page, {"sd": "0.1"}))
+    (saved,) = [row for row in admin_call("GET", "/api/labqc/lots") if row["id"] == lot["id"]]
+    assert (saved["target_value"], saved["sd"]) == (4.0, 0.1), saved
+    expect(page.locator("#page-body tr", has_text="E2E-1368-LOT")).to_contain_text("0.1")
+    admin_call("POST", f"/api/labqc/lots/{lot['id']}/measurements", {"value": 4.45})   # z=+4.5，按新 SD 判失控
+    page.click(f'button[data-lot="{lot["id"]}"]')
+    expect(page.locator("#lot-detail")).to_contain_text("失控 1-3s")
+    expect(page.locator(f'button[data-baseline="{lot["id"]}"]')).to_have_count(0)   # 有测定点了，入口不再摆
+
+
 @pytest.fixture(scope="session")
 def contract_seed(base_url, seed):
     """家医签约页的前置：一份履约中的签约。"""

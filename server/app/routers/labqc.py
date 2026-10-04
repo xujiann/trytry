@@ -1,6 +1,6 @@
 """检验室内质控（IQC）：质控品批号维护 → 测定值录入即判 Westgard → 失控处理闭环。
 
-- 批号（QcLot）：项目 × 批号 × 靶值/SD，机构内唯一；停用后不再接受录入；
+- 批号（QcLot）：项目 × 批号 × 靶值/SD，机构内唯一；停用后不再接受录入；还没有测定点的可改靶值/SD（P2-1368）；
 - 测定（QcMeasurement）：录入时即按 Westgard 基础四规则判定（见 `_westgard`），
   失控点必须处理（原因 + 纠正措施）；失控未处理期间继续录入，响应给警示；
 - Levey-Jennings：按批号返回时间序列 + 均值±1/2/3SD 参考线，前端画图用。
@@ -18,6 +18,7 @@ from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field, FiniteFloat
+from sqlalchemy import exists
 from sqlalchemy.orm import Session
 
 from ..concurrency import insert_or_conflict, move_row
@@ -129,7 +130,16 @@ class LotOut(LotCreate):
 
 
 class LotPatch(BaseModel):
-    active: bool
+    """改批号：启停，或改靶值 / SD（P2-1368）。各项都可不送，一项都没送的 422。
+
+    靶值 / SD 原先改不了（只收 `active`，送来的 `sd` 被静默忽略、照样 200）：模型注释写的是取「定值质控品说明书或前 20 次
+    测定累积均值/SD」，测完却无处回填；SD 多敲一位（0.1 录成 1.0），z 分数缩成十分之一，之后永远判不出失控；停用后同一批号
+    又重建不了（唯一约束）。取值约束照建批号（`LotCreate`）。认不得的键照本文件其余请求模型的缺省口径忽略。
+    """
+
+    active: bool | None = None
+    target_value: FiniteFloat | None = None
+    sd: FiniteFloat | None = Field(default=None, gt=0)  # 同建批号：SD=0 时 z 分数除零
 
 
 @router.post(
@@ -173,12 +183,28 @@ def list_lots(
     dependencies=[Depends(require_roles("doctor", "operator"))],
 )
 def set_lot_active(lot_id: int, body: LotPatch, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    """启停批号（换批后旧批停用；误停可重新启用，历史测定值保留）。"""
+    """启停批号（换批后旧批停用；误停可重新启用，历史测定值保留）；还没有测定点的批号可改靶值 / SD（P2-1368）。
+
+    靶值 / SD 是 Westgard 判定的基线：已有测定点的批号改了它，既往的判定（含登记过的失控处理）就与新基线对不上——未处理的点
+    要不要按新靶值重判、已处理的怎么留痕，是业务口径，定下来之前一律 409，整条不落（一起送来的启停也不改）。「没有测定点」与
+    改写压进同一条 UPDATE（`move_row`），判与改之间不留空当（正在录入、还没提交的那一点仍看不见：录入不锁批号行）。
+    与现值相同的不算改。
+    """
     lot = db.get(QcLot, lot_id)
     if lot is None:
         raise HTTPException(status_code=404, detail="质控批号不存在")
     assert_obj_org_writable(db, user, lot)
-    lot.active = body.active
+    if body.active is None and body.target_value is None and body.sd is None:
+        raise HTTPException(status_code=422, detail="请至少改一项：启停、靶值或 SD")
+    baseline = {key: value for key, value in body.model_dump(include={"target_value", "sd"}, exclude_none=True).items()
+                if value != getattr(lot, key)}
+    if baseline:
+        values = baseline if body.active is None else {**baseline, "active": body.active}
+        if not move_row(db, QcLot, lot.id, ~exists().where(QcMeasurement.lot_id == lot.id), **values):
+            db.rollback()
+            raise HTTPException(status_code=409, detail="该批号已有测定点，改靶值要先定既往判定怎么处理；靶值 / SD 暂不能改")
+    elif body.active is not None:
+        lot.active = body.active
     db.commit()
     db.refresh(lot)
     return lot
