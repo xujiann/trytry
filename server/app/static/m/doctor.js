@@ -946,8 +946,9 @@ async function loadRound() {
   const picker = $("#round-adm");
   let admissions = [];
   try {
-    // 只取在院的（P2-154）：原先取「最新 200 条住院」再筛在院，住得久的患者被新入院的挤出去，查房选不到他
-    admissions = (await api("/api/inpatient/admissions?status=admitted&limit=500"))
+    // 只取在院的（P2-154）：原先取「最新 200 条住院」再筛在院，住得久的患者被新入院的挤出去，查房选不到他。
+    // 续页取全（P2-1333，shared.js）：一页最多 500 条，原先只取第一页，在院过 500 人时住得最久的那几位照样选不到
+    admissions = (await fetchAllPages(api, "/api/inpatient/admissions?status=admitted"))
       .filter((a) => a.status === "admitted");
   } catch (err) {
     $("#round-status").innerHTML = `<p class="empty">${esc(err.message)}</p>`;

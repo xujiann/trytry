@@ -160,6 +160,31 @@ function errorText(detail, fallback) {
   return typeof detail === "string" && detail ? detail : fallback;
 }
 
+/**
+ * 续页取全一个清单接口（P2-1333）：按 `limit` / `offset` 一页页取，直到一页取不满。
+ *
+ * 清单接口一页最多 500 条（后端 `deps.paginate` 的上限，总数在 X-Total-Count 响应头里）。在院清单按住院号倒序，
+ * 住院页、住院临床文书、医生移动端查房三处原先只取第一页——在院过 500 人，被截掉的正是住得最久的那几位：办不了
+ * 出院，写不了病程、护理、体温单，查房选不到，页面也不提示。在院行数以床位数封顶（DRG 在院预警为同一理由去掉了
+ * 上限），取全不会无界。
+ *
+ * `get` 传调用方自己的 `api`：管理端与医生端的 `api` 认证语义不同（见文件头），这里只管翻页、不碰请求本身。两边的
+ * `api` 只回响应体、读不到响应头，所以不按 X-Total-Count 判，按「一页不满 500 条即取完」判——页长与后端上限是同一个数，
+ * 后端上限若改小，一页不满就不再等于取完（`tests/test_inpatient_in_hospital_lists.py` 拿真接口跑这里，会红）。
+ * 翻页之间恰有人入院，下一页会把上一页末行再给一遍：按 id 去重；一页里一条新的都没有就停，不会空转。
+ */
+async function fetchAllPages(get, path) {
+  const PAGE = 500;
+  const sep = path.includes("?") ? "&" : "?";
+  const rows = new Map();
+  for (let offset = 0; ; offset += PAGE) {
+    const page = await get(`${path}${sep}limit=${PAGE}&offset=${offset}`);
+    const before = rows.size;
+    page.forEach((row) => { if (!rows.has(row.id)) rows.set(row.id, row); });
+    if (page.length < PAGE || rows.size === before) return [...rows.values()];
+  }
+}
+
 /* 原生表单提交兜底（CI 实锤的一类竞态，2026-08-31）。
  *
  * 三套前端的表单**全部**由 JS 的 submit 监听接管（全仓库没有一个 <form action=...>），
