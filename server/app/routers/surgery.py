@@ -8,6 +8,7 @@
 角色：申请与术中记录限医师；审批限管理层（职责分离，申请人不能自己批）；
 排班限经办与管理层（手术室排班是护士长/手术室的工作）。
 """
+from collections.abc import Iterable
 from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -191,6 +192,23 @@ def list_rooms(
         {"id": r.id, "org_id": r.org_id, "name": r.name, "active": r.active}
         for r in paginate(query.order_by(OperatingRoom.id), response, offset, limit)
     ]
+
+
+def room_labels(db: Session, room_ids: Iterable[int]) -> dict[int, str]:
+    """手术间给患者、经办看的叫法 `{手术间号: 「所属医院 · 手术间名」}`（P2-1402），按手术间号一次连表取齐，空集合不打库。
+    「手术已安排」站内信、居民端「我的手术」与管理端排班下拉（`pages-mgmt.js` 的 `roomLabel`）同一个写法。
+
+    手术间名只在一家医院里唯一（同一机构下不重名）。跨机构排台（基层把病人排进县医院的空台，撮合的用途）之后，站内信只写
+    「2号手术间」、居民端「医院」一栏是申请方，手术间却是另一家的——照着去的是申请的那家。本院的同样带上：同一间手术间
+    不管谁排的叫法一致，站内信原先连医院都不写。
+    """
+    wanted = set(room_ids)
+    if not wanted:
+        return {}
+    rows = (db.query(OperatingRoom.id, OperatingRoom.name, Organization.name)
+            .join(Organization, Organization.id == OperatingRoom.org_id)
+            .filter(OperatingRoom.id.in_(wanted)).all())
+    return {room_id: f"{org_name} · {room_name}" for room_id, room_name, org_name in rows}
 
 
 # ---------------------------------------------------------------- 手术申请
@@ -486,13 +504,14 @@ def schedule_surgery(
         schedule = SurgerySchedule(request_id=request_id, created_by=user.id, **body.model_dump())
         db.add(schedule)
         request.status = "scheduled"
+        # 手术间带所属医院（P2-1402）：排进别家手术间的，原先只写「2号手术间」，患者照着去的是申请的那家
         notify_patient(
             db,
             request.patient_id,
             category="surgery",
             title=f"手术已安排：{request.surgery_name}",
-            body=f"{body.scheduled_date} {body.start_time}-{body.end_time}，{room.name}。"
-                 "请遵医嘱做好术前准备。",
+            body=f"{body.scheduled_date} {body.start_time}-{body.end_time}，"
+                 f"{room_labels(db, [room.id]).get(room.id, room.name)}。请遵医嘱做好术前准备。",
             link_type="surgery_request",
             link_id=request.id,
         )

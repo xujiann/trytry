@@ -186,13 +186,17 @@ async function renderSurgery() {
   // 整页只剩一句报错——提申请（只收医师）、排班（经办 / 管理层）、术中记录都只在这一页（P1-220，P1-175 / P2-459 同形）。
   // 统计只在管理层登录时取；各个按钮摆给谁是 P2-447 的事
   const canStats = ["admin", "director"].includes(currentRole());
-  const [recent, rooms, schedules, stats, ...open] = await Promise.all([
+  const [recent, rooms, schedules, stats, orgs, ...open] = await Promise.all([
     api("/api/surgery/requests"), api("/api/surgery/rooms"),
     api("/api/surgery/schedules"), canStats ? api("/api/surgery/stats") : Promise.resolve([]),
+    api("/api/organizations"),
     ...["requested", "approved", "scheduled"].map((s) => api(`/api/surgery/requests?status=${s}`))]);
   const requests = [...new Map([...recent, ...open.flat()].map((r) => [r.id, r])).values()]
     .sort((a, b) => b.id - a.id);
-  const roomName = Object.fromEntries(rooms.map((r) => [r.id, r.name]));
+  // 手术间名前带所属医院（P2-1402，与「手术已安排」站内信、居民端同一个叫法，后端 `surgery.room_labels`）：手术间名只在一家
+  // 医院里唯一，管理员 / 管理层的排班下拉列着全县的手术间，原先只印名字，两家的「1号手术间」分不清。机构名从机构清单取
+  const orgName = Object.fromEntries(orgs.map((o) => [o.id, o.name]));
+  const roomLabel = (r) => (orgName[r.org_id] ? `${orgName[r.org_id]} · ${r.name}` : r.name);
   $("#page-body").innerHTML = `
     ${stats.length ? panel("手术量统计",
       table(["机构", "台次", "切口构成", "麻醉构成", "并发症"], stats, (s) =>
@@ -262,8 +266,9 @@ async function renderSurgery() {
       else if (d.schedule) {
         if (!rooms.length) return setMsg("#surg-msg", "还没有手术间，请先在上方新增", false);
         const v = await spdModal("手术排班", [
+          // 选项文字带所属医院（P2-1402，见上 `roomLabel`），由 spdModal 过 esc()
           { name: "room_id", label: "手术间", type: "select",
-            options: rooms.map((r) => ({ value: r.id, label: r.name })) },
+            options: rooms.map((r) => ({ value: r.id, label: roomLabel(r) })) },
           { name: "scheduled_date", label: "手术日期", placeholder: "YYYY-MM-DD", required: true },
           { name: "start_time", label: "开始时间", placeholder: "HH:MM", required: true },
           { name: "end_time", label: "结束时间", placeholder: "HH:MM", required: true },

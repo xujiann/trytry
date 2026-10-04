@@ -547,7 +547,7 @@ def test_portal_my_surgeries_shows_schedule_not_operative_notes(client, me, inpa
     assert row["status"] == "scheduled"
     assert row["scheduled_date"] == "2026-09-20"
     assert row["scheduled_time"] == "09:00-10:30"
-    assert row["room_name"] == "居民端手术间"
+    assert row["room_name"] == "服务演示卫生院 · 居民端手术间"   # 手术间名前带所属医院（P2-1402）
     # 不应出现术中记录的字段
     for leaked in ("findings", "blood_loss_ml", "complications", "procedure"):
         assert leaked not in row

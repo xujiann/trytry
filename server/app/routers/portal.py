@@ -62,7 +62,6 @@ from ..models import (
     Notification,
     Organization,
     Patient,
-    OperatingRoom,
     Referral,
     ResidentAccount,
     ResidentFamilyMember,
@@ -119,6 +118,7 @@ from .consents import (
 from .notifications import NotificationOut, UnreadCountOut, notification_out
 from .chronic import guidance_for
 from .education import ARTICLE_CATEGORY_NAMES
+from .surgery import room_labels
 
 router = APIRouter(prefix="/api/portal", tags=["居民端"])
 
@@ -2228,7 +2228,9 @@ def portal_my_surgeries(
         .filter(SurgeryRecord.request_id.in_([r.id for r in rows] or [0]))
         .all()
     }
-    rooms = {r.id: r.name for r in db.query(OperatingRoom).all()}
+    # 手术间名前带所属医院（P2-1402，与「手术已安排」站内信同一个叫法）：跨机构排台的，「医院」一栏是申请方，手术间却是
+    # 另一家的，原先只写「2号手术间」，照着去的是申请的那家
+    rooms = room_labels(db, (s.room_id for s in schedules.values()))
     org_names = {o.id: o.name for o in db.query(Organization).all()}
     return [
         {
