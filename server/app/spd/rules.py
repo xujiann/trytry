@@ -369,6 +369,27 @@ def scale_overlap_problem(scoring: dict) -> str:
     return ""
 
 
+def scale_option_label_problem(items: list) -> str:
+    """同一题的选项标签不重复（P2-1275），没问题返回空串。先过 `scale_problem`（题目是对象、选项是对象列表）再调。
+
+    `score_scale` 按 `{标签: 分值}` 查分，同一题两个同名选项后写的盖掉先写的：选项写成「是=3 / 否=0 / 是=0」（复制上一题的
+    选项后漏改），建量表 201、发布 200，答「是」得 0 分、判低危不疑似——前一个的分值永远计不进去。与题目 key 重复（`config/
+    scales.py::_check_item_keys`：后一题盖掉前一题）同一种覆盖。与 `scale_overlap_problem` 一样只在建 / 改 / 发布量表时拦，
+    不进 `scale_problem`：那一句作答时也查，已发布的存量量表会整张作答不了；存量的照常作答（同名的照旧取后写的分值），出新版本
+    时改。标签按 `score_scale` 同一个读法比（`str(label)`）；不同题里的同名选项（每题都有「是 / 否」）互不相干；没写标签的选项
+    不算同名（作答选不到它，该不该收另说）。
+    """
+    for item in items or []:
+        options = item.get("options") if isinstance(item, dict) else None
+        labels = [str(option["label"]) for option in options or []
+                  if isinstance(option, dict) and option.get("label") is not None]
+        repeated = list(dict.fromkeys(label for label in labels if labels.count(label) > 1))
+        if repeated:
+            names = "、".join(f"「{label}」" for label in repeated)
+            return f"题目 {item.get('key')} 的选项标签重复：{names}（评分按标签取分值，后写的会盖掉先写的，请删掉多余的一条或改名）"
+    return ""
+
+
 #: 量表得分落段前取整到的小数位（P2-985）：分值逐项累加后先取到这个精度再和分段上下限比，返回与提示照旧取两位
 _SCORE_DIGITS = 6
 

@@ -22,7 +22,7 @@ from ...models import (
     SpdServicePackage,
     SpdTag,
 )
-from ...rules import scale_overlap_problem, scale_problem
+from ...rules import scale_option_label_problem, scale_overlap_problem, scale_problem
 from ...service import MEDIA_TYPE_NAMES, PACKAGE_ITEM_NAME_MAX, SCALE_ADVICE_MAX, package_items_ok, unknown_program
 from ._base import CONFIG_ROLES, SvgResponse, _qr_svg, router
 
@@ -128,8 +128,9 @@ def _check_item_keys(items: list[dict]) -> None:
 
 def _check_scale(items: list, scoring: dict) -> None:
     """建 / 改 / 发布量表同一句（P2-80）：会让作答 500、或题目计不进分的配置，写库前拦下；评分分段重叠的同样拦下（P2-887，
-    压线的分落进哪一段取决于书写顺序）。"""
-    problem = scale_problem(items, scoring) or scale_overlap_problem(scoring) or _scale_advice_problem(scoring)
+    压线的分落进哪一段取决于书写顺序）；同一题选项标签重复的同样拦下（P2-1275，评分时后写的分值盖掉先写的）。"""
+    problem = (scale_problem(items, scoring) or scale_option_label_problem(items) or scale_overlap_problem(scoring)
+               or _scale_advice_problem(scoring))
     if problem:
         raise HTTPException(status_code=422, detail=f"量表配置非法：{problem}")
 
