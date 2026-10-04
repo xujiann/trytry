@@ -38,6 +38,7 @@ from sqlalchemy.orm import Session
 
 from ..clock import now_local, to_local
 from ..concurrency import upsert_unique
+from ..data.drg_groups_seed import FALLBACK_DRG_GROUP
 from ..database import get_db
 from ..deps import get_current_user, require_admin
 from ..models import (
@@ -642,7 +643,14 @@ def print_case_summary(
     discharged = (
         _shown_at(admission.discharged_at) if admission.discharged_at else "—"
     )
-    drg = f"{summary.drg_code}（权重 {summary.drg_weight}）" if summary.drg_code else "未入组"
+    # QY 兜底组不印权重（P2-1279）：它收的是哪组都没入上的病例，种子权重 0.50 只是占位，CMI 统计也剔除了；原先照样印
+    # 「QY（权重 0.5）」，拿首页对账的人当成一个权重 0.5 的组。兜底与没入组同样印「未入组」，带上兜底组编码与复核提示
+    if not summary.drg_code:
+        drg = "未入组"
+    elif summary.drg_code == FALLBACK_DRG_GROUP["code"]:
+        drg = f"未入组（{summary.drg_code}，需病案首页复核）"
+    else:
+        drg = f"{summary.drg_code}（权重 {summary.drg_weight}）"
     meta = _patient_rows(patient, user) + (
         f'<tr><td class="k">住院机构</td><td>{_esc(org_name)}</td>'
         f'<td class="k">主管医师</td><td>{_esc(admission.doctor_name) or "—"}</td></tr>'
