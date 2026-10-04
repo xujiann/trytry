@@ -7,6 +7,10 @@
 
 修法：`service.TASK_COMPLETABLE_STATUSES`（未结束的除了待审核）——办结接口前置判定与条件 UPDATE 同一个集合；
 待审核的回 409 并说清须由审核人审。
+
+已退回（rejected）原先也参数化在下面的「不走审核的照旧能直接办结」里，钉住的恰是 P2-1361 的缺陷（第四十批扫描 AD2-1）：
+退回是审核人给出的结论，与待审核同一个口径不该由办理人自己关掉。P2-1361 起直接办结改按 `TASK_DIRECT_COMPLETE_STATUSES`
+（再去掉已退回），这一项挪成「已退回的点办结 409、不计分」，不是删掉；重提再审的整条链见 `test_spd_task_rejected_resubmit.py`。
 """
 import pytest
 
@@ -94,12 +98,23 @@ def test_锁外读到办理中_这时办理人刚提交审核_办结同样不绕
     assert _state(task) == ("submitted", 0)
 
 
-@pytest.mark.parametrize("status", ["pending", "claimed", "doing", "rejected", "overdue"])
+@pytest.mark.parametrize("status", ["pending", "claimed", "doing", "overdue"])
 def test_不走审核的照旧能直接办结(client, admin, world, status):
     task = _new_task(world, status)
     resp = client.post(f"/api/spd/tasks/{task}/complete", headers=admin, json={"result": {"note": "办完"}})
     assert resp.status_code == 200, resp.text
     assert _state(task) == ("done", 1)
+
+
+def test_已退回的点办结_409且不计分(client, admin, world):
+    """原先与上面几种一起钉成「照旧能直接办结」——那正是 P2-1361 的缺陷：退回的点一下办结就成了已完成、计了分。"""
+    from app.spd.routers.tasks import RETURNED_FOR_RESUBMIT
+
+    task = _new_task(world, "rejected")
+    resp = client.post(f"/api/spd/tasks/{task}/complete", headers=admin, json={"result": {"note": "办完"}})
+    assert resp.status_code == 409, resp.text   # 修前 200：("done", 1)
+    assert resp.json()["detail"] == RETURNED_FOR_RESUBMIT
+    assert _state(task) == ("rejected", 0)
 
 
 def test_已结束的照旧回已结束(client, admin, world):

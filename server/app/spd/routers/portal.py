@@ -993,7 +993,8 @@ def submit_task(
         raise HTTPException(status_code=422, detail="该任务需要上传照片或报告等凭证")
     task.result = body.result
     # 条件翻转（P2-114）：锁外读到「未结束」之后医护刚办结的，别改回「待审核」——复活的任务再审一次，随访计分再记一笔；
-    # 只从能直接办结的状态翻（P2-789）：锁外读到办理中、这时另一台设备刚提交的，同样 409、不覆盖
+    # 只从办理人还能接着办的状态翻（`TASK_COMPLETABLE_STATUSES`，含已退回，P2-789）：锁外读到办理中、这时另一台设备刚提交的，
+    # 同样 409、不覆盖
     if not move_task(db, task.id, "submitted", expect=TASK_COMPLETABLE_STATUSES):
         db.rollback()
         current = db.get(SpdTask, task.id)

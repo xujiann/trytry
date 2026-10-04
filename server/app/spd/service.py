@@ -423,9 +423,14 @@ TASK_IN_HAND_STATUSES = ("pending", "claimed", "doing", "rejected")
 #: 能「接收」（claim）的：待接收与已超期。单条与批量同一口径——批量原先按「未结束」放行，自己提交在等审核的任务
 #: 批量一勾就被接收回「已接收」、拉出审核队列（P2-83）
 TASK_CLAIMABLE_STATUSES = ("pending", "overdue")
-#: 能「直接办结」（complete）的：未结束的除了待审核——提交了等审核的任务只能由审核人审（通过即办结、退回即重办），
-#: 原先办结接口按「未结束」放行，待审核的点一下办结就绕过了审核（P2-244；两端界面早就不给待审核的摆办结，接口没挡）
+#: 办理人还能接着办的（提交审核 / 存草稿 / 补佐证，医护端与居民端都按它放行）：未结束的除了待审核，**含已退回**——
+#: 退回即回到办理人手里、按审核意见重新提交。提交了等审核的任务只能由审核人审（通过即办结、退回即重办）：原先办结接口
+#: 按「未结束」放行，待审核的点一下办结就绕过了审核（P2-244；两端界面早就不给待审核的摆办结，接口没挡）
 TASK_COMPLETABLE_STATUSES = tuple(s for s in TASK_OPEN_STATUSES if s != "submitted")
+#: 能「直接办结」（complete）的：上面那些再去掉已退回。退回是审核人给出的结论，与待审核同一个口径，不能由办理人自己关掉：
+#: 原先办结也按上面那个集合放行，退回的随访点一下办结就成了已完成——不用重提、不再过审，随访日照样回写、计分照记，退回
+#: 意见原样挂在一条「已完成」的任务上（P2-1361）。上面那个别跟着改：重新提交、补佐证、居民端提交都靠它收已退回的
+TASK_DIRECT_COMPLETE_STATUSES = tuple(s for s in TASK_COMPLETABLE_STATUSES if s != "rejected")
 
 
 def move_task(db: Session, task_id: int, to_status: Any, *, expect: tuple[str, ...] | str = TASK_OPEN_STATUSES,

@@ -6102,6 +6102,34 @@ def test_医生移动端要佐证的任务_传了佐证才办得结(page, base_u
     assert [e["attachment_id"] for e in detail["evidence_urls"]] == detail["evidence"]   # 管理端审核页看得到这份佐证
 
 
+def test_医生移动端退回的任务_卡片上重新提交_不再给办结(page, base_url, spd_seed, admin_call, admin_read):
+    """P2-1361（第四十批扫描 AD2-1）：审核人退回的任务，医生移动端卡片上原先只有「办结」、没有重新提交的入口——点一下就
+    绕过了再审，随访日回写、计分照记。修后退回卡片上换成「重新提交」（与管理端「提交」同一个接口、同一份取数），提交即回到
+    待审核、等审核人再审；办结接口对已退回的 409。"""
+    task = admin_call("POST", "/api/spd/tasks", {
+        "patient_id": spd_seed["patient"]["id"], "title": "E2E退回重提随访", "task_type": "followup",
+        "org_id": spd_seed["org"]["id"], "due_days": 7, "assignee_id": spd_seed["doctor_id"]})
+    admin_call("POST", f"/api/spd/tasks/{task['id']}/submit", {"result": {"note": "只量了一次血压"}})
+    admin_call("POST", f"/api/spd/tasks/{task['id']}/review", {"approved": False, "note": "请复测血压并核实服药"})
+    page.goto(f"{base_url}/m/doctor")
+    page.fill("#lg-user", "e2e_spd_doc")
+    page.fill("#lg-pass", "passw0rd1")
+    page.click('#login-form button[type="submit"]')
+    expect(page.locator("#workbench")).to_be_visible()
+    page.click('[data-tab="spd"]')
+    card = page.locator("#spd-list .m-card", has_text="E2E退回重提随访")
+    expect(card).to_contain_text("已退回")
+    expect(card).to_contain_text("请复测血压并核实服药")
+    expect(card.locator("[data-spd-done]")).to_have_count(0)   # 修前退回卡片上只有「办结」
+    card.locator("[data-spd-resubmit]").click()   # 修前没有这个按钮
+    card.locator("form.spd-resubmit-form textarea[name=note]").fill("已复测 132/80，已核实服药")
+    card.locator("form.spd-resubmit-form button[type=submit]").click()
+    expect(page.locator("#spd-list .m-card", has_text="E2E退回重提随访")).to_contain_text("待审核")
+    detail = admin_read(f"/api/spd/tasks/{task['id']}")
+    assert (detail["status"], detail["result"], detail["review_note"]) == (
+        "submitted", {"note": "已复测 132/80，已核实服药"}, "请复测血压并核实服药"), detail   # 退回意见不被重提盖掉
+
+
 def test_任务详情里的佐证按上传时的文件名下载(page, base_url, spd_seed, admin_call, tmp_path):
     """P2-683：任务详情的「佐证 #N」原先把下载文件名写死成 task-{任务号}-evidence-{附件号}——没有扩展名、上传时的原名
     丢了，照片 / PDF 下到电脑上打不开；同一份附件在附件清单里下载用的是原名。修后不另起名字，用后端回的上传原名。"""

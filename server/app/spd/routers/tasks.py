@@ -42,6 +42,7 @@ from ..service import (
     PATH_OPEN_STATUSES,
     TASK_CLAIMABLE_STATUSES,
     TASK_COMPLETABLE_STATUSES,
+    TASK_DIRECT_COMPLETE_STATUSES,
     TASK_OPEN_STATUSES,
     advance_path,
     award_points,
@@ -1184,8 +1185,9 @@ def add_task_evidence(
 
 
 def _submit_move(db: Session, task: SpdTask, to_status: str) -> None:
-    """提交 / 草稿的条件翻转：只从能直接办结的状态翻（P2-758）。锁外读到办理中、这时别人刚提交审核的，同样 409、
-    不覆盖——回话按库里的现状说：待审核的说须由审核人审，其余说已结束（与 `_finish_task` 同一个判法）。"""
+    """提交 / 草稿的条件翻转：只从办理人还能接着办的状态翻（`TASK_COMPLETABLE_STATUSES`，含已退回，P2-758）。
+    锁外读到办理中、这时别人刚提交审核的，同样 409、不覆盖——回话按库里的现状说：待审核的说须由审核人审，其余说已结束
+    （与 `_finish_task` 同一个判法）。"""
     if not move_task(db, task.id, to_status, expect=TASK_COMPLETABLE_STATUSES):
         db.rollback()
         current = db.get(SpdTask, task.id)
@@ -1203,6 +1205,8 @@ def _move_or_conflict(db: Session, task: SpdTask, to_status: str, *, expect: tup
 
 #: 待审核的任务点「办结」的回话（P2-244）
 AWAITING_REVIEW = "该任务已提交、待审核，须由审核人审核（通过即办结）"
+#: 已退回的任务点「办结」的回话（P2-1361）：退回是审核人的结论，按意见改了重新提交、再审通过才办结
+RETURNED_FOR_RESUBMIT = "该任务已被审核人退回，请按审核意见重新提交审核"
 
 
 class ReviewTaskIn(BaseModel):
@@ -1241,12 +1245,16 @@ def complete_task(
 ):
     """直接办结（不走审核的任务类型）。表单与佐证要求同 submit。
 
-    已提交待审核的不收（P2-244）：那一条只能由审核人审——通过即办结、退回即回到办理人手里。"""
+    已提交待审核的不收（P2-244）：那一条只能由审核人审——通过即办结、退回即回到办理人手里。
+    已退回的同样不收（P2-1361，前置判定与条件翻转同一个集合 `TASK_DIRECT_COMPLETE_STATUSES`）：退回是审核人给出的结论，
+    办理人得按审核意见重新提交、再审通过才办结。原先照收——退回的随访点一下办结就成了已完成，随访日回写、计分照记。"""
     task = _load_task(db, task_id, user)
     if task.status in ("done", "cancelled"):
         raise HTTPException(status_code=409, detail="该任务已结束")
     if task.status == "submitted":
         raise HTTPException(status_code=409, detail=AWAITING_REVIEW)
+    if task.status == "rejected":
+        raise HTTPException(status_code=409, detail=RETURNED_FOR_RESUBMIT)
     if body.result:
         task.result = body.result
     if body.evidence:
@@ -1273,11 +1281,12 @@ def _finish_task(db: Session, task: SpdTask, user: User, expect: str | None = No
     # SQLite 的库级写锁交叉等待。
     with (serialized_on(db, SpdPathInstance, task.instance_id) if task.instance_id is not None
           else contextlib.nullcontext()):
-        # 直接办结（expect=None）不从「待审核」翻（P2-244）：锁外读到办理中、这时办理人刚提交审核的，同样不绕过审核
+        # 直接办结（expect=None）不从「待审核」「已退回」翻（P2-244 / P2-1361）：锁外读到办理中、这时办理人刚提交审核
+        # （或已被审核人退回）的，同样不绕过审核
         won = cast(CursorResult, db.execute(
             update(SpdTask)
             .where(SpdTask.id == task.id,
-                   SpdTask.status == expect if expect else SpdTask.status.in_(TASK_COMPLETABLE_STATUSES))
+                   SpdTask.status == expect if expect else SpdTask.status.in_(TASK_DIRECT_COMPLETE_STATUSES))
             .values(
                 status="done",
                 finished_at=now_naive(),
@@ -1289,8 +1298,9 @@ def _finish_task(db: Session, task: SpdTask, user: User, expect: str | None = No
             if expect is not None:
                 raise HTTPException(status_code=409, detail="只有待审核的任务可以审核")
             current = db.get(SpdTask, task.id)
-            raise HTTPException(status_code=409, detail=AWAITING_REVIEW if current is not None
-                                and current.status == "submitted" else "该任务已结束")
+            current_status = current.status if current is not None else ""
+            raise HTTPException(status_code=409, detail=AWAITING_REVIEW if current_status == "submitted"
+                                else RETURNED_FOR_RESUBMIT if current_status == "rejected" else "该任务已结束")
         # 会话是 autoflush=False 的：先 flush 把调用方挂起的 result/evidence/审核
         # 字段落库，再 refresh 取回 done/finished_at/assignee 的落库值——下面数
         # "还有几条没办完"与出参序列化才不会拿着旧内存值。

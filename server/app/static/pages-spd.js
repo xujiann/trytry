@@ -2055,8 +2055,8 @@ const SPD_INST_STATUS = {
 };
 
 /** 任务行的操作按钮按状态给：待接收的能接收/分派，办理中的能提交/转派/上传佐证，
-    待审核的只能审核，已结束的只剩详情。九个流转端点后端都还按角色（SERVICE_ROLES）
-    与机构归属再判一次——这里只是不把注定 409 的按钮摆出来。「接收」按清单行的 `claimable` 摆（P2-799）：
+    待审核的只能审核，已退回的按审核意见改了「提交」重新送审、不给办结，已结束的只剩详情。九个流转端点后端都还按角色
+    （SERVICE_ROLES）与机构归属再判一次——这里只是不把注定 409 的按钮摆出来。「接收」按清单行的 `claimable` 摆（P2-799）：
     状态之外还要空着或本人名下，页面不知道自己是谁，由后端按接收接口同一判据现算。 */
 function spdTaskActions(t) {
   const b = (attr, label) => `<button class="btn secondary" ${attr}="${t.id}">${label}</button>`;
@@ -2074,7 +2074,9 @@ function spdTaskActions(t) {
   if (t.require_evidence) parts.push(b("data-task-evidence", "上传佐证"));
   parts.push(b("data-task-urge", "催办"));
   if (!t.escalated) parts.push(b("data-task-escalate", "升级"));
-  parts.push(b("data-task-done", "办结"));
+  // 已退回的不摆「办结」（P2-1361）：退回是审核人的结论，办结接口对已退回的 409（与待审核同一个口径），重办走上面的「提交」。
+  // 原先这一行「提交」「办结」并排，点办结就绕过了再审——随访日回写、计分照记，退回意见挂在一条「已完成」的任务上
+  if (t.status !== "rejected") parts.push(b("data-task-done", "办结"));
   return parts.join(" ");
 }
 

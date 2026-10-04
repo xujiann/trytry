@@ -105,8 +105,12 @@ def test_同节点一条退回待重办_另一条办完_路径不越过它(clien
     # 手工推进同样要拦：当前节点还有退回待重办的任务
     resp = client.post(f"{B}/path-instances/{instance}/advance", headers=admin)
     assert resp.status_code == 409 and resp.json() == {"detail": "当前节点仍有未完成任务，不能推进"}, resp.text
-    # 退回的那条重办完，路径才往下走
-    redo = client.post(f"{B}/tasks/{returned}/complete", headers=admin, json={"result": {"note": "补了血压"}})
+    # 退回的那条重办完，路径才往下走。重办 = 按审核意见重新提交、再审通过（P2-1361：已退回的直接办结 409，原先这里
+    # 就是直接办结的——那正是 P2-1361 的缺陷）；审核通过与办结同一个收尾，推进照样发生在这一下
+    resubmit = client.post(f"{B}/tasks/{returned}/submit", headers=admin, json={"result": {"note": "补了血压"}})
+    assert resubmit.status_code == 200 and resubmit.json()["status"] == "submitted", resubmit.text
+    assert client.get(f"{B}/path-instances/{instance}", headers=admin).json()["current_node_key"] == "n1"
+    redo = client.post(f"{B}/tasks/{returned}/review", headers=admin, json={"approved": True, "note": "已补"})
     assert redo.status_code == 200 and redo.json()["advanced"]["current_node_key"] == "n2", redo.text
 
 

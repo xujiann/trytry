@@ -252,14 +252,15 @@ async function loadSpdList() {
 }
 
 /* 待办卡片的动作按状态给（与管理端 `spdTaskActions` 同一口径）：待接收 / 已超期的能接收，待审核的等审核人在管理端审，
-   其余能办结；要佐证的任务多一个「上传佐证」——原先卡片上一律摆着接收与办结、没有上传入口，要佐证的任务在手机上点办结
-   恒 422，接收点在已接收的任务上恒 409，待审核的点办结则绕过了审核（P2-84）。 */
+   已退回的「重新提交」，其余能办结；要佐证的任务多一个「上传佐证」——原先卡片上一律摆着接收与办结、没有上传入口，要佐证的
+   任务在手机上点办结恒 422，接收点在已接收的任务上恒 409，待审核的点办结则绕过了审核（P2-84）。已退回的原先也只有「办结」、
+   没有重新提交的入口：点一下就绕过了再审，随访日回写、计分照记（P2-1361，办结接口对已退回的 409）。 */
 function spdTodoOps(t) {
   const b = (attr, label) => `<button type="button" class="ghost-btn" ${attr}="${t.id}">${label}</button>`;
   if (t.status === "submitted") return "";
   return (["pending", "overdue"].includes(t.status) ? b("data-spd-claim", "接收") : "")
     + (t.require_evidence ? b("data-spd-evidence", "上传佐证") : "")
-    + b("data-spd-done", "办结");
+    + (t.status === "rejected" ? b("data-spd-resubmit", "重新提交") : b("data-spd-done", "办结"));
 }
 
 async function loadSpdTodo(box) {
@@ -276,7 +277,7 @@ async function loadSpdTodo(box) {
       cancelled: "已取消" }[t.status] || t.status))}
     ${t.review_note ? kv("审核意见", esc(t.review_note)) : ""}
     ${t.require_evidence ? kv("佐证", (t.evidence || []).length
-      ? `已传 ${(t.evidence || []).length} 份` : "办结前须上传照片或报告") : ""}
+      ? `已传 ${(t.evidence || []).length} 份` : `${t.status === "rejected" ? "重新提交" : "办结"}前须上传照片或报告`) : ""}
     ${spdTodoOps(t)}
   </div>`).join("") || '<p class="empty">暂无待办</p>';
   box.querySelectorAll("[data-spd-claim]").forEach((b) => b.addEventListener("click", async () => {
@@ -313,6 +314,14 @@ async function loadSpdTodo(box) {
     cardForm(b.closest(".m-card"), "spd-done-form",
       '<textarea name="note" rows="2" placeholder="办理结果（可留空）"></textarea>', "确认办结",
       (f) => spdPost(`/api/spd/tasks/${b.dataset.spdDone}/complete`,
+        { result: { note: f.note.value.trim() } }, true))));
+  // 已退回的「重新提交」（P2-1361）：与管理端任务中心「提交」同一个接口、同一份取数（办理结果写进 result.note），提交即回到
+  // 待审核、等审核人再审；要佐证的照样要（后端提交时核验，拒绝写在这张卡的表单里）。不给「保存草稿」：存草稿把它翻成办理中，
+  // 卡片上又摆回「办结」
+  box.querySelectorAll("[data-spd-resubmit]").forEach((b) => b.addEventListener("click", () =>
+    cardForm(b.closest(".m-card"), "spd-resubmit-form",
+      '<textarea name="note" rows="2" placeholder="按审核意见补办的结果（可留空）"></textarea>', "提交审核",
+      (f) => spdPost(`/api/spd/tasks/${b.dataset.spdResubmit}/submit`,
         { result: { note: f.note.value.trim() } }, true))));
 }
 
