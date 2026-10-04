@@ -1696,6 +1696,32 @@ def test_医废收集从页面上登记带上产生点(page, base_url, admin_rea
     assert timeline[0] == {"step": "收集", "at": "2026-09-20", "location": "E2E外科病区"}
 
 
+def test_医废滞留预警逐包列出_就地交接(page, base_url, admin_read, admin_call):
+    """P2-1309（第三十八批扫描 AB1-1）：滞留预警面板原先只印条数和一句说明——预警接口逐包给的追溯码、暂存点、超期天数全丢了，
+    「交接」按钮只摆在主清单（最新 500 包）里，而滞留的恰是最早收的那批、最先被挤出窗口。修后面板逐包列出、每包带交接。"""
+    org = admin_call("POST", "/api/organizations",
+                     {"name": "E2E医废滞留卫生院", "org_type": "township", "level": "township"})
+    storage = admin_call("POST", "/api/medwaste/locations",
+                         {"org_id": org["id"], "name": "E2E滞留东楼暂存间", "location_type": "storage"})
+    waste = admin_call("POST", "/api/medwaste", {"org_id": org["id"], "waste_type": "infectious",
+                                                  "weight_kg": 2.5, "collected_date": "2026-01-05"})
+    admin_call("POST", f"/api/medwaste/{waste['id']}/store", {"storage_location_id": storage["id"]})
+    (alert,) = [a for a in admin_read("/api/medwaste/alerts") if a["id"] == waste["id"]]
+
+    _login(page, base_url)
+    _open_page(page, "medwaste", "医废追溯")
+    overdue = page.locator("#page-body .panel", has=page.locator("h3", has_text="滞留预警"))
+    row = overdue.locator("tr", has_text=waste["trace_code"])
+    expect(row).to_contain_text("E2E滞留东楼暂存间")          # 修前面板里没有任何一包
+    expect(row).to_contain_text(f"{alert['overdue_days']} 天")
+    row.locator(f'button[data-hand="{waste["id"]}"]').click()
+    _redrawn(page, lambda: _spd_modal(page, {"handler_name": "E2E滞留转运员"}))
+
+    traced = admin_read(f"/api/medwaste/trace/{waste['trace_code']}")
+    assert (traced["status"], traced["handler_name"]) == ("handed_over", "E2E滞留转运员")
+    expect(overdue.locator("tr", has_text=waste["trace_code"])).to_have_count(0)
+
+
 def test_停用考核公式先确认(page, base_url, admin_read, admin_call):
     """P2-43：「停用」考核公式原先点一下就停用，停用的公式页面上没有启用入口。"""
     key = "e2e_p243_formula"

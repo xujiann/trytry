@@ -1079,6 +1079,11 @@ async function renderMedwaste() {
   const alertIds = new Set(alerts.map((w) => w.id));
   const WT = { infectious: "感染性", sharp: "损伤性", pathological: "病理性", pharmaceutical: "药物性", chemical: "化学性" };
   const WS = { collected: ["已收集", "orange"], stored: ["已暂存", "orange"], handed_over: ["已交接", "green"] };
+  // 滞留预警按预警接口逐包列出、就地交接（P2-1309）：原先面板只印条数，而下方清单是最新 500 包、按编号倒序——滞留的恰是
+  // 最早收的那批，最先被挤出窗口，驾驶舱数得出的那几包在这一页既查不到在哪间暂存间、也点不到交接（overdue_alerts 的 D-8：
+  // 只报有几包超期而不报是哪几包，等于没报）。交接按钮与清单同一个 data-hand，走下面同一套弹窗与接口。
+  // 暂存间名称按点位台账对：预警回执只给点位 id；台账含已停用的，历史暂存间照样查得到
+  const locationName = new Map(locations.map((l) => [l.id, l.name]));
   // 暂存间按机构分组：入暂存只能选本机构的暂存间（后端 422 拦跨机构）
   const storageOf = (orgId) => locations.filter((l) =>
     l.active && l.location_type === "storage" && l.org_id === orgId);
@@ -1096,7 +1101,13 @@ async function renderMedwaste() {
         <button>登记</button>
       </form><p class="msg" id="waste-msg"></p>
       ${sources.length ? "" : '<p class="desc">还没有在用的产生点：先在下方「点位台账」建一个产生点再登记收集</p>'}`)}
-    ${alerts.length ? panel(`⚠ 滞留预警（${alerts.length}）`, `<p class="desc">收集超过2天仍未交接</p>`) : ""}
+    ${alerts.length ? panel(`⚠ 滞留预警（${alerts.length}）`, `<p class="desc">收集超过2天仍未交接</p>
+      ${table(["ID", "机构", "追溯码", "类别", "重量", "收集日期", "暂存点", "超期天数", "状态", "操作"], alerts, (w) =>
+        `<tr><td>${w.id}</td><td>${w.org_id}</td><td><span class="tag">${esc(w.trace_code || "—")}</span></td>
+         <td>${esc(WT[w.waste_type] || w.waste_type)}</td><td>${w.weight_kg}kg</td><td>${esc(w.collected_date)}</td>
+         <td>${esc(locationName.get(w.storage_location_id) || "—")}</td>
+         <td><span class="tag red">${w.overdue_days} 天</span></td><td>${statusTag(WS, w.status)}</td>
+         <td><button class="btn secondary" data-hand="${w.id}">交接</button></td></tr>`)}`) : ""}
     ${panel("", `
       <form class="inline" id="trace-form">
         <input name="trace_code" placeholder="追溯码 MW-YYYYMMDD-序号" required style="min-width:220px">
