@@ -13,6 +13,8 @@
 3. **预警只提示不定性**。达到阈值给出的是"值得看一眼"，不是"发生疫情"——
    平台不替疾控下判断。
 """
+from fractions import Fraction
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import and_, func, or_
@@ -403,7 +405,11 @@ def multi_point_alerts(
     return {
         "window": {"start": start, "end": end_str, "days": days},
         "group_id": group_id,
-        "syndrome_alerts": sorted(syndrome_alerts, key=lambda x: -x["case_count"]),
+        # 症候群按「例数 ÷ 阈值」从高到低排（P2-1437）：阈值是各机构自设的（模块口径 1），绝对例数在机构之间没法比——原先按例数排，
+        # 县医院 52 例（阈值 50，104%）排在村卫生室 15 例（阈值 5，300%）前面，预警一多，村卫生室的突增沉到表底。比值用分数比、
+        # 不经浮点舍入；比值相同再按例数降序、机构 id，最后按行 id 倒序——取数没有 ORDER BY，末位键唯一才是全序
+        "syndrome_alerts": sorted(syndrome_alerts, key=lambda x: (
+            -Fraction(x["case_count"], x["threshold"]), -x["case_count"], x["org_id"], -x["id"])),
         "pathogen_alerts": sorted(
             pathogen_alerts, key=lambda x: -(x["positive_rate_pct"] or 0)
         ),

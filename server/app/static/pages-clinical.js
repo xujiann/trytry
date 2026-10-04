@@ -1771,7 +1771,8 @@ async function renderSurveillance() {
     api("/api/surveillance/alerts"), api("/api/surveillance/resources/readiness"), api("/api/organizations"),
   ]);
   const SYN = { fever: "发热", respiratory: "呼吸道", diarrhea: "腹泻", rash: "皮疹", jaundice: "黄疸", neuro: "脑炎脑膜炎" };
-  // 机构名：症候群日报覆盖提示说盖掉的是哪家的（P2-1432）；映射不到（页面打开之后才建的机构）回显编号
+  // 机构名：症候群日报覆盖提示说盖掉的是哪家的（P2-1432）；多点预警、症候群日报、病原日报三张表的机构列印名称、不印编号
+  // （P2-1437，同页保障情况表的做法）。映射不到（页面打开之后才建的机构）回显编号
   const orgNames = Object.fromEntries(orgs.map((o) => [o.id, o.name]));
   // ADR-0009 第六批：面板外壳改用 `panel()`（定义见 core.js），迁一页、人工过一页。
   $("#page-body").innerHTML = `
@@ -1780,10 +1781,10 @@ async function renderSurveillance() {
       <h4>症候群达到阈值</h4>
       <p class="hint">口径：${esc(alerts.caliber.syndrome)}</p>
       ${table(["机构", "症候群", "例数", "阈值", "日期"], alerts.syndrome_alerts, (r) =>
-        `<tr><td>${r.org_id}</td><td>${esc(r.syndrome_name)}</td><td><b>${r.case_count}</b></td><td>${r.threshold}</td><td>${esc(r.record_date)}</td></tr>`)}
+        `<tr><td>${esc(orgNames[r.org_id] || r.org_id)}</td><td>${esc(r.syndrome_name)}</td><td><b>${r.case_count}</b></td><td>${r.threshold}</td><td>${esc(r.record_date)}</td></tr>`)}
       <h4>病原阳性率抬头</h4>
       ${table(["机构", "病原", "标本", "阳性/送检", "阳性率"], alerts.pathogen_alerts, (r) =>
-        `<tr><td>${r.org_id}</td><td>${esc(r.pathogen_name)}</td><td>${esc(r.specimen_type || "—")}</td>` +
+        `<tr><td>${esc(orgNames[r.org_id] || r.org_id)}</td><td>${esc(r.pathogen_name)}</td><td>${esc(r.specimen_type || "—")}</td>` +
         `<td>${r.positive_count}/${r.tested_count}</td><td><b>${r.positive_rate_pct}%</b></td></tr>`)}
       <p class="hint">口径：${esc(alerts.caliber.pathogen)}</p>`)}
     ${panel("症候群日报", `
@@ -1795,7 +1796,7 @@ async function renderSurveillance() {
         <input name="record_date" placeholder="日期 YYYY-MM-DD" required><button>上报</button></form>
       <p class="msg" id="syn-msg"></p>
       ${table(["机构", "症候群", "例数", "阈值", "日期", "预警"], syndromes.slice(0, 50), (r) =>
-        `<tr><td>${r.org_id}</td><td>${esc(r.syndrome_name)}</td><td>${r.case_count}</td><td>${r.threshold || "不设"}</td>` +
+        `<tr><td>${esc(orgNames[r.org_id] || r.org_id)}</td><td>${esc(r.syndrome_name)}</td><td>${r.case_count}</td><td>${r.threshold || "不设"}</td>` +
         // 例数等于阈值就报，与接口口径「达到阈值即列出」同一个说法（P2-695）：原先写「超阈值」，8 例对阈值 8 也标超
         `<td>${esc(r.record_date)}</td><td>${r.alert ? '<span class="tag danger">达到阈值</span>' : "—"}</td></tr>`)}
     `)}
@@ -1807,7 +1808,7 @@ async function renderSurveillance() {
         <input name="record_date" placeholder="日期 YYYY-MM-DD" required><button>上报</button></form>
       <p class="msg" id="pat-msg"></p>
       ${table(["机构", "病原", "标本", "阳性/送检", "阳性率", "日期"], pathogens.slice(0, 50), (r) =>
-        `<tr><td>${r.org_id}</td><td>${esc(r.pathogen_name)}</td><td>${esc(r.specimen_type || "—")}</td>` +
+        `<tr><td>${esc(orgNames[r.org_id] || r.org_id)}</td><td>${esc(r.pathogen_name)}</td><td>${esc(r.specimen_type || "—")}</td>` +
         `<td>${r.positive_count}/${r.tested_count}</td><td>${r.positive_rate_pct === null ? "未送检" : r.positive_rate_pct + "%"}</td>` +
         `<td>${esc(r.record_date)}</td></tr>`)}
     `)}
