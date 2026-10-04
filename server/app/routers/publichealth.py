@@ -194,9 +194,16 @@ def clinic_reminders(
     # 只提示生效中的禁忌（P2-132）：原先已解除、已过期的也一条不落地提示，同一时刻接种台放行这支疫苗
     for v in _effective_contraindications(db, patient_id, None, cutoff):
         reminders.append({"type": "vaccine_contraindication", "detail": f"疫苗 {v.vaccine_code} 禁忌：{v.reason}"})
-    active_events = db.query(PublicHealthEvent).filter(PublicHealthEvent.status == "active").count()
-    if active_events:
-        reminders.append({"type": "active_ph_event", "detail": f"当前有 {active_events} 起突发公卫事件处置中，注意相关症状问诊"})
+    # 处置中的事件说出是哪起（P2-1435）：原先只给个数——「当前有 1 起突发公卫事件处置中」，处置中的是诺如病毒感染还是流感，
+    # 医生不知道该问腹泻还是发热。列病种与级别，级别照事件列表的写法印「IV级」，没填病种的印事件名称；多起用顿号隔开、
+    # 按立案先后倒序（同事件列表），超过 3 起只列最新 3 起、写「等 N 起」。仍是一条 active_ph_event，只改 detail 文字。
+    # 处置中的事件同一时刻不过寥寥几起，整批取回、在这里取前 3 起：句子里要写总数，库里只取 3 起也还得另数一遍
+    active = (db.query(PublicHealthEvent).filter(PublicHealthEvent.status == "active")
+              .order_by(PublicHealthEvent.id.desc()).all())
+    if active:
+        shown = "、".join(f"{(e.disease_name or '').strip() or e.title}（{e.level}级）" for e in active[:3])
+        more = f"等 {len(active)} 起" if len(active) > 3 else ""
+        reminders.append({"type": "active_ph_event", "detail": f"突发公卫事件处置中：{shown}{more}，注意相关症状问诊"})
     return {"patient_id": patient_id, "reminders": reminders}
 
 

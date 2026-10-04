@@ -136,6 +136,7 @@ def test_诊间提醒聚合精确(client, admin, patient, event_actions):
         "patient_id": patient["id"],
         "reminders": [
             {"type": "vaccine_contraindication", "detail": "疫苗 HPV9 禁忌：急性发热"},
-            {"type": "active_ph_event", "detail": "当前有 1 起突发公卫事件处置中，注意相关症状问诊"},
+            # 说出是哪起（P2-1435）：原先「当前有 1 起突发公卫事件处置中，注意相关症状问诊」，只给个数
+            {"type": "active_ph_event", "detail": "突发公卫事件处置中：诺如病毒（III级），注意相关症状问诊"},
         ],
     }
