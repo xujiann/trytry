@@ -7,7 +7,7 @@ from contextlib import nullcontext
 from datetime import datetime, timedelta
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field, FiniteFloat
 import sqlalchemy as sa
 from sqlalchemy import func, or_, select
@@ -583,12 +583,16 @@ def list_measurements(
 def measurement_trend(
     patient_id: int,
     metric: str,
-    granularity: str = "day",
+    # 只收这三种，写错 422（P2-1337）：原先不校验，`weekly`、`Month` 落进按日的分支照样 200，回显的却是传进来的值
+    granularity: str = Query(default="day", pattern="^(day|week|month)$"),
     days: int = 90,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """指标趋势（患者端 #7）：按日/周/月聚合，给出均值、极值与等级分布。
+    """指标趋势（成员端 #12「看趋势」）：按日/周/月聚合，给出均值、极值与等级分布。
+
+    员工端接口，居民令牌调不了（P2-1337）：原说明写「患者端 #7」，居民端的按日/周/月趋势并未交付——居民端只有
+    `GET /api/portal/spd/measurements` 的原始读数，见需求对照表患者端 #7。
 
     聚合在 Python 侧做而不是库侧 `date_trunc`：那个函数 SQLite 没有，
     而平台要同时跑在 SQLite（开发/演示）与 PostgreSQL/国产库（生产）上。

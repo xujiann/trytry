@@ -476,7 +476,12 @@ def list_measurements(
     account: ResidentAccount = Depends(current_resident),
     db: Session = Depends(get_db),
 ):
-    """指标历史与趋势（#7）。按日返回原始点，前端自行按日/周/月切换展示。"""
+    """指标历史（#7）：近 `days` 天（缺省 90、最多 730）的原始读数，新的在前，逐条带等级与测量时刻。
+
+    只有原始读数、没有聚合（P2-1337）：原说明写「前端自行按日/周/月切换展示」，居民端「监测」页只列最新 30 条原始读数，
+    没有聚合也没有切换——#7 要的按日/周/月趋势、平均值与汇总变化居民端未交付（见需求对照表患者端 #7）。按日/周/月聚合的
+    `GET /api/spd/measurements/trend` 是员工端接口，居民令牌调不了。
+    """
     patient = _patient(db, account, patient_id, resource="spd_measurement")
     since = now_naive() - timedelta(days=max(min(days, 730), 1))
     query = db.query(SpdMeasurement).filter(
