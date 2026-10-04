@@ -4,18 +4,33 @@
     python scripts/seed_demo.py [base_url]
 默认 base_url 为 http://127.0.0.1:8000。
 
+以 admin 登录，口令取 MEDPLAT_ADMIN_PASSWORD——与服务启动时建 admin 同一个来源（`app.config.settings.admin_password`，
+没设才是 `config.DEFAULT_ADMIN_PASSWORD`）；登录不上就说清原因、非零退出（P2-1278）。
+
 可以重复执行：start.sh 在 MEDPLAT_SEED_DEMO=1 时每次启动都跑一遍。每一段各查各的标记、存在即跳过，
 只增不改（P2-1095，`tests/test_seed_demo_rerun.py` 跑两遍盯着）。
 """
+import pathlib
 import sys
 from datetime import date, timedelta
 
 import httpx
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+
+from app.config import settings  # noqa: E402
+
 BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8000"
 c = httpx.Client(base_url=BASE, timeout=30)
-token = c.post("/api/auth/login", json={"username": "admin", "password": "admin123"}).json()["access_token"]
-c.headers["Authorization"] = f"Bearer {token}"
+# 原先写死 admin/admin123（P2-1278）：演示站照 render.yaml 在控制台填了强口令，第一个请求就 401、拿 401 的响应体取
+# access_token 抛 KeyError，被 start.sh 的 `|| true` 吞掉，站上一条演示数据都没有；要灌进去只能把口令设回 admin123——
+# P0-1 修掉的公网默认口令。口令不打进输出
+_login = c.post("/api/auth/login", json={"username": "admin", "password": settings.admin_password})
+if _login.status_code != 200:
+    raise SystemExit(f"演示数据灌入失败：admin 登录被拒（HTTP {_login.status_code}：{_login.text[:200]}）。"
+                     "本脚本按 MEDPLAT_ADMIN_PASSWORD 登录（没设则为缺省口令），须与服务端建 admin 时用的口令一致；"
+                     "admin 已改过密码的，把 MEDPLAT_ADMIN_PASSWORD 设成现口令再跑")
+c.headers["Authorization"] = f"Bearer {_login.json()['access_token']}"
 
 def ensure_org(payload):
     """机构幂等创建：已存在（409）则从列表反查返回既有记录，支持脚本重复执行。"""

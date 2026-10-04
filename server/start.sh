@@ -61,7 +61,11 @@ i=0
 while [ $i -lt 30 ]; do
   sleep 1
   if python -c "import httpx;httpx.get('http://127.0.0.1:$PORT/api/health',timeout=2)" 2>/dev/null; then
-    python scripts/seed_demo.py "http://127.0.0.1:$PORT" || true
+    # 灌数失败不该拖垮服务（末尾的 `|| true`），但也不能再悄悄吞掉（P2-1278）：原先 admin 口令对不上时脚本 401 后
+    # 抛 KeyError，被这里吞得一行不剩，演示站空着没人知道为什么。`$?` 是灌数脚本的退出码
+    python scripts/seed_demo.py "http://127.0.0.1:$PORT" \
+      || echo "演示数据灌入失败：scripts/seed_demo.py 退出码 $?，原因见上方输出；服务照常运行，演示数据缺失或不全" >&2 \
+      || true
     break
   fi
   i=$((i+1))

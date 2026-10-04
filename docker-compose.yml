@@ -23,9 +23,10 @@ services:
       MEDPLAT_ADMIN_PASSWORD: ${MEDPLAT_ADMIN_PASSWORD:?请先设置 MEDPLAT_ADMIN_PASSWORD（≥12 位强口令）}
       MEDPLAT_UPLOAD_DIR: /data/uploads
       MEDPLAT_ENV: prod
-      # A8：镜像默认已**不带**演示种子（Dockerfile 不再 ENV MEDPLAT_SEED_DEMO=1）。
-      # 生产档保持 0；要起演示档需**显式**开：export MEDPLAT_SEED_DEMO=1 再 up，
-      # 演示数据均为虚构，不得对公网生产库开启。
+      # A8：镜像默认已**不带**演示种子（Dockerfile 不再设 MEDPLAT_SEED_DEMO）。
+      # 本文件是**生产档**（上面写死 MEDPLAT_ENV: prod），保持 0：生产守卫（config.py）拒绝演示种子——
+      # 在这里打开它，应用起不来，加上 restart: unless-stopped 就是无限重启（P2-1278，与 P0-2 修过的崩溃循环同形）。
+      # 要演示请用 render.yaml 或本地开发方式（uvicorn 起服务后跑 scripts/seed_demo.py），别用本文件。
       MEDPLAT_SEED_DEMO: "${MEDPLAT_SEED_DEMO:-0}"
     volumes:
       - medplat-uploads:/data/uploads
