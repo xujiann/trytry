@@ -20,6 +20,14 @@ const UNIFIED_STATUS = { pending: ["待处理", "orange"], processing: ["处理�
 /** 交接班清单的筛选（P2-476）：只留在内存里、不进存储——病区 / 日期是这一次查看的条件。 */
 const HANDOVER_FILTER = { ward_id: "", handover_date: "" };
 
+/** 体温单测量时刻 → 毫秒数，给折线图按时间比例摆点（P2-1336）。形状照后端 `datetypes.DATETIME_SHAPE`（日期后可跟时刻，
+    空格或 `T` 分隔，秒可选）；按墙上时间算（`Date.UTC` 只当算术用，不涉时区）。形状不对的（P1-100 之前的存量自由文本）
+    回 NaN，折线图整张回落成按条目等距 */
+function vitalTimeMs(measuredAt) {
+  const m = /^([0-9]{4})-([0-9]{2})-([0-9]{2})(?:[ T]([0-9]{2}):([0-9]{2})(?::([0-9]{2}))?)?$/.exec(measuredAt || "");
+  return m ? Date.UTC(+m[1], +m[2] - 1, +m[3], +(m[4] || 0), +(m[5] || 0), +(m[6] || 0)) : NaN;
+}
+
 async function renderClinicalDocs() {
   $("#page-desc").textContent = "病程记录 / 护理记录 / 体温单 / 交接班；出院前可做文书完整性自查";
   // 只取在院的（P2-154）：原先不带条件取「最新 200 条住院」再在页面上挑在院的——住得久的患者被新入院的挤出前 200 条，
@@ -109,7 +117,9 @@ async function renderClinicalDocs() {
       ${vitals.length ? lineChart(vitals.map((v) => v.measured_at.slice(5, 10)),
         // 未测的给 null、不给 0（P2-158）：接口的注释与用户手册都说「未测项留空不要填 0，填 0 会污染体温单趋势曲线」
         { "体温": vitals.map((v) => v.temperature ?? null), "脉搏": vitals.map((v) => v.pulse ?? null) },
-        ["#c0392b", "#0b6e6e"]) : ""}
+        ["#c0392b", "#0b6e6e"],
+        // 按测量时刻定横坐标（P2-1336）：原先按条目等距，一天测 6 次与之后几天每天测 1 次占一样宽，热型曲线被压变形
+        vitals.map((v) => vitalTimeMs(v.measured_at))) : ""}
       ${table(["测量时刻", "体温", "脉搏", "呼吸", "血压", "入量 ml", "出量 ml", "体重 kg", "记录人"], vitals, (v) =>
         `<tr><td>${esc(v.measured_at)}</td><td>${v.temperature ?? "—"}</td><td>${v.pulse ?? "—"}</td>
          <td>${v.respiration ?? "—"}</td><td>${v.sbp ?? "—"}/${v.dbp ?? "—"}</td>

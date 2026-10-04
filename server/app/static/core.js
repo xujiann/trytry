@@ -317,14 +317,24 @@ function barChart(items, { color = "#0b6e6e", unit = "" } = {}) {
 
 /* ---------------- 各页面 ---------------- */
 
-function lineChart(months, series, colors) {
+/* 折线图（纯SVG）：`labels` 是横轴标签，原样画；`times` 可选，与 `labels` 等长、每个点的时刻（毫秒数），给了就按时间
+   比例摆点，不给按下标等距（P2-1336） */
+function lineChart(labels, series, colors, times = null) {
   const w = 640, h = 200, padL = 36, padB = 24, padT = 10;
   // 缺测（null / undefined）不画点、在那儿断开折线（P2-158）：原先调用方只能拿 0 顶上，一次只测了血压的记录把体温、
   // 脉搏两条曲线都拽到底，纵轴也跟着压扁
   const missing = (v) => v === null || v === undefined;
   const all = Object.values(series).flat().filter((v) => !missing(v));
   const max = Math.max(...all, 1);
-  const x = (i) => padL + (i * (w - padL - 10)) / Math.max(months.length - 1, 1);
+  // 横坐标按时刻比例摆（P2-1336）：体温单原先按条目等距排，一天测 6 次与之后每天测 1 次占一样宽，热型曲线被压变形，
+  // 中间隔了几天没测也看不出。时刻缺一个、或全在同一时刻，回落成按下标等距；不给时刻的调用方（驾驶舱近 6 月、审计
+  // 按日补零，本来就是等间隔的序列）照旧按下标等距，坐标与原先逐值相同
+  const timed = Array.isArray(times) && times.length === labels.length && times.every(Number.isFinite);
+  const t0 = timed ? Math.min(...times) : 0;
+  const span = timed ? Math.max(...times) - t0 : 0;
+  const x = span > 0
+    ? (i) => padL + ((times[i] - t0) * (w - padL - 10)) / span
+    : (i) => padL + (i * (w - padL - 10)) / Math.max(labels.length - 1, 1);
   const y = (v) => padT + (h - padT - padB) * (1 - v / max);
   let svg = "";
   Object.entries(series).forEach(([name, values], si) => {
@@ -339,10 +349,21 @@ function lineChart(months, series, colors) {
     });
     values.forEach((v, i) => { if (!missing(v)) svg += `<circle cx="${x(i)}" cy="${y(v)}" r="2.5" fill="${color}"/>`; });
   });
-  // 月份标签来自后端、格式固定（YYYY-MM），今天不含特殊字符——但图表组件是
-  // 三套前端共用的渲染出口，"这个入参恰好安全"不是组件该依赖的前提。
-  // 同文件的 barChart 早就 esc(label) 了，这里对齐（CLAUDE.md §8）。
-  months.forEach((mo, i) => { svg += `<text x="${x(i)}" y="${h - 6}" font-size="10.5" fill="#5b6773" text-anchor="middle">${esc(String(mo).slice(2))}</text>`; });
+  // 横轴标签原样画（P2-1336）：原先一律 `slice(2)`，注释写「月份标签来自后端、格式固定（YYYY-MM）」——体温单、审计
+  // 按日传的是 MM-DD，横轴只剩「-30」「-03」，跨月的两个点标签相同。要缩写的调用方自己缩（驾驶舱传 YY-MM）。
+  // 与上一个已画的标签相同（同一天的几次测量）不重画；离上一个已画的太近、会叠在一起的（按下标等距的 31 天、
+  // 一天测几次）跳过——每个点的完整时刻在图下的表格里。10.5 号字下「09-03」实测约 27px 宽，按每字 7px 估：
+  // 两个标签的中心距不到两者半宽之和就叠上了。
+  // 标签来自后端数据，今天不含特殊字符——但图表组件是三套前端共用的渲染出口，
+  // "这个入参恰好安全"不是组件该依赖的前提。同文件的 barChart 早就 esc(label) 了，这里对齐（CLAUDE.md §8）。
+  let lastX = -Infinity, lastText = "";
+  labels.forEach((label, i) => {
+    const text = String(label);
+    if (text === lastText || x(i) - lastX < (text.length + lastText.length) * 3.5) return;
+    svg += `<text x="${x(i)}" y="${h - 6}" font-size="10.5" fill="#5b6773" text-anchor="middle">${esc(text)}</text>`;
+    lastX = x(i);
+    lastText = text;
+  });
   // `max` 是本函数自己算出来的数字，`esc()` 对它是恒等——照样包上，是为了让
   // "<text> 里的插值一律过 esc" 这条规则**没有例外**。带例外清单的规则，
   // 后来人得先判断自己算不算例外，判断错了就是漏转义。
@@ -431,6 +452,8 @@ async function renderDashboard() {
     : "";
   const trendColors = ["#0b6e6e", "#0a4d78", "#b26a00", "#8d4bab"];
   const trendNames = { encounters: "就诊", exam_reports: "远程诊断", referrals: "转诊", prescriptions: "处方" };
+  // 横轴写「26-05」这样的年月（P2-1336）：原先是折线图组件替每个调用方切掉前两位，组件现在原样画标签，缩写在这里做
+  const trendLabels = trends.months.map((mo) => mo.slice(2));
   const legend = Object.keys(trends.series).map((k, i) =>
     `<span style="font-size:12.5px;margin-right:14px"><span style="display:inline-block;width:10px;height:10px;background:${trendColors[i]};border-radius:2px;margin-right:4px"></span>${esc(trendNames[k] || k)}</span>`).join("");
   $("#page-body").innerHTML =
@@ -439,7 +462,7 @@ async function renderDashboard() {
       `<div class="card"${metric ? ` data-drill="${esc(metric)}" style="cursor:pointer" title="点击查看明细"` : ""}>
         <div class="label">${esc(label)}${metric ? " ▸" : ""}</div><div class="value${warn ? " warn" : ""}">${esc(value)}</div></div>`).join("")}</div>
      <div id="drill-panel" class="hidden"></div>
-     ${panel("近6月业务量趋势", `<div style="margin-bottom:6px">${legend}</div>${lineChart(trends.months, trends.series, trendColors)}`)}
+     ${panel("近6月业务量趋势", `<div style="margin-bottom:6px">${legend}</div>${lineChart(trendLabels, trends.series, trendColors)}`)}
      ${chronicItems.length ? panel("慢病分级分组", barChart(chronicItems, { color: "#b26a00", unit: " 人" })) : ""}
      ${panel(`可下钻指标目录（${drillables.length}）`, `
        <p class="desc">这份目录由后端 <code>METRIC_QUERIES</code> 生成，是下钻口径的唯一真源。
