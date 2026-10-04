@@ -57,7 +57,7 @@ from ..models import (
 )
 from ..rules import RuleError, as_validated, evaluate, is_suspect_risk, score_scale, screen
 from ..service import (ENROLL_STATUS_LABELS, PACKAGE_ITEM_NAME_MAX, paused_enrollment, SCALE_ADVICE_MAX, MEASUREMENT_SOURCE_NAMES, TASK_OPEN_STATUSES, actively_enrolled, award_points, build_facts,
-                       MIGRATION_SAME_ORG, MIGRATION_VOID_STATUSES,
+                       MIGRATION_SAME_ORG, MIGRATION_VOID_STATUSES, adopt_kept_work,
                        candidate_reason, candidate_undistributed, close_open_work, enrollment_still_active, exclusion_problem,
                        enrollment_pathless, enrollment_unassessed, enrollment_unstaged,
                        match_program, migration_void_reason, my_team_ids,
@@ -1572,7 +1572,8 @@ def confirm_migration(
     `migrated_from_id` 指回原档案。
 
     **不迁历史任务与随访**：那些是原机构的工作留痕，迁走会让原机构的考核
-    凭空少一截；新机构的服务从确认那天重新开始计。
+    凭空少一截；新机构的服务从确认那天重新开始计。目标机构自己在待确认期间派下、还没办完的任务与干预
+    不在此列：它们不随原档案收尾，改挂迁入档案（P2-1338，`service.adopt_kept_work`）。
     """
     event = db.get(SpdLifecycleEvent, event_id)
     if event is None or event.event != "migrate":
@@ -1648,6 +1649,8 @@ def confirm_migration(
         incoming = ensure_present(existing, "在管档案")
         if incoming.migrated_from_id is None:
             incoming.migrated_from_id = enrollment.id
+    # 收尾留下的目标机构的任务与干预改挂迁入档案（P2-1338）：原先一确认全部取消；只留下不改挂，又还挂在已迁出的原档案上
+    adopt_kept_work(db, enrollment, incoming, event.target_org_id)
     db.commit()
     return {
         "enrollment": _enroll_out(enrollment),

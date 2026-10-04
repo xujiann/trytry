@@ -788,6 +788,8 @@ def note_call_dispatch_failure(db: Session, task_id: int, note: str) -> bool:
 
 #: 干预方案（`spd_interventions.status`）还能被居民标记完成的：没被移除的都算（已完成的再点一次照旧是已完成）
 INTERVENTION_FINISHABLE_STATUSES = ("planned", "doing", "done")
+#: 干预方案的「未结束」：待执行、执行中。结案收尾移除这些，迁入确认把迁入机构留下的这些改挂迁入档案（P2-1338）
+INTERVENTION_OPEN_STATUSES = ("planned", "doing")
 
 
 def mark_task_escalated(db: Session, task_id: int) -> None:
@@ -1192,7 +1194,9 @@ def close_open_work(db: Session, enrollment: SpdEnrollment, reason: str, *, keep
     随访记录原先不在其中（P1-129）：死者名下计划好的随访照旧到期、被扫成超期，排在随访清单与超期数里。
     只收本机构（或没挂机构）的——迁入确认时目标机构自己的随访不能被原档案的结案带走；已完成、失访的是留痕，不动。
 
-    `keep_org_id`：迁入确认时传目标机构，它自己的医生排的同病种复诊不随原档案移除（P2-849，同上一句的复诊版）。
+    `keep_org_id`：迁入确认时传目标机构，它自己的医生排的同病种复诊不随原档案移除（P2-849，同上一句的复诊版）；
+    它自己的任务（按任务所属机构认）、干预（按负责人所在机构认，同复诊）同样留下（P2-1338），由 `adopt_kept_work`
+    改挂迁入档案。
     """
     stats = {"tasks": 0, "instances": 0, "interventions": 0, "revisits": 0, "followups": 0}
     # 每一条都是条件翻转、按编号取（P2-114）：原先查出一批、逐条改内存、由调用方提交时才发 UPDATE（只有 `WHERE id = ?`），
@@ -1210,30 +1214,33 @@ def close_open_work(db: Session, enrollment: SpdEnrollment, reason: str, *, keep
                      status="cancelled", finished_at=now_naive()):
             stats["instances"] += 1
 
-    tasks = (
-        db.query(SpdTask)
-        .filter(
-            SpdTask.enrollment_id == enrollment.id,
-            SpdTask.status.in_(TASK_OPEN_STATUSES),
-        )
-        .order_by(SpdTask.id)
-        .all()
+    task_query = db.query(SpdTask).filter(
+        SpdTask.enrollment_id == enrollment.id,
+        SpdTask.status.in_(TASK_OPEN_STATUSES),
     )
+    if keep_org_id is not None:
+        # 迁入确认：迁入机构自己的任务不随原档案收尾（P2-1338，下面复诊 P2-849 的任务版）——待确认期间原档案仍在管，迁入机构
+        # 派的任务（手工派的、县医院下转来的「下转承接与随访」、干预执行）按病种挂的都是原档案，原先一确认全部取消。按任务
+        # 所属机构认；没挂机构的认不出是谁的，照旧随原档案取消
+        task_query = task_query.filter(or_(SpdTask.org_id.is_(None), SpdTask.org_id != keep_org_id))
+    tasks = task_query.order_by(SpdTask.id).all()
     for task in tasks:
         if move_task(db, task.id, "cancelled", review_note=reason, finished_at=now_naive()):
             stats["tasks"] += 1
 
-    interventions = (
-        db.query(SpdIntervention)
-        .filter(
-            SpdIntervention.enrollment_id == enrollment.id,
-            SpdIntervention.status.in_(["planned", "doing"]),
-        )
-        .order_by(SpdIntervention.id)
-        .all()
+    intervention_query = db.query(SpdIntervention).filter(
+        SpdIntervention.enrollment_id == enrollment.id,
+        SpdIntervention.status.in_(INTERVENTION_OPEN_STATUSES),
     )
+    if keep_org_id is not None:
+        # 干预同上（P2-1338）：干预表没有机构列，与下面复诊同一判法——负责人属于迁入机构的留下；没填负责人的照旧移除
+        intervention_query = intervention_query.filter(or_(
+            SpdIntervention.owner_id.is_(None),
+            SpdIntervention.owner_id.not_in(_org_staff(keep_org_id)),
+        ))
+    interventions = intervention_query.order_by(SpdIntervention.id).all()
     for item in interventions:
-        if _move_row(db, SpdIntervention, item.id, ("planned", "doing"), status="removed"):
+        if _move_row(db, SpdIntervention, item.id, INTERVENTION_OPEN_STATUSES, status="removed"):
             stats["interventions"] += 1
 
     revisit_query = db.query(SpdRevisit).filter(
@@ -1247,7 +1254,7 @@ def close_open_work(db: Session, enrollment: SpdEnrollment, reason: str, *, keep
         # 没填医生的认不出是谁排的，照旧随原档案移除。死亡 / 排除 / 召回不传，照旧同病种一并移除
         revisit_query = revisit_query.filter(or_(
             SpdRevisit.doctor_user_id.is_(None),
-            SpdRevisit.doctor_user_id.not_in(select(User.id).where(User.org_id == keep_org_id)),
+            SpdRevisit.doctor_user_id.not_in(_org_staff(keep_org_id)),
         ))
     revisits = revisit_query.order_by(SpdRevisit.id).all()
     removed_revisits: list[int] = []
@@ -1283,6 +1290,39 @@ def close_open_work(db: Session, enrollment: SpdEnrollment, reason: str, *, keep
     # 挂在这些随访上的待呼叫一并撤出队列（P2-498）：原先死者名下的外呼照旧排在坐席队列里
     withdraw_followup_calls(db, removed, f"随访随档案结束移除（{reason}），撤出待呼叫"[:512])
     return stats
+
+
+def _org_staff(org_id: int):
+    """这家机构的账号（子查询）。复诊、干预表没有机构列，迁入确认按复诊医生 / 干预负责人所在机构认是不是迁入机构的
+    （P2-849 / P2-1338）：收尾留下哪些、改挂哪些取这同一句。"""
+    return select(User.id).where(User.org_id == org_id)
+
+
+def adopt_kept_work(db: Session, enrollment: SpdEnrollment, incoming: SpdEnrollment, keep_org_id: int | None) -> None:
+    """迁入确认：`close_open_work(…, keep_org_id=…)` 留下的迁入机构的任务与干预，从原档案改挂迁入档案（P2-1338）。
+
+    复诊、随访按（患者, 病种）认档案，迁入之后自然归迁入档案；任务、干预带档案号，不改挂就还挂在已迁出的原档案上——
+    随访类任务办结把随访日期回写到原档案、随访积分记给原档案的签约村医，迁入档案日后结案（`close_open_work` 按档案号收）
+    也收不到它们。判据与收尾留下的那一句互为补集（任务按所属机构、干预按负责人所在机构）；只动未结束的，办完的是留痕。
+    迁入档案在收尾之后才建（确认接口先翻档案、再收尾、再建档），故单列一步，由确认接口拿到迁入档案后调。**不 commit**。
+    """
+    if keep_org_id is None:   # 不传迁入机构的收尾什么也没留下
+        return
+    db.execute(
+        update(SpdTask)
+        .where(SpdTask.enrollment_id == enrollment.id, SpdTask.status.in_(TASK_OPEN_STATUSES),
+               SpdTask.org_id == keep_org_id)
+        .values(enrollment_id=incoming.id)
+        .execution_options(synchronize_session=False)
+    )
+    db.execute(
+        update(SpdIntervention)
+        .where(SpdIntervention.enrollment_id == enrollment.id,
+               SpdIntervention.status.in_(INTERVENTION_OPEN_STATUSES),
+               SpdIntervention.owner_id.in_(_org_staff(keep_org_id)))
+        .values(enrollment_id=incoming.id)
+        .execution_options(synchronize_session=False)
+    )
 
 
 def sweep_overdue_on_read(db: Session, business_day: date) -> dict:
