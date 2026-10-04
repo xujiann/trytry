@@ -808,6 +808,33 @@ def test_公卫事件的处置记录看得见_结案之后照样能查(page, bas
     expect(page.locator("tr", has_text="E2E 环境消杀")).to_have_count(1)
 
 
+def test_症候群日报同日再报_先重画再提示已覆盖原上报(page, base_url, admin_call):
+    """P2-1432（第四十二批扫描 AF2-1）：同机构同症候群同日按覆盖，后端回 `overwritten: true`，页面原先走 postAction、
+    回执整个丢掉——发热门诊报的 8 例被儿科报的 5 例盖掉、预警跟着消失，页面上只是那一行悄悄变成 5。
+    修后先重画、再提示盖掉的是哪天哪家的哪个症候群、原来几例。"""
+    org = admin_call("POST", "/api/organizations",
+                     {"name": "E2E症候群覆盖卫生院", "org_type": "township", "level": "township"})
+
+    def report(case_count, threshold=""):
+        form = page.locator("#syn-form")
+        form.locator('[name="org_id"]').fill(str(org["id"]))
+        form.locator('[name="syndrome"]').select_option("fever")
+        form.locator('[name="case_count"]').fill(str(case_count))
+        form.locator('[name="threshold"]').fill(threshold)
+        form.locator('[name="record_date"]').fill("2026-09-15")
+        _submit(page, "#syn-form button")
+
+    _login(page, base_url)
+    _open_page(page, "surveillance", "多点触发监测")
+    report(8, "6")
+    expect(page.locator("#syn-msg")).to_have_text("")   # 首报：照旧重画，不提示
+    report(5)
+    # 修前什么都不说
+    expect(page.locator("#syn-msg")).to_have_text("已覆盖 2026-09-15 E2E症候群覆盖卫生院 的「发热」原上报（原 8 例）")
+    rows = admin_call("GET", f"/api/surveillance/syndromes?org_id={org['id']}")
+    assert [(r["record_date"], r["case_count"], r["threshold"]) for r in rows] == [("2026-09-15", 5, 6)]
+
+
 @pytest.fixture(scope="session")
 def labqc_seed(base_url, seed):
     """室内质控失控处理的前置：一个质控批号，录一个 z=+5 的点（1-3s 失控）。"""

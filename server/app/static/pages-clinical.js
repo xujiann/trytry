@@ -1743,11 +1743,13 @@ async function renderVaccineSupply() {
 
 async function renderSurveillance() {
   $("#page-desc").textContent = "症候群监测、病原监测、多点触发预警与应急资源保障";
-  const [syndromes, pathogens, alerts, ready] = await Promise.all([
+  const [syndromes, pathogens, alerts, ready, orgs] = await Promise.all([
     api("/api/surveillance/syndromes"), api("/api/surveillance/pathogens"),
-    api("/api/surveillance/alerts"), api("/api/surveillance/resources/readiness"),
+    api("/api/surveillance/alerts"), api("/api/surveillance/resources/readiness"), api("/api/organizations"),
   ]);
   const SYN = { fever: "发热", respiratory: "呼吸道", diarrhea: "腹泻", rash: "皮疹", jaundice: "黄疸", neuro: "脑炎脑膜炎" };
+  // 机构名：症候群日报覆盖提示说盖掉的是哪家的（P2-1432）；映射不到（页面打开之后才建的机构）回显编号
+  const orgNames = Object.fromEntries(orgs.map((o) => [o.id, o.name]));
   // ADR-0009 第六批：面板外壳改用 `panel()`（定义见 core.js），迁一页、人工过一页。
   $("#page-body").innerHTML = `
     ${panel(`多点触发预警（近 ${alerts.window.days} 天）`, `
@@ -1829,7 +1831,21 @@ async function renderSurveillance() {
        <td><button class="btn sm" data-resedit="${r.id}">编辑</button></td></tr>`)
       + `<p class="desc">共 ${rows.length} 条${rows.length >= 500 ? "——<b>已截到 500 条</b>，请按类型收窄" : ""}。</p>`;
   };
-  $("#syn-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/surveillance/syndromes", formJson(e.target, ["org_id", "case_count", "threshold"]), "#syn-msg"); };
+  // 盖掉了当日原上报要说出来（P2-1432）：同机构同症候群同日按覆盖（模块口径 2），回执的 overwritten 说覆盖没覆盖、
+  // previous_case_count 说原来报的是几例。原先走 postAction，成功即重画、回执整个丢掉——发热门诊报的 8 例被儿科报的 5 例
+  // 盖掉、预警跟着消失，页面上只是那一行悄悄变成 5。先重画再写回执（P2-1013）
+  $("#syn-form").onsubmit = async (e) => {
+    e.preventDefault();
+    try {
+      const r = await api("/api/surveillance/syndromes", { method: "POST",
+        body: JSON.stringify(formJson(e.target, ["org_id", "case_count", "threshold"])) });
+      await route();
+      if (r.overwritten) {
+        setMsg("#syn-msg", `已覆盖 ${r.record_date} ${orgNames[r.org_id] || `机构 ${r.org_id}`} 的「${r.syndrome_name}」原上报`
+          + `（原 ${r.previous_case_count ?? "—"} 例）`, false);
+      }
+    } catch (err) { setMsg("#syn-msg", err.message, false); }
+  };
   $("#pat-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/surveillance/pathogens", formJson(e.target, ["org_id", "tested_count", "positive_count"]), "#pat-msg"); };
   $("#res-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/surveillance/resources", formJson(e.target, ["org_id", "quantity", "min_quantity"]), "#res-msg"); };
   $("#res-filter").onsubmit = async (e) => {

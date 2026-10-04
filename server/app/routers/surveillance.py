@@ -101,9 +101,13 @@ class SyndromeOut(BaseModel):
 
 class SyndromeReportedOut(SyndromeOut):
     """当日重复上报会覆盖前一条，`overwritten` 明说覆盖没覆盖——
-    不说的话，上报方以为新增了一条，实际把别人填的盖掉了。是严格超集，故继承。"""
+    不说的话，上报方以为新增了一条，实际把别人填的盖掉了。是严格超集，故继承。
+
+    `previous_case_count` 是被盖掉的那一条原来的例数，没覆盖时为 null（P2-1432）：只说覆盖了、不说盖掉多少，
+    页面也说不出来——甲镇发热门诊报发热 8 例进了预警，同一天儿科再报 5 例，8 例连同预警悄悄没了。只在末尾加这一个键。"""
 
     overwritten: bool
+    previous_case_count: int | None
 
 
 class PathogenOut(BaseModel):
@@ -204,6 +208,10 @@ def report_syndrome(body: SyndromeIn, db: Session = Depends(get_db), user: User 
     # 先查有没有、没有就插，是 check-then-act：并发下两个请求都查不到就都去插，
     # 唯一约束挡住其中一个，抛出未捕获的 IntegrityError——**实测 8 并发出一个 500**。
     # 改为先试插、撞了再取回来更新，覆盖语义不变，并发下也不会 500。
+    # 盖掉的原例数随回执带回（P2-1432）：`upsert_unique` 在覆盖那一路取回原行、改写之前读出原值，同一个事务。不加行锁——
+    # 两人同时覆盖同一天时，后提交那位读到的原值可能是先提交那位覆盖之前的数，即不是最终被他盖掉的那个；覆盖本就是
+    # 后到的为准（模块口径 2），这里只为让上报方知道盖掉了一条、大致盖掉多少，不为它让上报排队。
+    previous: dict = {}
     record, overwritten = upsert_unique(
         db,
         SyndromeMonitor,
@@ -218,8 +226,9 @@ def report_syndrome(body: SyndromeIn, db: Session = Depends(get_db), user: User 
             else _inherited_threshold(db, body.org_id, body.syndrome, body.record_date),
             "note": body.note,
         },
+        previous=previous,
     )
-    return {**_syndrome_out(record), "overwritten": overwritten}
+    return {**_syndrome_out(record), "overwritten": overwritten, "previous_case_count": previous.get("case_count")}
 
 
 def _inherited_threshold(db: Session, org_id: int, syndrome: str, record_date: str) -> int:

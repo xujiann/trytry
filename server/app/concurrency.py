@@ -89,13 +89,17 @@ def insert_with_retry(db: Session, build, attempts: int = 12):
     raise AssertionError("unreachable")  # pragma: no cover
 
 
-def upsert_unique(db: Session, model, keys: dict, values: dict):
+def upsert_unique(db: Session, model, keys: dict, values: dict, *, previous: dict | None = None):
     """按唯一键"有则覆盖、无则新建"，并发下也不会 500。
 
     先试插入：撞约束说明有人抢先建了，回滚后按唯一键取回那一行再更新。
     反过来写（先查再插）就是 check-then-act，两个请求都查不到就都去插。
 
     返回 `(对象, 是否为覆盖)`。
+
+    `previous` 给一个字典，覆盖那一路就在改写之前把 `values` 里各列的原值记进去——取回那一行与改写同一个事务、先读后写；
+    新建那一路它原样不动（P2-1432：症候群日报的回执要说盖掉的原例数）。读的是普通 SELECT、不加行锁：两个请求同时覆盖
+    同一行时，后提交的那个读到的原值可能已被先提交的那个改掉，即不一定是最终被它盖掉的那个。
     """
     obj = model(**keys, **values)
     db.add(obj)
@@ -110,6 +114,8 @@ def upsert_unique(db: Session, model, keys: dict, values: dict):
     existing = db.query(model).filter_by(**keys).first()
     if existing is None:  # pragma: no cover - 约束冲突却查不到，说明约束定义有误
         raise HTTPException(status_code=409, detail="并发写入冲突，请重试")
+    if previous is not None:
+        previous.update({field: getattr(existing, field) for field in values})
     for field, value in values.items():
         setattr(existing, field, value)
     db.commit()
