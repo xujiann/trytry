@@ -99,6 +99,7 @@ async function renderArchive() {
         <input name="diagnosis_code" placeholder="诊断编码"><input name="diagnosis_name" placeholder="诊断名称">
         <input name="summary" placeholder="诊疗摘要" style="min-width:220px"><button>登记</button></form>
       <p class="msg" id="enc-msg"></p>
+      <div id="enc-reminders"></div>
       <p class="desc">就诊记录是县域就诊率、诊次成本与绩效变量的共同数据源。</p>
       ${table(["ID", "患者", "机构", "类型", "诊断", "医师"], encounters, (e) =>
         `<tr><td>${e.id}</td><td>${e.patient_id}</td><td>${e.org_id}</td>
@@ -110,8 +111,30 @@ async function renderArchive() {
         <button>查询</button>
       </form>
       <div id="archive-result"></div>`)}`;
-  $("#enc-form").onsubmit = (e) => { e.preventDefault();
-    postAction("/api/encounters", formJson(e.target, ["patient_id", "org_id"]), "#enc-msg"); };
+  // 登记成功就地拉出这位患者的诊间公卫提醒（P2-1434）：提醒接口写明「接诊时汇聚该患者的公卫待办与风险提示」，原先只有
+  // 「公卫协同」页手输患者 ID 才查得到——接诊时看不到随访超期、疫苗禁忌、处置中的公卫事件。先登记、后取：本机构刚登记了
+  // 这位患者的就诊即有调阅依据，提醒接口照旧校验并留痕。先重画再写回执（P2-1013）；提醒取不到写原因，「登记成功」照写
+  $("#enc-form").onsubmit = async (e) => {
+    e.preventDefault();
+    let enc;
+    try {
+      enc = await api("/api/encounters", { method: "POST",
+        body: JSON.stringify(formJson(e.target, ["patient_id", "org_id"])) });
+    } catch (err) { setMsg("#enc-msg", err.message, false); return; }
+    await route();
+    setMsg("#enc-msg", `登记成功（就诊ID ${enc.id}）`);
+    let r;
+    try {
+      r = await api(`/api/publichealth/reminders/${enc.patient_id}`);
+    } catch (err) {
+      $("#enc-reminders").innerHTML = `<p class="msg err">公卫提醒取不到：${esc(err.message)}</p>`;
+      return;
+    }
+    $("#enc-reminders").innerHTML = r.reminders.length
+      ? `<p class="desc">患者 ${esc(enc.patient_id)} 的诊间公卫提醒：</p>`
+        + `<ul style="margin:4px 0 0 18px;font-size:13px">${r.reminders.map((x) => `<li>${esc(x.detail)}</li>`).join("")}</ul>`
+      : '<p class="msg ok">暂无公卫提醒</p>';
+  };
   $("#archive-form").onsubmit = async (e) => {
     e.preventDefault();
     const ehcNo = new FormData(e.target).get("ehc_no");

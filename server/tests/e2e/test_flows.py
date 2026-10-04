@@ -835,6 +835,30 @@ def test_症候群日报同日再报_先重画再提示已覆盖原上报(page, 
     assert [(r["record_date"], r["case_count"], r["threshold"]) for r in rows] == [("2026-09-15", 5, 6)]
 
 
+def test_门诊接诊登记成功_就地列出这位患者的诊间公卫提醒(page, base_url, admin_call):
+    """P2-1434（第四十二批扫描 AF2-8）：诊间提醒原先只能在「公卫协同」页手输患者 ID 查，门诊接诊登记成功只是整页重画——
+    医生接诊时看不到这位患者的疫苗禁忌、随访超期、处置中的公卫事件。修后先写「登记成功」，再就地列出这位患者的提醒。"""
+    org = admin_call("POST", "/api/organizations",
+                     {"name": "E2E接诊提醒卫生院", "org_type": "township", "level": "township"})
+    patient = admin_call("POST", "/api/patients",
+                         {"name": "E2E接诊提醒患者", "id_card": "320981198804041434", "gender": "女"})
+    admin_call("POST", "/api/vaccination/contraindications", {
+        "patient_id": patient["id"], "vaccine_code": "E2E-HPV9", "reason": "E2E 青霉素过敏", "contra_type": "permanent"})
+
+    _login(page, base_url)
+    _open_page(page, "archive", "患者360视图")
+    form = page.locator("#enc-form")
+    form.locator('[name="patient_id"]').fill(str(patient["id"]))
+    form.locator('[name="org_id"]').fill(str(org["id"]))
+    form.locator('[name="diagnosis_name"]').fill("E2E上呼吸道感染")
+    _submit(page, "#enc-form button")
+    expect(page.locator("#enc-msg")).to_contain_text("登记成功（就诊ID ")
+    # 修前登记完一个提醒都不取
+    expect(page.locator("#enc-reminders")).to_contain_text("疫苗 E2E-HPV9 禁忌：E2E 青霉素过敏")
+    rows = admin_call("GET", f"/api/encounters?patient_id={patient['id']}")
+    assert [(r["org_id"], r["diagnosis_name"]) for r in rows] == [(org["id"], "E2E上呼吸道感染")]
+
+
 @pytest.fixture(scope="session")
 def labqc_seed(base_url, seed):
     """室内质控失控处理的前置：一个质控批号，录一个 z=+5 的点（1-3s 失控）。"""
