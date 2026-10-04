@@ -692,6 +692,7 @@ async function renderAppointments() {
         <input name="org_id" type="number" placeholder="机构ID" required>
         <select name="resource_type">${Object.entries(RT).map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>
         <input name="resource_name" placeholder="资源名称（如CT室上午）" required>
+        <input name="employee_id" type="number" placeholder="医师ID（可选）" style="width:130px">
         <input name="slot_date" placeholder="日期 YYYY-MM-DD" required>
         <input name="slot_time" placeholder="时段（如09:00-10:00）">
         <input name="capacity" type="number" value="5" min="1" style="min-width:70px">
@@ -777,7 +778,11 @@ async function renderAppointments() {
         // `Field(default=1, ge=1)`——0 违反 ge=1，用户拿到的是一句 422 而不是默认值。
         // 与 `#og-form`「空字符串要去掉」、`#pay-form` 的 `if (f.get("amount"))` 同一写法。
         slot_time: f.get("slot_time"),
-        ...(f.get("capacity") ? { capacity: Number(f.get("capacity")) } : {}) }) });
+        ...(f.get("capacity") ? { capacity: Number(f.get("capacity")) } : {}),
+        // 医师照下面批量排班的写法送，填了才送（P2-1299）：原先单条表单没有医师框、也不送 employee_id——门诊号一律
+        // 不挂医师，寻医只认 employee_id、数不到它，离职 / 调走的拦截也只看 employee_id、医师走了照样约得上；和批量排的
+        // 同一医师同一时段分属两条部分唯一索引，两条并存、放号量翻倍
+        ...(f.get("employee_id") ? { employee_id: Number(f.get("employee_id")) } : {}) }) });
       route();
     } catch (err) { setMsg("#apt-msg", err.message, false); }
   };
