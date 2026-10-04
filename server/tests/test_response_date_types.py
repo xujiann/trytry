@@ -135,7 +135,8 @@ def legacy(client, admin):
     rows = {
         # 坏日期放在将来的年份：排班表不带日期时只给今天及以后（P2-208），放在过去就读不到了——要钉的是「坏值原样读出」
         "roster": DutyRoster(center_type="出参回归中心", duty_date="2099-02-31", doctor_name="值班甲"),
-        "exam": PhysicalExam(patient_id=patient["id"], org_id=org["id"], exam_date="2026/09/24"),
+        # 带一句汇总小结：什么结果都没录的体检总检一律 409（P2-1403），下面的总检用例钉的是坏日期，不是空体检
+        "exam": PhysicalExam(patient_id=patient["id"], org_id=org["id"], exam_date="2026/09/24", summary="存量汇总小结"),
         "child": ChildRecord(name="出参回归儿童", birth_date="20260924"),
         "vaccination": VaccinationRecord(patient_id=patient["id"], vaccine_code="HepB",
                                          vaccine_name="乙肝疫苗", vaccinated_date="2026-02-30",

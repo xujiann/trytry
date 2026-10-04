@@ -67,10 +67,12 @@ class CheckupOut(CheckupBase):
 class CheckupListOut(CheckupOut):
     """清单行：比登记回执多一个「总检了没有」（P2-409）。登记回执的键集合有特征化用例钉着
     （`test_checkup_items_review`），只加在清单上；结论全文仍只在总检回执与打印件里。
-    `abnormal_text` 见 `abnormal_text()`（P2-422）。"""
+    `abnormal_text` 见 `abnormal_text()`（P2-422）。`has_results` 见 `_has_results()`（P2-1403，同样只加在清单上）：
+    清单行上看不出有没有分项，页面原先把「没异常」一律画成绿色「正常」，什么都没录的体检也是「正常」。"""
 
     reviewed: bool
     abnormal_text: str
+    has_results: bool
 
 
 class AbnormalCheckupOut(BaseModel):
@@ -105,6 +107,20 @@ def _abnormal_item_names(db: Session, exam_ids: list[int]) -> dict[int, list[str
     for checkup_id, item_name in rows:
         names.setdefault(checkup_id, []).append(item_name)
     return names
+
+
+def _has_results(summary: str, abnormal_items: str, has_items: bool) -> bool:
+    """这次体检录了任何结果没有：分项、汇总小结、异常项三者有其一（P2-1403）。只填空格的不算，与 `create_checkup`
+    判异常的 `.strip()` 同一口径。总检靠它拦「什么都没录就出结论」，清单靠它把这种行标「未录结果」而不是「正常」。"""
+    return has_items or bool(summary.strip()) or bool(abnormal_items.strip())
+
+
+def _ids_with_items(db: Session, exam_ids: list[int]) -> set[int]:
+    """一页体检里录了分项的那几次，一条 SQL 取回（P2-1403）。"""
+    if not exam_ids:
+        return set()
+    rows = db.query(CheckupItem.checkup_id).filter(CheckupItem.checkup_id.in_(exam_ids)).distinct().all()
+    return {checkup_id for (checkup_id,) in rows}
 
 
 @router.post(
@@ -155,9 +171,11 @@ def list_checkups(
         )
     exams = paginate(query.order_by(PhysicalExam.id.desc()), response, offset, limit)
     names = _abnormal_item_names(db, [e.id for e in exams])
+    with_items = _ids_with_items(db, [e.id for e in exams])
     return [
         {**CheckupOut.model_validate(e).model_dump(), "reviewed": bool(e.final_conclusion),
-         "abnormal_text": abnormal_text(e.abnormal_items, names.get(e.id, []))}
+         "abnormal_text": abnormal_text(e.abnormal_items, names.get(e.id, [])),
+         "has_results": _has_results(e.summary, e.abnormal_items, e.id in with_items)}
         for e in exams
     ]
 
@@ -230,9 +248,16 @@ def review_checkup(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """总检：分项/汇总录完后由总检医师出结论。重复总检按覆盖（复核改结论）。"""
+    """总检：分项/汇总录完后由总检医师出结论。重复总检按覆盖（复核改结论）。
+
+    什么结果都没录的体检（没有分项，汇总小结与异常项都是空的）不出总检结论，409（P2-1403）：原先照收，打出来是一份
+    带验真码、没有任何测值的结论报告。结果在登记时一次录定（没有补录 / 改分项的接口），先判后写不留空当。
+    """
     exam = _get_checkup(db, checkup_id)
     assert_obj_org_writable(db, user, exam)
+    has_items = db.query(CheckupItem.id).filter(CheckupItem.checkup_id == exam.id).first() is not None
+    if not _has_results(exam.summary, exam.abnormal_items, has_items):
+        raise HTTPException(status_code=409, detail="尚无体检结果，不能出总检结论")
     exam.final_conclusion = body.final_conclusion
     exam.final_doctor = body.final_doctor or (user.full_name or user.username)
     db.commit()

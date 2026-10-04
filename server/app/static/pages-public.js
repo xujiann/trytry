@@ -332,6 +332,9 @@ const CERT_TYPES = { birth: "出生医学证明", death: "死亡医学证明", d
 const CHK_ITEM = { ok: ["正常", "green"], bad: ["异常", "red"] };
 // 清单行的 reviewed 同样是 bool（P2-409），同一个写法
 const CHK_REVIEW = { todo: ["待总检", "orange"], done: ["已总检", "green"] };
+// 没异常的行看后端给的 has_results（P2-1403）：原先没异常一律画绿色「正常」，什么都没录的体检也是「正常」。同一个写法
+const CHK_RESULT = { ok: ["正常", "green"], none: ["未录结果", ""] };
+// 未录结果的行也不摆「总检」：后端对它 409「尚无体检结果」（P2-1403），摆出来点了也只是在框里报错
 
 async function renderCerts() {
   $("#page-desc").textContent = "出生/死亡医学证明签发与出生缺陷登记（限医师/公卫）；成人健康体检记录与异常清单";
@@ -400,10 +403,11 @@ async function renderCerts() {
         `<tr><td>${a.id}</td><td>${a.patient_id}</td><td>${esc(a.exam_date)}</td><td><span class="tag red">${esc(a.abnormal_text)}</span></td></tr>`)) : ""}
     ${panel("体检记录", table(["ID", "患者", "套餐", "日期", "结论", "异常", "总检", "操作"], checkups, (c) =>
       `<tr><td>${c.id}</td><td>${c.patient_id}</td><td>${esc(c.package_name)}</td><td>${esc(c.exam_date)}</td>
-       <td>${esc(c.summary) || "—"}</td><td>${c.has_abnormal ? `<span class="tag red">${esc(c.abnormal_text)}</span>` : '<span class="tag green">正常</span>'}</td>
+       <td>${esc(c.summary) || "—"}</td><td>${c.has_abnormal ? `<span class="tag red">${esc(c.abnormal_text)}</span>`
+         : statusTag(CHK_RESULT, c.has_results ? "ok" : "none")}</td>
        <td data-chkstate="${c.id}">${statusTag(CHK_REVIEW, c.reviewed ? "done" : "todo")}</td>
        <td><button class="btn" data-chkitems="${c.id}">分项结果</button>
-           ${canReview ? `<button class="btn secondary" data-chkreview="${c.id}">总检</button>` : ""}
+           ${canReview && c.has_results ? `<button class="btn secondary" data-chkreview="${c.id}">总检</button>` : ""}
            <button class="btn secondary" data-printchk="${c.id}">打印报告</button></td></tr>`)
       + `<p class="desc">总检限医师（公卫岗只录入），重复总检按覆盖处理（复核改结论）；没总检的排在最前。
         「总检」列只标总检了没有，结论全文不在清单里：写完在下方回显一次，之后要看结论走同一行的<b>「打印报告」</b>

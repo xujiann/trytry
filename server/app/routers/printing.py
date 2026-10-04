@@ -712,12 +712,20 @@ def print_checkup_report(
     # 汇总的异常项串是选填的；分项里标了异常而汇总没写时，列出标了异常的分项，别在上面标着异常、这里印「无」
     # （与体检清单 / 异常清单同一个帮手，P2-422）
     abnormal_text = checkup_abnormal_text(exam.abnormal_items, [it.item_name for it in items if it.abnormal]) or "无"
+    # 没有分项时只写这次体检实际录了什么（P2-1403）：原先一律印「无分项结果（存量记录仅有汇总小结）」，什么都没录、刚登记
+    # 的体检也印成存量记录、还说有汇总小结。「存量」按行认不出来——表里没有标记 B2 之前建的行的列（B2 迁移只给总检两列
+    # 回填空串、分项另起一表），B2 之后页面登记照样只送汇总两栏（`CheckupCreate.items`：不传 = 存量的纯汇总录入），新登记
+    # 的纯汇总记录与 B2 之前的存量一模一样，所以「存量」二字不再印：写了汇总小结的印「仅有汇总小结」，没写的（含只填了
+    # 异常项的，异常项照旧印在下面「异常项提示」）印「未录分项结果」。只填空格的汇总小结不算写了，与总检、清单同一口径
     rows = "".join(
         f"<tr><td>{i}</td><td>{_esc(it.item_name)}</td><td>{_esc(it.result_value)}</td>"
         f"<td>{_esc(it.unit) or '—'}</td><td>{_esc(it.ref_range) or '—'}</td>"
         f"<td>{abnormal_tag if it.abnormal else '正常'}</td></tr>"
         for i, it in enumerate(items, start=1)
-    ) or '<tr><td colspan="6">无分项结果（存量记录仅有汇总小结）</td></tr>'
+    ) or (
+        '<tr><td colspan="6">无分项结果（仅有汇总小结）</td></tr>' if exam.summary.strip()
+        else '<tr><td colspan="6">未录分项结果</td></tr>'
+    )
     review = (
         f'<div class="section"><h3>总检结论</h3><div class="body">{_esc(exam.final_conclusion)}</div></div>'
         f'<div class="sign"><span>总检医师：{_esc(exam.final_doctor)}</span></div>'
