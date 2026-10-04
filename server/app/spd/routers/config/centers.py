@@ -89,7 +89,8 @@ def _center_out(c: SpdCenter) -> dict:
 
 def _check_member_ids(db: Session, org_ids: list[int] | None, team_ids: list[int] | None) -> None:
     """覆盖机构 / 团队先查存在（P2-433）：两列是 JSON 编号清单、没有外键，填错的编号原样存进去，卫健委工作台的
-    「覆盖机构数 / 团队数」按清单长度算，照样算进去。与牵头机构、负责人同一口径（P1-90）。"""
+    「覆盖机构数 / 团队数」按清单里的编号数，照样算进去。与牵头机构、负责人同一口径（P1-90）。重复的编号由建 / 改中心
+    去重后再存（P2-1277）。"""
     for ids, model, label, field in ((org_ids, Organization, "覆盖机构", "org_ids"),
                                      (team_ids, SpdTeam, "团队", "team_ids")):
         if not ids:
@@ -114,7 +115,10 @@ def create_center(body: CenterIn, db: Session = Depends(get_db)):
         if state:
             raise HTTPException(status_code=404, detail=f"负责人{state}（leader_user_id={body.leader_user_id}）")
     _check_member_ids(db, body.org_ids, body.team_ids)
-    center = SpdCenter(**body.model_dump())
+    # 覆盖机构 / 团队编号去重后再存、保持首次出现的顺序（P2-1277）：页面是「逗号分隔」自由填写，原先「甲,甲,乙」照存，
+    # 卫健委工作台按清单长度写「覆盖机构 3」；响应回的是去重后的清单
+    center = SpdCenter(**{**body.model_dump(), "org_ids": list(dict.fromkeys(body.org_ids)),
+                          "team_ids": list(dict.fromkeys(body.team_ids))})
     db.add(center)
     try:
         db.commit()
@@ -163,6 +167,9 @@ def update_center(center_id: int, body: CenterPatch, db: Session = Depends(get_d
             raise HTTPException(status_code=404,
                                 detail=f"负责人{state}（leader_user_id={changes['leader_user_id']}）")
     _check_member_ids(db, changes.get("org_ids"), changes.get("team_ids"))
+    for field in ("org_ids", "team_ids"):   # 与建中心同一句：去重后再存、保持首次出现的顺序（P2-1277）
+        if field in changes:
+            changes[field] = list(dict.fromkeys(changes[field]))
     for key, value in changes.items():
         setattr(center, key, value)
     db.commit()

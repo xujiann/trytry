@@ -877,10 +877,11 @@ def health_commission_workbench(
         "referrals": _referral_stats(db, orgs, program_code),
         "paths": _path_stats(db, orgs, program_code),
         "by_level": {level_names[k]: v for k, v in by_level.items()},
+        # 覆盖机构 / 团队按不同的编号数（P2-1277）：建 / 改中心现在去重后再存，修前存下的「甲,甲,乙」原先按清单长度写「覆盖机构 3」
         "centers": [
             {"id": c.id, "code": c.code, "name": c.name, "program_code": c.program_code,
              "status": c.status, "status_name": CENTER_STATUS_NAMES.get(c.status, c.status),
-             "orgs": len(c.org_ids or []), "teams": len(c.team_ids or [])}
+             "orgs": len(set(c.org_ids or [])), "teams": len(set(c.team_ids or []))}
             for c in centers
         ],
         # 考核排名按工作台的机构范围、只出最近算的那一次考核（一方案一周期，P2-551）：原先不筛机构、不分方案与周期，
