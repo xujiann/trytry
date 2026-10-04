@@ -1005,6 +1005,10 @@ async function drawTcmPreparations() {
     api("/api/tcm/formulas"), api("/api/tcm/preparation-batches"), api("/api/tcm/preparation-batches?status=produced"),
     api("/api/tcm/preparation-batches/expiring?days=60")]);
   const batches = actionableFirst(recentBatches, produced);
+  // 批次表与效期预警的「配方 / 制剂」列显示配方名（P2-1411）：原先印 formula_id 数字，药剂科得拿编号回上面的配方表对。
+  // 按本页已取到的配方清单映射；映射不到的（配方清单只回最新 200 个）回显编号。接口不动
+  const formulaNames = new Map(formulas.map((f) => [f.id, f.name]));
+  const formulaOf = (b) => (formulaNames.has(b.formula_id) ? formulaNames.get(b.formula_id) : b.formula_id);
   const holder = appendSection(`
     ${panel("⑭ 中药制剂配方（药师/中医师维护）", `
       <form class="inline" id="tf-form">
@@ -1021,7 +1025,7 @@ async function drawTcmPreparations() {
          <td>${f.shelf_life_months}</td></tr>`)}`)}
     ${expiring.length ? panel(`⚠ 制剂效期预警（60天内到期/已过期 ${expiring.length}）`, `${
       table(["批号", "制剂", "效期", "状态"], expiring, (b) =>
-        `<tr><td>${esc(b.batch_no)}</td><td>${b.formula_id}</td>
+        `<tr><td>${esc(b.batch_no)}</td><td>${esc(formulaOf(b))}</td>
          <td><span class="tag ${b.expired ? "red" : "orange"}">${esc(b.expire_date)}</span></td><td>${esc(b.status_name)}</td></tr>`)}`, { accent: "#b26a00" }) : ""}
     ${panel("制剂批次（效期缺省按配方有效期推算；过期批次禁止发放）", `
       <form class="inline" id="tb-form">
@@ -1034,7 +1038,7 @@ async function drawTcmPreparations() {
         <button>投产建批</button></form>
       <p class="msg" id="tp-msg"></p>
       ${table(["ID", "批号", "配方", "数量", "生产日期", "效期", "状态", "操作"], batches, (b) =>
-        `<tr><td>${b.id}</td><td>${esc(b.batch_no)}</td><td>${b.formula_id}</td><td>${b.quantity}${esc(b.unit)}</td>
+        `<tr><td>${b.id}</td><td>${esc(b.batch_no)}</td><td>${esc(formulaOf(b))}</td><td>${b.quantity}${esc(b.unit)}</td>
          <td>${esc(b.produced_date)}</td><td><span class="tag ${b.expired ? "red" : ""}">${esc(b.expire_date)}</span></td>
          <td>${esc(b.status_name)}</td>
          <td>${b.status === "produced" ? `<button class="btn secondary" data-release="${b.id}">发放</button>` : "—"}</td></tr>`)}`)}`);
