@@ -1053,12 +1053,13 @@ def test_empty_rule_never_matches(client, h, base):
 # ============================================================ 生命周期
 
 
-def test_death_cancels_open_work(client, h, base, team):
+def test_death_cancels_open_work(client, h, base):
     patient = base["patients"][3]
+    # 不挂团队：模块夹具的团队只服务高血压，挂不服务这个病种（慢阻肺）的团队建档 422（P2-1340）；这条只验死亡收尾
     enrollment = client.post(
         "/api/spd/enrollments",
         json={"patient_id": patient["id"], "program_code": "copd",
-              "org_id": base["township"]["id"], "team_id": team["id"]},
+              "org_id": base["township"]["id"]},
         headers=h,
     ).json()
     client.post(
@@ -1086,12 +1087,13 @@ def test_death_cancels_open_work(client, h, base, team):
     assert resume.status_code == 409, "已死亡档案不可恢复管理"
 
 
-def test_cross_org_migration_needs_confirmation(client, h, base, team):
+def test_cross_org_migration_needs_confirmation(client, h, base):
     patient = base["patients"][4]
+    # 不挂团队：同上，模块夹具的团队不服务慢性肾脏病（P2-1340）；这条只验跨机构迁出待确认
     enrollment = client.post(
         "/api/spd/enrollments",
         json={"patient_id": patient["id"], "program_code": "ckd",
-              "org_id": base["township"]["id"], "team_id": team["id"]},
+              "org_id": base["township"]["id"]},
         headers=h,
     ).json()
     resp = client.post(

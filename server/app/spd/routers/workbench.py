@@ -634,6 +634,8 @@ class CatalogTeamOut(BaseModel):
     name: str
     level: str
     org_id: int
+    # 服务病种（P2-1340）：签约建档表单的团队下拉按病种联动——不服务这个病种的团队分发、建档、改档 422；空 = 不限
+    program_codes: list[str]
 
 
 class CatalogScaleOut(BaseModel):
@@ -1513,7 +1515,8 @@ def catalog(db: Session = Depends(get_db)):
             for p in db.query(SpdProgram).order_by(SpdProgram.id).limit(100).all()
         ],
         "teams": [
-            {"id": t.id, "name": t.name, "level": t.level, "org_id": t.org_id}
+            {"id": t.id, "name": t.name, "level": t.level, "org_id": t.org_id,
+             "program_codes": t.program_codes or []}
             for t in db.query(SpdTeam).filter(SpdTeam.active.is_(True))
             .order_by(SpdTeam.id).limit(300).all()
         ],

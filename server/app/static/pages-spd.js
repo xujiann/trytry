@@ -1533,8 +1533,7 @@ async function renderSpdPatients() {
         <input name="patient_id" type="number" placeholder="患者ID" required>
         <select name="program_code">${spdProgramOptions(catalog, false, true)}</select>
         <input name="org_id" type="number" placeholder="纳管机构ID">
-        <select name="team_id"><option value="">服务团队</option>
-          ${catalog.teams.map((t) => `<option value="${t.id}">${esc(t.name)}</option>`).join("")}</select>
+        <select name="team_id"></select>
         <input name="doctor_user_id" type="number" placeholder="主管医生ID">
         <input name="manager_user_id" type="number" placeholder="个案管理师ID">
         <input name="village_doctor_id" type="number" placeholder="签约村医ID(村医本人签约可留空)">
@@ -1614,6 +1613,18 @@ async function renderSpdPatients() {
   };
   syncScreenScales();
   $("#spd-screen-form select[name=program_code]").onchange = syncScreenScales;
+  // 服务团队随病种联动（P2-1340）：只列服务这个病种的与没填服务病种的（空 = 不限）——不服务这个病种的团队后端 422，
+  // 原先下拉里列着全县启用的团队。换了病种、原先选的团队不服务新病种的，回到「服务团队」空选项
+  const syncEnrollTeams = () => {
+    const form = $("#spd-enroll-form");
+    const program = form.program_code.value, picked = form.team_id.value;
+    form.team_id.innerHTML = '<option value="">服务团队</option>'
+      + catalog.teams.filter((t) => !(t.program_codes || []).length || t.program_codes.includes(program))
+        .map((t) => `<option value="${t.id}"${String(t.id) === picked ? " selected" : ""}>${esc(t.name)}</option>`)
+        .join("");
+  };
+  syncEnrollTeams();
+  $("#spd-enroll-form select[name=program_code]").onchange = syncEnrollTeams;
   const drawScreenings = async () => {
     // 待复核的单独取一遍、排在最前（P2-782，与平台侧 P2-456 同一做法、共用 core.js 的 actionableFirst）：原先只取最新
     // 30 条，按规则自动识别、登记筛查一多，早一点的疑似被挤出窗口——中心工作台「待复核筛查」有数，这一页上没有一行能点

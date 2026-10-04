@@ -880,6 +880,20 @@ def list_candidates(
     return [_candidate_out(r, briefs.get(r.patient_id)) for r in rows]
 
 
+def _team_program_problem(db: Session, team: SpdTeam, program_code: str) -> str:
+    """服务团队不服务这个病种时说出来（P2-1340），点名团队与病种；对得上返回空串。分发目标患者与建档 / 改档共用。
+
+    团队配置把「管这个病种的团队」定义为服务病种（`program_codes`）含它（团队清单按 `program_code=` 筛即按它挑）；分发、
+    建档、改档原先只看团队在不在、停没停用——糖尿病目标患者照样分给只服务高血压的团队、糖尿病档案照样挂上去（与 P2-98 /
+    P2-99 同一族：被引用的对象挂在病种上，须是这个病种的）。服务病种为空的团队不限（空 = 不限，保持现状）。"""
+    codes = team.program_codes or []
+    if not codes or not program_code or program_code in codes:
+        return ""
+    names = {p.code: p.name for p in db.query(SpdProgram).filter(SpdProgram.code.in_([program_code, *codes]))}
+    return (f"服务团队「{team.name}」不服务「{names.get(program_code, program_code)}」"
+            f"（服务病种：{'、'.join(names.get(c, c) for c in codes)}）")
+
+
 class DistributeIn(BaseModel):
     candidate_ids: list[int] = Field(min_length=1, max_length=500)
     team_id: int | None = None
@@ -902,6 +916,7 @@ def distribute_candidates(
     **先全量校验再落笔**：`candidate_ids` 上限 500，一批里混进一条别家的记录就整批 403，
     不留半成品。这与下面"跳过不满足条件的"不是一回事——那是业务判定，这是越权。
     """
+    team: SpdTeam | None = None   # 下面按服务病种判还要用它（P2-1340）
     if body.team_id is not None:
         team = db.get(SpdTeam, body.team_id)
         # 停用的团队不再分发：团队清单（分发页的团队下拉取自它）、考核对象、驾驶舱的团队数都只认
@@ -916,6 +931,14 @@ def distribute_candidates(
     rows = db.query(SpdCandidate).filter(SpdCandidate.id.in_(body.candidate_ids)).all()
     for candidate in rows:
         assert_org_writable(db, user, candidate.org_id)
+    if team is not None:
+        # 团队不服务这个病种的不分（P2-1340）：原先只看团队在不在、停没停用，糖尿病目标患者照样分给只服务高血压的团队。
+        # 排在归属判定之后（先 403）；已被认领的不动（下面的 P2-251），不拦；整批拒收，不留半成品
+        for code in sorted({c.program_code for c in rows if c.claimed_at is None}):
+            problem = _team_program_problem(db, team, code)
+            if problem:
+                ids = sorted(c.id for c in rows if c.claimed_at is None and c.program_code == code)
+                raise HTTPException(status_code=422, detail=f"{problem}，这些目标患者分不过去：{ids[:20]}")
     if body.assigned_user_id is not None:
         # 指派人原先一眼不看：填错编号开发库存成悬空 id、生产库撞外键 500；停用的账号也不收（P1-106）。
         # 排在归属判定之后：先 403，免得无权的人拿它探账号在不在、停没停用
@@ -1089,6 +1112,12 @@ def _check_enroll_refs(db: Session, values: dict, current: SpdEnrollment | None 
         if row is None or not getattr(row, "active", True):
             state = "不存在" if row is None else "已停用"
             raise HTTPException(status_code=404, detail=f"{label}{state}（{field}={value}）")
+        # 服务团队不服务档案病种的不挂（P2-1340，与分发同一句）：改档不改病种，按档案现有的病种判；与现值相同的同上不再查
+        if field == "team_id":
+            problem = _team_program_problem(
+                db, row, values.get("program_code") or (current.program_code if current is not None else ""))
+            if problem:
+                raise HTTPException(status_code=422, detail=problem)
     for field, label in _ENROLL_USER_REFS.items():
         value = values.get(field)
         if value is None or (current is not None and getattr(current, field) == value):
