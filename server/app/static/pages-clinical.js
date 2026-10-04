@@ -649,7 +649,13 @@ function bindAttachmentPanel(ownerType, prefix) {
 
 async function renderEmergency() {
   $("#page-desc").textContent = "呼救调度→转运（生命体征回传）→到院→收治，上车即入院；到院后判定抢救转归";
-  const cases = await api("/api/emergency/cases");
+  // 待流转、待判转归的单独取一遍、排在最前（P2-1369，同 P2-408 / P2-456）：清单只回全县最新 200 起，调度量大的县一两周
+  // 就过——被后来的挤出窗口的已调度 / 转运中事件没了「流转」，已到院 / 已收治而转归未判定的没了「判定转归」。
+  // 待判转归按 `rescue_outcome=pending` 取（后端只算已到院 / 已收治的，未判定落库是空串）
+  const [recent, dispatched, enRoute, unjudged] = await Promise.all([api("/api/emergency/cases"),
+    api("/api/emergency/cases?status=dispatched"), api("/api/emergency/cases?status=en_route"),
+    api("/api/emergency/cases?rescue_outcome=pending")]);
+  const cases = actionableFirst(recent, dispatched, enRoute, unjudged);
   // 状态文案取自后端 status_name（P2-72，公卫侧绿道页同一份）；这里只管配色
   const ES_COLOR = { dispatched: "orange", en_route: "orange", admitted: "green" };
   // 空串是**未判定**，与 failed 是两回事：写成 failed 会把抢救成功率算低（后端注释的原话）

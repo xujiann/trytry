@@ -18,6 +18,10 @@ router = APIRouter(prefix="/api/emergency", tags=["智慧急救"], dependencies=
 
 _FLOW = {"dispatched": "en_route", "en_route": "arrived", "arrived": "admitted"}
 
+#: 能判抢救转归的状态：车还在路上不许判（`set_rescue_outcome`）。清单的「待判转归」（`rescue_outcome=pending`）筛的
+#: 也是这两种——同一处取，判定那头放宽或收紧，急救页单独取的待判转归跟着变（P2-1369）
+_OUTCOME_STATUSES = ("arrived", "admitted")
+
 #: `emergency_cases.status` → 中文（§13「状态文案取自后端」，P2-72）。措辞与医生端急救页原先写在前端的那张表逐字一致；
 #: 公卫侧绿道页原先把英文状态码原样显示。
 CASE_STATUS_NAMES = {"dispatched": "已调度", "en_route": "转运中", "arrived": "已到院", "admitted": "已收治"}
@@ -160,10 +164,30 @@ def dispatch(body: CaseCreate, db: Session = Depends(get_db)):
 
 
 @router.get("/cases", response_model=list[CaseOut])
-def list_cases(status: str | None = None, db: Session = Depends(get_db)):
+def list_cases(
+    status: str | None = None,
+    channel_type: str | None = None,
+    rescue_outcome: str | None = None,
+    db: Session = Depends(get_db),
+):
+    """急救事件清单：全县最新 200 起（按机构收口、整表翻页随 P1-39 / P1-49 待裁定，这里不动）。
+
+    页面上还能办的单独按条件取一遍、排在最前（P2-1369，同 P2-408 / P2-456 的 `actionableFirst`）：原先只收 `status`，
+    急救页与绿道页都只取不带参数的这一页——调度量大的县一两周就过 200 起，被挤出窗口的「已到院待判转归」「已调度 /
+    转运中」事件与要补录节点的通道病例，页面上再没有一行能办。故补两个筛选：`channel_type` 按绿道通道筛（绿道页取
+    胸痛 / 卒中 / 创伤）；`rescue_outcome=pending` 取**待判转归**——已到院 / 已收治而转归未判定（未判定落库是空串，
+    与慢专病质控样本的 `result=pending` 同一写法；车还在路上的谈不上待判，`_OUTCOME_STATUSES`），其余取值按转归原样筛。
+    各筛选缺省都不筛：不带参数的调用与原先逐字节相同。
+    """
     query = db.query(EmergencyCase)
     if status:
         query = query.filter(EmergencyCase.status == status)
+    if channel_type:
+        query = query.filter(EmergencyCase.channel_type == channel_type)
+    if rescue_outcome == "pending":
+        query = query.filter(EmergencyCase.status.in_(_OUTCOME_STATUSES), EmergencyCase.rescue_outcome == "")
+    elif rescue_outcome:
+        query = query.filter(EmergencyCase.rescue_outcome == rescue_outcome)
     return [_case_out(c) for c in query.order_by(EmergencyCase.id.desc()).limit(200).all()]
 
 
@@ -181,7 +205,7 @@ def set_rescue_outcome(case_id: int, body: RescueOutcomeIn, db: Session = Depend
     case = db.get(EmergencyCase, case_id)
     if case is None:
         raise HTTPException(status_code=404, detail="急救事件不存在")
-    if case.status not in ("arrived", "admitted"):
+    if case.status not in _OUTCOME_STATUSES:
         raise HTTPException(status_code=409, detail="患者尚未到院，不可判定抢救转归")
     case.rescue_outcome = body.rescue_outcome
     db.commit()

@@ -516,7 +516,9 @@ if not c.get("/api/infectious/cases?disease_code=A00").json():
     )
 
 # ---------- 急救绿道：胸痛通道 + 完整时间轴 ----------
-_em_cases = c.get("/api/emergency/cases").json()
+# 判重按通道取（P2-1369）：清单只回全县最新 200 起，原先取不带参数的那一页——演示站上再来 200 起呼救，种子这例就翻到
+# 窗口之外，每次重启再建一例演示胸痛病例。按胸痛通道取，要胸痛病例本身再多出 200 起才会漏（整表翻页随 P1-49 待裁定）
+_em_cases = c.get("/api/emergency/cases?channel_type=chest_pain").json()
 if not _exists(_em_cases, lambda e: e["channel_type"] == "chest_pain" and e["location"] == "城东镇农贸市场"):
     em = c.post(
         "/api/emergency/cases",

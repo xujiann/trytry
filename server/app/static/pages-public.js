@@ -24,7 +24,11 @@ const CHANNELS = { "": "普通", chest_pain: "胸痛", stroke: "卒中", trauma:
 
 async function renderEmTimeline() {
   $("#page-desc").textContent = "急救绿道：通道建单 → 节点录入 → 时间轴时效展示";
-  const cases = await api("/api/emergency/cases");
+  // 三种通道的病例单独取一遍、排在最前（P2-1369，同 P2-408 / P2-456）：清单只回全县最新 200 起、普通呼救占大头，被挤出
+  // 窗口的胸痛 / 卒中 / 创伤病例就没有一行给「录节点 / 时间轴」——节点多半是事后补录的（P2-1213）
+  const [recent, ...channels] = await Promise.all([api("/api/emergency/cases"),
+    ...["chest_pain", "stroke", "trauma"].map((ch) => api(`/api/emergency/cases?channel_type=${ch}`))]);
+  const cases = actionableFirst(recent, ...channels);
   $("#page-body").innerHTML = `
     ${panel("绿道建单", `
       <form class="inline" id="gc-form"><input name="location" placeholder="事发地点" required>

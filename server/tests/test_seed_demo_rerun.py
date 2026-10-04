@@ -16,6 +16,9 @@
 ADR-0005 之前的三级链审三次，新单两步就到「已接收」，第三次 409。所以头一遍（空库）逐个响应记下来，一个被拒的都
 不许有。门诊药费明细原先按刘洋「最近一次就诊」判重：第二遍之前给他另开一次门诊（演示站上有人接诊过他就是这样），
 重跑就给这次再挂两行。
+
+急救绿道那例演示胸痛病例原先按不带参数的急救事件清单判重（P2-1369，扫描 AD4-3）：那份清单不翻页、只回全县最新 200 起，
+演示站上再来 200 起呼救，种子那例就在窗口之外，重跑再建一例。第二遍之前另落 500 起不相干的普通呼救，急救事件只许多出这 500 起。
 """
 import runpy
 import sys
@@ -35,6 +38,7 @@ from app.models import (
     BillDetail,
     Consultation,
     DrugStock,
+    EmergencyCase,
     EmergencyVital,
     Encounter,
     ExamReport,
@@ -67,8 +71,8 @@ def _metformin(db, org_name: str) -> int | None:
 
 
 def _snapshot() -> dict:
-    """前半段灌的每一样各数一遍，外加后半段修过的三样（P2-1096）。都不随日期变——哪怕两遍之间跨了午夜、跨了月，
-    该是同一个数还是同一个数。"""
+    """前半段灌的每一样各数一遍，外加后半段修过的三样（P2-1096）与急救事件（P2-1369）。都不随日期变——哪怕两遍之间
+    跨了午夜、跨了月，该是同一个数还是同一个数。"""
     with SessionLocal() as db:
         return {
             "就诊": _count(db, Encounter),
@@ -88,6 +92,7 @@ def _snapshot() -> dict:
             "镇卫生院二甲双胍库存": _metformin(db, "城东镇卫生院"),
             "县医院二甲双胍库存": _metformin(db, "县人民医院"),
             "物资采购": _count(db, MaterialPurchase),
+            "急救事件": _count(db, EmergencyCase),
             "急救车载体征": _count(db, EmergencyVital),
             "门诊药费明细": _count(db, BillDetail, BillDetail.encounter_id.isnot(None)),
         }
@@ -102,7 +107,8 @@ BURY = 500   # deps.paginate 一页的上限
 
 def _bury_first_page() -> None:
     """再落 500 张不相干的处方与影像申请（像 seed_bulk 灌的仿真数据那样，比种子的新）：清单新的在前、一页至多 500 条，
-    种子自己那几张就翻到了第一页之外——只看第一页的判重认不出它们，重跑照样再补一份。"""
+    种子自己那几张就翻到了第一页之外——只看第一页的判重认不出它们，重跑照样再补一份。急救事件清单不翻页、只回全县
+    最新 200 起（P2-1369）：再落 500 起不相干的普通呼救，种子那例胸痛病例就在不带参数的那一页之外。"""
     with SessionLocal() as db:
         admin_id = db.query(User.id).filter(User.username == "admin").scalar()
         patient_id = db.query(func.min(Patient.id)).scalar()
@@ -110,6 +116,7 @@ def _bury_first_page() -> None:
         db.add_all([Prescription(patient_id=patient_id, org_id=org_id, created_by=admin_id) for _ in range(BURY)])
         db.add_all([ExamRequest(patient_id=patient_id, from_org_id=org_id, center_type="imaging",
                                 item_code="BURY", item_name="压页占位", created_by=admin_id) for _ in range(BURY)])
+        db.add_all([EmergencyCase(location="压页占位", dest_org_id=org_id) for _ in range(BURY)])
         db.commit()
 
 
@@ -157,7 +164,7 @@ def test_演示种子同一天跑两遍_第二遍不崩也不多灌(monkeypatch,
     _open_another_visit()
     _run_seed()   # 修前：约号那一行 KeyError: 'id'，其后各段与末端自检都不跑
     assert _snapshot() == {**first, "处方": first["处方"] + BURY, "检查申请": first["检查申请"] + BURY,
-                           "就诊": first["就诊"] + 1}
+                           "就诊": first["就诊"] + 1, "急救事件": first["急救事件"] + BURY}
     # 第二遍一直走到了末端自检，居民侧那条也在里头（验证码冷却没把居民会话挡在外面）；采购走没走到验收自检也看得见了
     out = capsys.readouterr().out
     assert "末端自检通过" in out
