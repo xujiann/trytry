@@ -6138,6 +6138,32 @@ def test_团队工作台待办三格点进档案清单_列的就是那几份(pag
     expect(listed.locator("tbody tr")).to_have_count(1)
 
 
+def test_团队工作台成员改角色弹框_视角不被改坏_坏值按成员端(page, base_url, spd_seed, admin_call):
+    """P2-1332：成员表「改角色」按钮原先也带 data-role，页面的点击处理先按 [data-role] 认视角切换按钮——点了不弹框，
+    把成员角色（doctor）写进 localStorage 的 spd_team_role，工作台 422、整页只剩「role：格式不对」，刷新也一样。
+    修后按钮改用 data-member-role；已经存着坏值的浏览器打开即按成员端。"""
+    team = admin_call("POST", "/api/spd/teams", {"name": "E2E改角色团队", "org_id": spd_seed["org"]["id"]})
+    admin_call("POST", f"/api/spd/teams/{team['id']}/members", {"user_id": spd_seed["doctor_id"], "member_role": "doctor"})
+    _login(page, base_url)
+    _open_page(page, "spdteam", "服务团队端·基层执行")
+    page.locator("#page-body tr", has_text="E2E改角色团队").locator("[data-team-members]").click()
+    page.locator("#spd-team-detail [data-tm-edit]").first.click()
+    form = _modal(page)
+    expect(form).to_be_visible()   # 修前不弹框，整页先被视角切换重画成报错
+    expect(form.locator('[name="member_role"]')).to_have_value("doctor")
+    _cancel_modal(page)
+    expect(form).to_have_count(0)
+    assert page.evaluate("localStorage.getItem('spd_team_role')") in (None, "member")   # 修前 doctor
+    expect(page.locator('#page-body [data-role="member"]')).to_be_visible()
+    # 修前已经被改坏的浏览器：存着不认得的视角，回到这一页照常画、按成员端
+    page.evaluate("localStorage.setItem('spd_team_role', 'doctor')")
+    _open_page(page, "spdpath", "标准路径与任务中心")
+    _open_page(page, "spdteam", "服务团队端·基层执行")
+    expect(page.locator('#page-body [data-role="expert"]')).to_be_visible()   # 修前整页只剩报错，视角按钮画不出来
+    expect(page.locator("#page-body")).not_to_contain_text("格式不对")
+    assert "secondary" not in page.locator('#page-body [data-role="member"]').get_attribute("class").split()   # 当前视角
+
+
 @pytest.fixture(scope="module")
 def today_lists_seed(admin_call):
     """P2-1317：同一家卫生院两位医生，今天各有一条随访、一条复诊（患者姓名分得开），供桌面看板与医生移动端两段用。"""

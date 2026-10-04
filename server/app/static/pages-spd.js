@@ -1257,13 +1257,17 @@ let spdEnrollJump = null;
 async function renderSpdTeam() {
   $("#page-desc").textContent =
     "基层执行：团队专家、团队成员、个案管理师三个视角共用同一批数据，切换角色查看";
-  const role = localStorage.getItem("spd_team_role") || "member";
+  const roleNames = { expert: "团队专家端", member: "团队成员端", case_manager: "个案管理师端" };
+  // 存下的视角不在这三种里就按成员端（P2-1332）：原先成员表的「改角色」按钮也带 data-role，点了把成员角色（doctor 之类）
+  // 写进这个键，工作台回 422「role：格式不对」、整页只剩报错，刷新也一样，连视角按钮都画不出来，只能清浏览器存储。
+  // 按自有键认，不按 roleNames[stored]：constructor 之类原型上的键也是真值（写法同 shared.js 的 ERROR_TYPE_TEXT）
+  const stored = localStorage.getItem("spd_team_role");
+  const role = stored && Object.prototype.hasOwnProperty.call(roleNames, stored) ? stored : "member";
   const [wb, teams, villageDoctors] = await Promise.all([
     api(`/api/spd/workbench/team?role=${role}`),
     api("/api/spd/teams?limit=100"),
     api("/api/spd/village-doctors?limit=100"),
   ]);
-  const roleNames = { expert: "团队专家端", member: "团队成员端", case_manager: "个案管理师端" };
   // ADR-0009 第四批：面板外壳改用 `panel()`（定义见 core.js），迁一页、人工过一页。
   // 预警面板的红色左边框走 `accent`；两处"有数据才渲染"的条件仍留在调用点。
   $("#page-body").innerHTML = `
@@ -1359,7 +1363,7 @@ async function renderSpdTeam() {
            <td>${esc((m.program_codes || []).join("、") || "—")}</td><td>${esc(m.patient_scope || "—")}</td>
            <td>${m.can_followup ? "✓" : "—"}</td><td>${m.can_referral ? "✓" : "—"}</td><td>${m.can_audit ? "✓" : "—"}</td><td>${m.can_assess ? "✓" : "—"}</td>
            <td>${m.active === false ? '<span class="tag">停用</span>' : '<span class="tag green">在岗</span>'}</td>
-           <td><button class="btn secondary" data-tm-edit="${m.id}" data-team="${teamId}" data-role="${esc(m.member_role)}"
+           <td><button class="btn secondary" data-tm-edit="${m.id}" data-team="${teamId}" data-member-role="${esc(m.member_role)}"
                 data-scope="${esc(m.patient_scope || "team")}" data-referral="${m.can_referral ? 1 : 0}"
                 data-audit="${m.can_audit ? 1 : 0}" data-assess="${m.can_assess ? 1 : 0}" data-active="${m.active === false ? 0 : 1}">改角色</button>
                <button class="btn danger" data-tm-del="${m.id}" data-team="${teamId}">移出</button></td></tr>`)}`);
@@ -1442,7 +1446,7 @@ async function renderSpdTeam() {
     }
     if (tmEdit) {
       const form = await spdModal("调整成员角色与权限", [
-        { name: "member_role", label: "角色", type: "select", value: tmEdit.dataset.role,
+        { name: "member_role", label: "角色", type: "select", value: tmEdit.dataset.memberRole,
           options: Object.entries(SPD_MEMBER_ROLES).map(([k, v]) => ({ value: k, label: v })) },
         // 其余各栏按这位成员现在的值预填（P2-313）：原先是常量（本团队 / 否 / 在岗），只想改个角色、点保存，
         // 就把他的权限位清空、把停用的人悄悄恢复在岗
