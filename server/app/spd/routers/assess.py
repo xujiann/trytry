@@ -963,9 +963,13 @@ class PlanIn(BaseModel):
 
 
 def _check_plan_items(db: Session, items: list[dict]) -> None:
-    """建方案与改方案同一句（P1-94：改方案原先不查）：至少一个指标，指标编码得有、得存在。
+    """建方案与改方案同一句（P1-94：改方案原先不查）：至少一个指标，指标编码得有、得存在、不得重复。
 
-    编码缺失或不是字符串的条目先挡掉——原先拼「以下指标不存在」时 `'、'.join` 撞上 None / 整数，422 成了 500。"""
+    编码缺失或不是字符串的条目先挡掉——原先拼「以下指标不存在」时 `'、'.join` 撞上 None / 整数，422 成了 500。
+
+    同一指标不许写两条（P2-1276）：计分逐条累加，原先「enroll_rate:40, followup_rate:60, enroll_rate:40」照收，甲院 80 分
+    （同样的数据不重复时 40 分），分项明细两条 enroll_rate，指标「被引用」页却只报第一条的权重 40。与服务包项目编码（P2-631）、
+    随访时间点（P2-719）、量表题目 key 重复同一句。"""
     if not items:
         raise HTTPException(status_code=422, detail="考核方案至少要有一个指标")
     bad = non_finite_path(items, "items")   # P2-466
@@ -980,6 +984,10 @@ def _check_plan_items(db: Session, items: list[dict]) -> None:
     missing = [c for c in codes if c not in known]
     if missing:
         raise HTTPException(status_code=422, detail=f"以下指标不存在：{'、'.join(missing)}")
+    repeated = sorted({c for c in codes if codes.count(c) > 1})
+    if repeated:
+        raise HTTPException(status_code=422,
+                            detail=f"考核方案里指标重复：{'、'.join(repeated)}（同一指标只写一条，写两条会按两次计分）")
     weight_problem = plan_weight_problem(items)
     if weight_problem:
         raise HTTPException(status_code=422, detail=weight_problem)
@@ -995,6 +1003,23 @@ def plan_weight_problem(items: list[dict]) -> str:
         if weight is not None and (not _is_number(weight) or weight < 0):
             return f"考核方案里指标 {item.get('indicator_code')} 的权重必须是不小于 0 的数"
     return ""
+
+
+def _first_item_per_indicator(items: list) -> list:
+    """计分用的方案条目：同一指标写了几条的只留首条、保持原顺序（P2-1276）。
+
+    建 / 改方案现在拦重复（`_check_plan_items`），修前存下的照收——原先逐条累加，同一指标按几次计分、分项明细出几条。只计首条
+    与指标「被引用」页（`indicator_usage`）取第一条的权重同一个口径。编码不是字符串的存量坏条目原样留着，照旧逐条记错。"""
+    seen: set[str] = set()
+    kept: list = []
+    for item in items:
+        code = item.get("indicator_code")
+        if isinstance(code, str):
+            if code in seen:
+                continue
+            seen.add(code)
+        kept.append(item)
+    return kept
 
 
 # 考核方案层级、周期文案（措辞照抄 SpdAssessPlan.level / period_type 列注释——P2-74）
@@ -1141,7 +1166,8 @@ def run_scoring(body: RunScoreIn, db: Session = Depends(get_db)):
     program_problem = unknown_program(db, body.program_code)  # 病种编码先查在不在（P1-120）
     if program_problem:
         raise HTTPException(status_code=404, detail=program_problem)
-    indicators, not_yet = effective_versions(db, [i.get("indicator_code") for i in plan.items or []], body.period)
+    items = _first_item_per_indicator(plan.items or [])   # 存量里同一指标写了几条的只计首条（P2-1276）
+    indicators, not_yet = effective_versions(db, [i.get("indicator_code") for i in items], body.period)
     objects = _objects_of(db, plan, body.object_ids)
     # 每个指标一次批量取数（P2-1）：查询数只随指标数增长，不随对象数增长
     all_ids = [object_id for object_id, _ in objects]
@@ -1154,7 +1180,7 @@ def run_scoring(body: RunScoreIn, db: Session = Depends(get_db)):
     results = []
     for object_id, object_name in objects:
         total_score, detail = 0.0, []
-        for item in plan.items or []:
+        for item in items:
             code = item.get("indicator_code")
             indicator = indicators.get(code)
             if indicator is None:
