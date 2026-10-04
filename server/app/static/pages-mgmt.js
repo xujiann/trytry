@@ -659,7 +659,8 @@ async function renderCost() {
         规则不分期间：改比例、删规则后，任一期的科室成本汇总都按现行规则重算。科室填错了就删掉重建。</p>`)}
     ${panel(`${period} 科室成本`, `${
       table(["机构", "科室", "类别", "直接成本", "分摊转入", "分摊转出", "总成本", "未分摊"], costs, (c) =>
-        `<tr><td>${esc(c.org_name || "—")}</td><td>${esc(c.dept_name)}</td><td>${esc(c.dept_category)}</td><td>${c.direct_cost.toFixed(2)}</td>
+        // 类别列写后端给的文案（P2-1439）：原先印 dept_category 英文码 clinical / medtech / admin
+        `<tr><td>${esc(c.org_name || "—")}</td><td>${esc(c.dept_name)}</td><td>${esc(c.dept_category_name)}</td><td>${c.direct_cost.toFixed(2)}</td>
          <td>${c.allocated_in.toFixed(2)}</td><td>${c.allocated_out.toFixed(2)}</td>
          <td><b>${c.total_cost.toFixed(2)}</b></td>
          <td>${c.unallocated_ratio_amount ? `<span class="tag orange">${c.unallocated_ratio_amount.toFixed(2)}</span>` : "—"}</td></tr>`)}

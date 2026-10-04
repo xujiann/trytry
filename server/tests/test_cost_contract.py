@@ -33,6 +33,7 @@ RULE_ROW_KEYS = ["id", "org_id", "from_dept_id", "to_dept_id", "ratio_pct"]
 SUMMARY_ROW_KEYS = [
     "dept_id", "dept_name", "dept_category", "org_name", "direct_cost", "by_type",
     "allocated_in", "allocated_out", "total_cost", "unallocated_ratio_amount",
+    "dept_category_name",   # P2-1439：末尾只增类别文案，前面的键与次序不动
 ]
 BY_TYPE_KEYS = ["labor", "drug", "consumable", "depreciation", "overhead"]
 UNIT_COST_KEYS = [
@@ -165,6 +166,7 @@ def test_科室成本汇总精确_两族数值并存(client, admin, base, seeded
             "allocated_out": 0,
             "total_cost": 2300.3,
             "unallocated_ratio_amount": 0,
+            "dept_category_name": "临床",
         },
         {
             "dept_id": base["logistics"]["id"],
@@ -178,6 +180,7 @@ def test_科室成本汇总精确_两族数值并存(client, admin, base, seeded
             "allocated_out": 300.3,
             "total_cost": 200.2,
             "unallocated_ratio_amount": 200.2,
+            "dept_category_name": "行政后勤",
         },
     ]
     # 桶从 0.0 起加：direct_cost/by_type 恒 float（整数 2000 出参是 2000.0）；

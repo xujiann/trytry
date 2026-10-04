@@ -33,6 +33,7 @@ from ..models import (
     Organization,
     User,
 )
+from .admin_mgmt import DEPT_CATEGORY_NAMES
 
 router = APIRouter(prefix="/api/cost", tags=["成本核算"], dependencies=[Depends(get_current_user)])
 
@@ -257,6 +258,8 @@ class DeptCostSummaryOut(BaseModel):
     allocated_out: int | float
     total_cost: float
     unallocated_ratio_amount: int | float
+    # 科室类别文案（P2-1439）：与人财物页科室表同一份 `admin_mgmt.DEPT_CATEGORY_NAMES`；末尾只增这一键，前面的键与次序不动
+    dept_category_name: str
 
 
 @router.get("/departments", response_model=list[DeptCostSummaryOut])
@@ -344,6 +347,9 @@ def department_cost_summary(
                     direct_total + allocated_in.get(dept_id, 0) - allocated_out.get(dept_id, 0), 2
                 ),
                 "unallocated_ratio_amount": unallocated.get(dept_id, 0),
+                # 类别给文案（P2-1439）：原先只有 `dept_category` 英文码，成本页「类别」列印的是 clinical / medtech / admin——
+                # 同一页上面的科室下拉早就写「临床」（P2-74 改成了科室清单的 category_name，这里的字段名不叫 category，没推到）
+                "dept_category_name": DEPT_CATEGORY_NAMES.get(dept.category, dept.category) if dept else "",
             }
         )
     return sorted(result, key=lambda x: -x["total_cost"])
