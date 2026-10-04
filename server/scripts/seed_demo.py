@@ -630,13 +630,20 @@ if not c.get("/api/followups?category=chronic").json():
         "assigned_to": "李家医"})
 
 # ---------- 会计核算：两张凭证，一张过账一张留草稿 ----------
-if not c.get(f"/api/accounting/vouchers?period={period}").json():
-    v1 = c.post("/api/accounting/vouchers", json={
+# 按凭证号认（P2-1440，同 P2-1095 号源那一处）：原先按「本月有没有凭证」判、凭证号又写死，而同一机构的凭证号永久唯一
+# （models/finance.py）——进了下个月本月一张都没有，再交同号的 JZ-2026-001 撞 409，拿 409 的响应体取 id（KeyError: 'id'），
+# 其后成本、物资、慢专病各段与末端自检都不跑，被 start.sh 的 `|| true` 吞掉。县医院已有这个号就跳过（只增不改）；新建的
+# 不是 201 就不去过账
+_voucher_nos = {v["voucher_no"] for v in _all_pages(f"/api/accounting/vouchers?org_id={county['id']}")}
+if "JZ-2026-001" not in _voucher_nos:
+    _v1 = c.post("/api/accounting/vouchers", json={
         "org_id": county["id"], "voucher_no": "JZ-2026-001", "voucher_date": f"{period}-05",
         "summary": "收取门诊医疗款",
         "entries": [{"subject_code": "1002", "summary": "存入银行", "debit": 128600},
-                    {"subject_code": "4001", "summary": "医疗收入", "credit": 128600}]}).json()
-    c.post(f"/api/accounting/vouchers/{v1['id']}/post")
+                    {"subject_code": "4001", "summary": "医疗收入", "credit": 128600}]})
+    if _v1.status_code == 201:
+        c.post(f"/api/accounting/vouchers/{_v1.json()['id']}/post")
+if "JZ-2026-002" not in _voucher_nos:
     c.post("/api/accounting/vouchers", json={
         "org_id": county["id"], "voucher_no": "JZ-2026-002", "voucher_date": f"{period}-08",
         "summary": "计提当月人员经费（待复核）",
