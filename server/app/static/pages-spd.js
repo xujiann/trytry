@@ -2198,6 +2198,7 @@ async function renderSpdPath() {
           ${catalog.teams.map((t) => `<option value="${t.id}">${esc(t.name)}</option>`).join("")}</select>
         <label style="font-size:13px"><input type="checkbox" name="mine" value="true"> 只看我的</label>
         <label style="font-size:13px"><input type="checkbox" name="unassigned" value="true"> 只看无人认领</label>
+        <label style="font-size:13px"><input type="checkbox" name="escalated" value="true"> 只看已升级</label>
         <button class="secondary">查询</button>
         <button type="button" class="btn secondary" data-task-export>导出 CSV</button>
       </form><p class="msg" id="spd-task-msg"></p>
@@ -2323,11 +2324,19 @@ async function renderSpdPath() {
     return postAction("/api/spd/path-instances",
       formJson(e.target, ["enrollment_id", "template_id"]), "#spd-inst-msg");
   };
+  // 任务中心筛选栏 → 查询参数，清单与「导出 CSV」共用这一处。「只看已升级」送 escalated=true 再加 open_only=true（P2-1318）：
+  // 两项合起来与顶上「已升级」卡片同一句（未结束的里头升级过的）；escalated 单用是按标记筛、不分状态（公共参数的语义不改）。
+  // 原先卡片标红了，筛选栏里没有这一项
+  const taskFilters = () => {
+    const q = formJson($("#spd-task-filter"));
+    if (q.escalated) q.open_only = "true";
+    return q;
+  };
   $("#spd-task-filter").onsubmit = async (e) => {
     e.preventDefault();
     // 查询失败要说出来（P2-378）：原先 draw 抛错没人接，列表还是上一次的结果；先清空（P2-1010）：原先只写了原因，列表照旧
     $("#spd-task-list").innerHTML = "";
-    try { await drawTasks(formJson(e.target)); } catch (err) { setMsg("#spd-task-msg", err.message, false); }
+    try { await drawTasks(taskFilters()); } catch (err) { setMsg("#spd-task-msg", err.message, false); }
   };
   // 路径节点任务由路径派生，这里不给「路径节点」类型；挂档案时后端核对档案是这位患者、这个病种的（P2-89）
   $("#spd-task-form").onsubmit = (e) => {
@@ -2529,8 +2538,9 @@ async function renderSpdPath() {
       return;
     }
     if (exportBtn) {
-      // 「只看我的」照样带上（P2-526）：导出与清单同一个判据，原先这里把它删掉，勾着也导出全部可见机构的任务
-      const filters = formJson($("#spd-task-filter"));
+      // 「只看我的」照样带上（P2-526）：导出与清单同一个判据，原先这里把它删掉，勾着也导出全部可见机构的任务；
+      // 「只看已升级」的 escalated=true&open_only=true 同样带上（P2-1318，与清单同一处 taskFilters）
+      const filters = taskFilters();
       const qs = new URLSearchParams({ limit: "2000", ...filters }).toString();
       try {
         const d = await api(`/api/spd/tasks-export?${qs}`);
@@ -3243,6 +3253,7 @@ async function renderSpdFollowup() {
         <label style="font-size:13px"><input type="checkbox" name="overdue" value="true"> 只看超期</label>
         <label style="font-size:13px"><input type="checkbox" name="mine" value="true"> 只看本人</label>
         <label style="font-size:13px">计划日 <input type="date" name="day"></label>
+        <label style="font-size:13px"><input type="checkbox" name="abnormal" value="true"> 只看异常</label>
         <button class="secondary">查询</button>
       </form>
       <div id="spd-fu-list"></div>
@@ -3355,7 +3366,8 @@ async function renderSpdFollowup() {
     // 查询失败要说出来（P2-378）：原先 draw 抛错没人接，列表还是上一次的结果；先清空（P2-1010）：原先只写了原因，列表照旧
     $("#spd-fu-list").innerHTML = "";
     // 「只看本人」「计划日」（P2-1317）：送清单既有的 mine（执行人是本人）与 date_from / date_to——原先筛不出「本人 + 今天」，
-    // 团队端、医生移动端报着「到期 / 今日随访 N」，这里没有一种查法对得上
+    // 团队端、医生移动端报着「到期 / 今日随访 N」，这里没有一种查法对得上。「只看异常」送 abnormal=true（P2-1318）：中度 + 重度，
+    // 与顶上「异常随访」卡片同一句——原先清单只能按单个等级取，卡片标红了却点不进来
     try { await drawRecords(spdDayRange(formJson(e.target))); } catch (err) { setMsg("#spd-fu-msg", err.message, false); }
   };
   $("#spd-qc-form").onsubmit = (e) => {

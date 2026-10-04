@@ -52,7 +52,7 @@ from ..reporting import latest_plan_period_scores, score_in_orgs
 from ..service import (FOLLOWUP_OPEN_STATUSES, MIGRATION_VOID_STATUSES, REFERRAL_REVIEW_STATUSES, REVISIT_OPEN_STATUSES,
                        TASK_OPEN_STATUSES, _age_of, candidate_undistributed, enrollment_pathless, enrollment_unassessed,
                        enrollment_unstaged, followup_abnormal, followup_overdue, my_team_ids, referral_last_moved_at,
-                       sweep_overdue_on_read, task_overdue, task_unclaimed, team_view_scope)
+                       sweep_overdue_on_read, task_escalated_open, task_overdue, task_unclaimed, team_view_scope)
 
 # 团队层级文案（措辞照抄 SpdTeam.level 列注释；工作台「所属团队」显示它——P2-74）
 TEAM_LEVEL_NAMES = {"county": "县级团队", "township": "乡镇团队", "village": "村级团队", "center": "专病中心团队"}
@@ -133,9 +133,8 @@ def _task_stats(
         # 已标超期的 + 扫描间隙里过了截止日的（P2-549）：多数工作台进门不扫，只数状态恒为上一次扫描的结果
         "overdue": query.filter(task_overdue(today.isoformat())).count(),
         "due_today": open_query.filter(SpdTask.due_date == today.isoformat()).count(),
-        "escalated": query.filter(
-            SpdTask.escalated.is_(True), SpdTask.status.in_(OPEN_STATUSES)
-        ).count(),
+        # 与任务中心「已升级」卡片同一句，等于任务清单的 `escalated=true&open_only=true`（P2-1318）
+        "escalated": query.filter(task_escalated_open()).count(),
         "done_total": query.filter(SpdTask.status == "done").count(),
         "by_type": dict(
             open_query.with_entities(SpdTask.task_type, func.count(SpdTask.id))
@@ -1459,7 +1458,7 @@ def doctor_mobile_workbench(
         },
         "alerts": {
             "escalated_tasks": _apply_scope(db.query(SpdTask), SpdTask.org_id, orgs).filter(
-                SpdTask.escalated.is_(True), SpdTask.status.in_(OPEN_STATUSES)
+                task_escalated_open()   # 同上：等于任务清单的 `escalated=true&open_only=true`（P2-1318）
             ).count(),
             "case_reports": _apply_scope(
                 db.query(SpdCaseReport), SpdCaseReport.org_id, orgs

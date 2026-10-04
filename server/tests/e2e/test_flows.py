@@ -6214,6 +6214,34 @@ def test_桌面随访与复诊看板_只看本人加计划日送既有参数(pag
     expect(page.locator("#spd-revisit-list")).not_to_contain_text(names["other"])
 
 
+def test_任务中心只看已升级_随访看板只看异常_筛得出标红那一格(page, base_url, spd_seed, admin_call):
+    """P2-1318（第三十八批扫描 AB1-3 之三）：任务中心「已升级」、随访看板「异常随访」两张卡片标红，筛选栏里却没有这一项。
+    修后两页各加一项：「只看已升级」送既有参数的组合 escalated=true&open_only=true（与卡片同一句，escalated 单用的语义不改），
+    「只看异常」送 abnormal=true。"""
+    made = [admin_call("POST", "/api/spd/tasks", {
+        "patient_id": spd_seed["patient"]["id"], "title": f"E2E升级任务{n}", "task_type": "followup",
+        "org_id": spd_seed["org"]["id"], "due_days": 7}) for n in range(2)]
+    for task in made:
+        admin_call("POST", f"/api/spd/tasks/{task['id']}/escalate")
+    admin_call("POST", "/api/spd/tasks/batch", {"task_ids": [made[1]["id"]], "action": "cancel", "note": "E2E 取消"})
+    _login(page, base_url)
+    _open_page(page, "spdpath", "标准路径与任务中心")
+    page.wait_for_function("() => !routing")
+    page.locator('#spd-task-filter [name="escalated"]').check()   # 修前没有这一栏
+    with page.expect_request(lambda r: "/api/spd/tasks?" in r.url and "escalated=true" in r.url
+                             and "open_only=true" in r.url):   # 两个参数一起送，合起来是卡片那一句
+        page.click("#spd-task-filter button.secondary")
+    listed = page.locator("#spd-task-list")
+    expect(listed).to_contain_text("E2E升级任务0")
+    expect(listed).not_to_contain_text("E2E升级任务1")   # 已取消的升级任务不在（卡片不数它）
+
+    _open_page(page, "spdfollowup", "智能随访服务端")
+    page.wait_for_function("() => !routing")
+    page.locator('#spd-fu-filter [name="abnormal"]').check()   # 修前没有这一栏
+    with page.expect_request(lambda r: "/api/spd/followup-records?" in r.url and "abnormal=true" in r.url):
+        page.click("#spd-fu-filter button")
+
+
 @pytest.fixture(scope="module")
 def batch_seed(base_url, seed):
     """同一个药两个批号入库：台账按批号查只剩那一批（P1-148）。"""

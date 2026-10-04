@@ -493,6 +493,15 @@ def task_unclaimed():
     return and_(SpdTask.assignee_id.is_(None), SpdTask.status.in_(TASK_CLAIMABLE_STATUSES))
 
 
+def task_escalated_open():
+    """「已升级」卡片的判定：未结束的里头升级过的（P2-247：办结、取消了的不再算，这一格才不会只增不减、永远标红）。
+
+    任务中心的「已升级」卡片、中心端工作台与医生移动端的升级计数共用这一句（P2-1318）。它等于任务清单 / 导出的
+    `escalated=true&open_only=true`——卡片点进清单走这两个参数的组合，`escalated` 单用照旧按标记筛、不分状态（公共参数，
+    督办复盘要查「升级过、已办结」的照样查得到）。"""
+    return and_(SpdTask.escalated.is_(True), SpdTask.status.in_(TASK_OPEN_STATUSES))
+
+
 def candidate_undistributed():
     """「待分发」的判定：还没有团队、也还没有责任人的目标人群（P2-601）。
 

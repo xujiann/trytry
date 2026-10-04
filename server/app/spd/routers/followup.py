@@ -877,6 +877,7 @@ def list_followup_records(
     date_to: str = "",
     overdue: bool = False,
     open_only: bool = False,
+    abnormal: bool = False,
     today: str | None = None,
     offset: int = 0,
     limit: int = 100,
@@ -889,6 +890,8 @@ def list_followup_records(
     `open_only=true` 只列还没做完的（待随访 / 已超期，`FOLLOWUP_OPEN_STATUSES`，P2-1317）：医生移动端「今日随访」一段取
     `mine=true&open_only=true&date_from=今天&date_to=今天`，与工作台日历「今日随访」（执行人是本人、计划日是今天、没做完，
     P2-734）同一句。原先清单表达不出「没做完」，手机上那个数无处可点、同一天取回来的条数也对不上。
+    `abnormal=true` 只列判出中度 / 重度异常的（P2-1318，与随访看板「异常随访」卡片同一句 `followup_abnormal`）：
+    `abnormal_level` 只收单个等级，原先这一格取不出来。
     """
     business_day = resolve_business_date(today)
     if overdue:
@@ -925,6 +928,8 @@ def list_followup_records(
         query = query.filter(SpdFollowupRecord.status == "overdue")
     if open_only:
         query = query.filter(SpdFollowupRecord.status.in_(FOLLOWUP_OPEN_STATUSES))
+    if abnormal:
+        query = query.filter(followup_abnormal())
     rows = paginate(
         query.order_by(SpdFollowupRecord.planned_at, SpdFollowupRecord.id),
         response, offset, limit,

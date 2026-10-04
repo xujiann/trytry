@@ -48,6 +48,7 @@ from ..service import (
     enrollment_for,
     enrollment_still_active,
     mark_task_escalated,
+    task_escalated_open,
     task_unclaimed,
     move_task,
     node_due_days,
@@ -807,7 +808,10 @@ def list_tasks(
 ):
     """任务清单：中心端 #13 要求的六个筛选维度 + "我的待办"。
 
-    `unassigned=true` 只列无人认领的（P2-825，与中心工作台「无人认领」同一句 `task_unclaimed`）。"""
+    `unassigned=true` 只列无人认领的（P2-825，与中心工作台「无人认领」同一句 `task_unclaimed`）。
+    任务中心「已升级」卡片 = `escalated=true&open_only=true`（P2-1318，卡片计数走 `service.task_escalated_open`，与这两个
+    参数的组合逐句相同）：页面「只看已升级」两个一起送。`escalated` 单用照旧按标记筛、不分状态——它是公共参数，督办复盘要查
+    「升级过、已办结」的（`escalated=true&status=done`）照样查得到。"""
     query = db.query(SpdTask)
     if patient_id is not None:
         assert_patient_visible(db, user, patient_id, resource="spd_task")
@@ -906,8 +910,9 @@ def task_summary(
         "open_total": sum(by_status.get(s, 0) for s in OPEN_STATUSES),
         "overdue": by_status.get("overdue", 0),
         # 未结束的里头升级过的（P2-247）：原先把办结 / 取消了的也数进来，这一格只增不减、永远标红；中心端工作台的
-        # 「已升级」（`workbench._task_stats`）与医生移动工作台的升级提醒一直只数未结束的
-        "escalated": query.filter(SpdTask.escalated.is_(True), SpdTask.status.in_(OPEN_STATUSES)).count(),
+        # 「已升级」（`workbench._task_stats`）与医生移动工作台的升级提醒一直只数未结束的。等于清单的
+        # `escalated=true&open_only=true`，页面「只看已升级」点进去就是这两个参数（P2-1318）
+        "escalated": query.filter(task_escalated_open()).count(),
         "due_today": query.filter(
             SpdTask.due_date == today_str, SpdTask.status.in_(OPEN_STATUSES)
         ).count(),
@@ -1461,6 +1466,8 @@ def export_tasks(
     task_type: str | None = None,
     mine: bool = False,
     unassigned: bool = False,
+    escalated: bool | None = None,
+    open_only: bool = False,
     limit: int = 2000,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
@@ -1485,6 +1492,12 @@ def export_tasks(
         query = query.filter(SpdTask.assignee_id == user.id)
     if unassigned:   # 「只看无人认领」与清单同一句（P2-825）：导出跟着表格走，别勾着它导出全部
         query = query.filter(task_unclaimed())
+    # 「只看已升级」送的 escalated=true&open_only=true 同上（P2-1318）：两个参数与清单逐句相同，合起来就是「已升级」卡片那一句；
+    # 原先导出两个都不认，勾着它导出来的是全部
+    if open_only:
+        query = query.filter(SpdTask.status.in_(OPEN_STATUSES))
+    if escalated is not None:
+        query = query.filter(SpdTask.escalated.is_(escalated))
     # 按团队筛与清单同一个判据（P2-685）：任务中心的筛选栏补了机构 / 团队，导出跟着表格走
     for column, value in (
         (SpdTask.program_code, program_code), (SpdTask.status, status),
