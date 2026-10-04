@@ -7,13 +7,18 @@
 本文件的 client 是**函数级**的：接口返回的是全库汇总（total/roots/referral_ready），
 共享库会让断言依赖用例执行顺序——单跑一条就红、换个顺序也红。每条用例自建干净库，
 断言才说得清是自己造的那棵树导致的。
+
+建机构给了上级时已按层级阶梯拦（P1-247）：错位的机构走接口建不出来，体检要报的是修之前落库的
+存量，这里错位的那一家直接落库（`_legacy_org`），其余照旧走接口。
 """
 import pytest
 from fastapi.testclient import TestClient
 
 from conftest import login, reset_database
 
+from app.database import SessionLocal
 from app.main import app
+from app.models import Organization
 
 
 @pytest.fixture()
@@ -35,6 +40,15 @@ def _mkorg(client, admin, name, level, org_type, parent_id=None):
     r = client.post("/api/organizations", json=body, headers=admin)
     assert r.status_code == 201, r.text
     return r.json()
+
+
+def _legacy_org(name, level, org_type, parent_id):
+    """错位的存量机构直接落库：建机构接口已按层级阶梯拦（P1-247），修之前建的照样在库里，体检要报的就是它们。"""
+    with SessionLocal() as db:
+        org = Organization(name=name, level=level, org_type=org_type, parent_id=parent_id)
+        db.add(org)
+        db.commit()
+        return {"id": org.id, "name": org.name}
 
 
 def _health(client, admin):
@@ -104,7 +118,7 @@ def test_层级错位报出并翻转referral_ready(client):
     county = _mkorg(client, admin, "错位县医院", "county", "lead_hospital")
     town = _mkorg(client, admin, "错位卫生院", "township", "township", county["id"])
     station = _mkorg(client, admin, "错位服务站", "village", "village", town["id"])
-    village = _mkorg(client, admin, "错位村卫生室", "village", "village", station["id"])
+    village = _legacy_org("错位村卫生室", "village", "village", station["id"])
 
     health = _health(client, admin)
     assert health["orphans"] == [], "干净库无孤儿，下面的翻转只能归因于错位"
@@ -125,7 +139,7 @@ def test_卫生院挂在卫生院下也算错位(client):
     admin = _admin(client)
     county = _mkorg(client, admin, "双院县医院", "county", "lead_hospital")
     town_a = _mkorg(client, admin, "双院卫生院甲", "township", "township", county["id"])
-    town_b = _mkorg(client, admin, "双院卫生院乙", "township", "township", town_a["id"])
+    town_b = _legacy_org("双院卫生院乙", "township", "township", town_a["id"])
 
     health = _health(client, admin)
     broken = {b["id"]: b for b in health["broken_chains"]}

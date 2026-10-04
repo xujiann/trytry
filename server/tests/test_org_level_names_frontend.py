@@ -22,5 +22,7 @@ def test_前端机构层级表与后端同一份():
     assert _frontend_levels() == ORG_LEVEL_NAMES   # 修前缺 city
 
 
-def test_建机构表单的默认层级仍是县级():
+def test_县级排在建机构层级下拉的第一个选项():
+    """补 city 时排在末尾，原意是建机构表单的缺省层级仍是县级；P1-247 起层级下拉不给缺省、必选
+    （test_org_create_parent_level 盯着），县级仍排在实际选项的第一个。"""
     assert next(iter(_frontend_levels())) == "county"

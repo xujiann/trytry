@@ -1322,6 +1322,37 @@ def test_账号管理的角色下拉不默认落在平台管理员(page, base_ur
     assert users["e2e_role_op"] == "operator" and "e2e_role_new" not in users
 
 
+def test_新增机构的层级与上级不给缺省_上级按层级筛(page, base_url, admin_call):
+    """P1-247：「新增机构」的类型 / 层级 / 上级三个下拉原先缺省「牵头医院 / 县级 / 无上级机构」，只改了类型的村卫生室
+    落成一家县级树根；上级下拉列出全部机构，村挂县、村挂村都点得出来，而机构建好之后上级改不了（P2-441）。
+    改后层级必选、上级随层级重列：村级只列乡级、乡级只列县 / 市级，两级都必选；县、市级照旧可选「无上级机构」。"""
+    county = admin_call("POST", "/api/organizations",
+                        {"name": "E2E P1247 县医院", "org_type": "lead_hospital", "level": "county"})
+    town = admin_call("POST", "/api/organizations", {"name": "E2E P1247 卫生院", "org_type": "township",
+                                                     "level": "township", "parent_id": county["id"]})
+    _login(page, base_url)
+    _open_page(page, "orgs", "机构管理")
+    form = page.locator("#org-form")
+    level, parent = form.locator('[name="level"]'), form.locator('[name="parent_id"]')
+    expect(level).to_have_value("")
+    expect(parent).to_be_disabled()
+    form.locator('[name="name"]').fill("E2E P1247 西村卫生室")
+    form.locator('[name="org_type"]').select_option("village")
+    assert form.evaluate("f => f.checkValidity()") is False   # 修前 True：一点「新增」就落成一家县级、无上级的树根
+    level.select_option("village")
+    options = parent.locator("option").all_inner_texts()
+    assert "E2E P1247 卫生院" in options and "E2E P1247 县医院" not in options, options   # 村级只列乡级
+    assert form.evaluate("f => f.checkValidity()") is False   # 村级的上级必选
+    level.select_option("county")
+    expect(parent.locator("option").first).to_have_text("无上级机构")
+    assert form.evaluate("f => f.checkValidity()") is True    # 县、市级照旧可以不挂上级
+    level.select_option("village")
+    parent.select_option(str(town["id"]))
+    _submit(page, "#org-form button")
+    created = {o["name"]: o for o in admin_call("GET", "/api/organizations")}
+    assert (created["E2E P1247 西村卫生室"]["level"], created["E2E P1247 西村卫生室"]["parent_id"]) == ("village", town["id"])
+
+
 def test_定时任务改间隔在页内表单里填_取消即不改(page, base_url, admin_read, admin_call):
     """P2-38：「改间隔」原先弹窗输分钟；换成数字框（可带小数，折成整秒），取消即不改。"""
     job = admin_read("/api/jobs")[0]

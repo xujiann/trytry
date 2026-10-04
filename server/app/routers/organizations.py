@@ -26,10 +26,32 @@ _ROOT_LEVELS = {"county", "city"}
 #: 是链路终点，其上怎么挂与转诊无关：市级协作医院挂在县院之下、县级公卫机构挂在
 #: 县院之下，都是真实的医共体形态，不该因此判故障——收窄到这两条，既堵住错位，
 #: 也不对不参与转诊的机构指手画脚。
+#:
+#: 建机构给了上级时按它拦（`parent_level_problem`，P1-247）；「新增机构」表单的上级下拉
+#: 按它筛（core.js 的 `ORG_PARENT_LEVELS` 是它的前端副本，改这里要一起改）。
 _PARENT_LEVELS: dict[str, set[str]] = {
     "village": {"township"},
     "township": {"county", "city"},
 }
+
+
+def parent_level_problem(level: str, parent_name: str, parent_level: str) -> str:
+    """给了上级时，父机构层级须在 `_PARENT_LEVELS` 允许的集合里（P1-247）；没问题返回空串。
+
+    建机构原先只查上级存不存在：村挂县、村挂村、乡挂乡、乡挂村一律 201，转诊审核链从此错位——挂在县医院下的村，
+    县医院做了「卫生院审核」之后「县级医院接收」谁做都 403；挂在村下的村由村卫生室做「卫生院审核」、县医院从未经手；
+    而机构建好之后上级改不了（P2-441），错一次就永久错着。判据与体检 `org_tree_health` 的 broken_chains 同一份：
+    只管 village / township 两级，county / city 是链路终点，其上怎么挂与转诊无关，照收。
+
+    不给上级的孤儿不在这里拦：全仓造数大量用「不挂上级的乡镇卫生院」，建时要不要拦另登待裁定。
+    """
+    allowed = _PARENT_LEVELS.get(level)
+    if allowed is None or parent_level in allowed:
+        return ""
+    expected = "或".join(ORG_LEVEL_NAMES.get(x, x) for x in sorted(allowed))
+    return (f"{ORG_LEVEL_NAMES.get(level, level)}机构的上级只能是{expected}机构，所选上级「{parent_name}」是"
+            f"{ORG_LEVEL_NAMES.get(parent_level, parent_level)}：转诊按上级逐级审核，挂错了审核链就错位，"
+            f"且机构建好后上级改不了")
 
 
 class OrgTreeIssue(BaseModel):
@@ -68,8 +90,14 @@ def _issue(o: Organization) -> dict:
 def create_organization(body: OrganizationCreate, db: Session = Depends(get_db)):
     if db.query(Organization).filter(Organization.name == body.name).first():
         raise HTTPException(status_code=409, detail="机构已存在")
-    if body.parent_id is not None and db.get(Organization, body.parent_id) is None:
-        raise HTTPException(status_code=404, detail="上级机构不存在")
+    if body.parent_id is not None:
+        parent = db.get(Organization, body.parent_id)
+        if parent is None:
+            raise HTTPException(status_code=404, detail="上级机构不存在")
+        # P1-247：给了上级就按层级阶梯校验；不给上级的孤儿照旧建（建时要不要拦另登待裁定）
+        problem = parent_level_problem(body.level, parent.name, parent.level)
+        if problem:
+            raise HTTPException(status_code=422, detail=problem)
     org = insert_or_conflict(db, Organization(**body.model_dump()), "机构已存在")
     return org
 

@@ -243,8 +243,12 @@ function homePage() {
 const CENTER_NAMES = { imaging: "影像", ecg: "心电", lab: "检验", pathology: "病理" };
 const ORG_TYPES = { lead_hospital: "牵头医院", township: "乡镇卫生院", village: "村卫生室", public_health: "公卫机构" };
 // 与后端 organizations.ORG_LEVEL_NAMES 同一份（P2-428，test_org_level_names_frontend 盯着）：原先缺「市级」，市级合作医院
-// 在机构列表、考核排名、机构树体检（乡镇的上级可以是市级）里显示成 city。县级排第一：建机构表单的默认选项不变
+// 在机构列表、考核排名、机构树体检（乡镇的上级可以是市级）里显示成 city。县级排第一：建机构表单的层级下拉照这个顺序列
+// （P1-247 起层级不给缺省、必选）
 const LEVELS = { county: "县级", township: "乡级", village: "村级", city: "市级" };
+// 机构自身层级 → 上级允许的层级：与后端 organizations._PARENT_LEVELS 同一份（P1-247，test_org_create_parent_level 盯着）。
+// 「新增机构」的上级下拉按它筛；表里没有的层级（县、市级）是转诊链终点，上级不限、可以不挂
+const ORG_PARENT_LEVELS = { village: ["township"], township: ["city", "county"] };
 // 慢病病种：启动为兜底值，进入慢病页时从 /api/chronic/disease-types 目录刷新（块1）
 let DISEASES = { hypertension: "高血压", diabetes: "2型糖尿病", copd: "慢阻肺" };
 const RX_STATUS = { auto_passed: ["系统审通过", "green"], pending_review: ["待药师审", "orange"], approved: ["药师审通过", "green"], rejected: ["已退回", "red"] };
@@ -1248,7 +1252,6 @@ async function renderMedwaste() {
 async function renderOrgs() {
   $("#page-desc").textContent = "县—乡—村三级医共体成员单位";
   const orgs = await api("/api/organizations");
-  const options = orgs.map((o) => `<option value="${o.id}">${esc(o.name)}</option>`).join("");
   // 机构树体检是 require_admin：非管理员拿到 403，照驾驶舱绩效那处的先例**不阻塞本页**
   let healthHtml = "";
   try {
@@ -1286,14 +1289,29 @@ async function renderOrgs() {
       <form class="inline" id="org-form">
         <input name="name" placeholder="机构名称" required>
         <select name="org_type">${Object.entries(ORG_TYPES).map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>
-        <select name="level">${Object.entries(LEVELS).map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>
-        <select name="parent_id"><option value="">无上级机构</option>${options}</select>
+        <select name="level" required><option value="">选择层级</option>${Object.entries(LEVELS).map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>
+        <select name="parent_id" disabled><option value="">先选层级</option></select>
         <button>新增</button>
       </form><p class="msg" id="org-msg"></p>`)}
     ${healthHtml}
     ${panel("", table(["ID", "名称", "类型", "层级", "上级机构ID"], orgs, (o) =>
       `<tr><td>${o.id}</td><td>${esc(o.name)}</td><td>${ORG_TYPES[o.org_type] || esc(o.org_type)}</td>
        <td><span class="tag">${LEVELS[o.level] || esc(o.level)}</span></td><td>${o.parent_id ?? "—"}</td></tr>`))}`;
+  // 层级、上级不给缺省（P1-247）：原先三个下拉缺省是「牵头医院 / 县级 / 无上级机构」，只改了类型的村卫生室落成一家县级
+  // 树根；上级下拉列出全部机构，村挂县、村挂村都点得出来，而机构建好之后上级改不了（P2-441）。改后层级必选、上级随层级
+  // 重列：乡、村两级只列阶梯允许的层级（ORG_PARENT_LEVELS）且必选，县、市级照旧可选「无上级机构」。类型与层级的配套不校验
+  const parentSelect = $("#org-form").elements.parent_id;
+  $("#org-form").elements.level.onchange = (e) => {
+    const level = e.target.value;
+    const allowed = ORG_PARENT_LEVELS[level];
+    const pool = !level ? [] : allowed ? orgs.filter((o) => allowed.includes(o.level)) : orgs;
+    const head = !level ? "先选层级"
+      : allowed ? `选择上级机构（${allowed.map((x) => LEVELS[x] || x).join(" / ")}）` : "无上级机构";
+    parentSelect.innerHTML = `<option value="">${esc(head)}</option>`
+      + pool.map((o) => `<option value="${o.id}">${esc(o.name)}</option>`).join("");
+    parentSelect.disabled = !level;
+    parentSelect.required = Boolean(allowed);
+  };
   $("#org-form").onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
