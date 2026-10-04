@@ -11,39 +11,47 @@ import pytest
 
 PHONE = "13900024990"
 ID_CARD = "330281197005052499"
+# 「其余转归照旧」那条用另一位患者的住院：转归「死亡」之后同一次住院不再收新申请（P2-1396）
+PHONE2 = "13900024991"
+ID_CARD2 = "330281197006062499"
 
 
 @pytest.fixture(scope="module")
 def world(client, admin):
     org = client.post("/api/organizations", headers=admin, json={
         "name": "P2499 县医院", "org_type": "lead_hospital", "level": "county"}).json()["id"]
-    patient = client.post("/api/patients", headers=admin, json={
-        "name": "P2499 患者", "id_card": ID_CARD, "phone": PHONE}).json()["id"]
-    # 家属 / 本人在居民端绑了这份档案，才看得出消息发没发
-    code = client.post("/api/portal/auth/sms/code", json={"phone": PHONE}).json()["debug_code"]
-    token = client.post("/api/portal/auth/sms/login", json={"phone": PHONE, "code": code}).json()["access_token"]
-    bound = client.post("/api/portal/auth/realname", json={"name": "P2499 患者", "id_card": ID_CARD},
-                        headers={"Authorization": f"Bearer {token}"})
-    assert bound.status_code in (200, 409), bound.text
     ward = client.post("/api/inpatient/wards", headers=admin, json={"name": "P2499 外科", "org_id": org}).json()
-    bed = client.post("/api/inpatient/beds", headers=admin, json={"ward_id": ward["id"], "bed_no": "P2499-1"}).json()
-    admission = client.post("/api/inpatient/admissions", headers=admin, json={
-        "patient_id": patient, "ward_id": ward["id"], "bed_id": bed["id"], "doctor_name": "P2499 医生",
-        "diagnosis_name": "急性阑尾炎"})
-    assert admission.status_code == 201, admission.text
+    admissions = {}
+    for outcome, name, id_card, phone in (("死亡", "P2499 患者", ID_CARD, PHONE),
+                                          ("好转", "P2499 患者乙", ID_CARD2, PHONE2)):
+        patient = client.post("/api/patients", headers=admin, json={
+            "name": name, "id_card": id_card, "phone": phone}).json()["id"]
+        # 家属 / 本人在居民端绑了这份档案，才看得出消息发没发
+        code = client.post("/api/portal/auth/sms/code", json={"phone": phone}).json()["debug_code"]
+        token = client.post("/api/portal/auth/sms/login", json={"phone": phone, "code": code}).json()["access_token"]
+        bound = client.post("/api/portal/auth/realname", json={"name": name, "id_card": id_card},
+                            headers={"Authorization": f"Bearer {token}"})
+        assert bound.status_code in (200, 409), bound.text
+        bed = client.post("/api/inpatient/beds", headers=admin, json={
+            "ward_id": ward["id"], "bed_no": f"P2499-{len(admissions) + 1}"}).json()
+        admission = client.post("/api/inpatient/admissions", headers=admin, json={
+            "patient_id": patient, "ward_id": ward["id"], "bed_id": bed["id"], "doctor_name": "P2499 医生",
+            "diagnosis_name": "急性阑尾炎"})
+        assert admission.status_code == 201, admission.text
+        admissions[outcome] = admission.json()["id"]
     room = client.post("/api/surgery/rooms", headers=admin, json={"org_id": org, "name": "P2499 手术间"}).json()
     # 申请人不得自批（职责分离）：申请与术中记录由本院医生来，审批由管理员来
     assert client.post("/api/users", headers=admin, json={
         "username": "p2499_doc", "password": "passw0rd1", "full_name": "P2499 医生", "role": "doctor",
         "org_id": org}).status_code in (200, 201)
     doctor = client.post("/api/auth/login", json={"username": "p2499_doc", "password": "passw0rd1"}).json()
-    return {"admission": admission.json()["id"], "room": room["id"],
+    return {"admissions": admissions, "room": room["id"],
             "doctor": {"Authorization": f"Bearer {doctor['access_token']}"}}
 
 
 def _record(client, admin, world, name, start, outcome):
     req = client.post("/api/surgery/requests", headers=world["doctor"], json={
-        "admission_id": world["admission"], "surgery_name": name})
+        "admission_id": world["admissions"][outcome], "surgery_name": name})
     assert req.status_code == 201, req.text
     rid = req.json()["id"]
     assert client.post(f"/api/surgery/requests/{rid}/approve", headers=admin,

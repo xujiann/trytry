@@ -226,6 +226,22 @@ def _request_out(r: SurgeryRequest) -> dict:
     }
 
 
+# 术中死亡之后，同一次住院不再提新申请、不再批准、不再排班（P2-1396）。三处共用这半句，各自接上被拦的动作
+_DIED_IN_SURGERY = "本次住院患者已于手术中死亡（术中记录转归「死亡」）"
+
+
+def _died_in_surgery(db: Session, admission_id: int) -> bool:
+    """这次住院是否已有转归「死亡」的术中记录（P2-1396）。
+
+    转归「死亡」原先只跳过术后随访与「术后随访已安排」（P2-499，出院的 P2-878 同一句）；住院仍是「在院」（出院要先写
+    病案首页），同住院另一张已审批的申请照排 201、家属在居民端收到「手术已安排……请遵医嘱做好术前准备」，死后还能再提
+    新申请，那一台挂在排班表与「待填术中记录」里占着手术间。判定按住院：平台主索引没有「死亡」（P1-112 待裁定），不扩到
+    患者。驳回不经过这里——驳回是在途单收尾的出口，别堵死（已审批 / 已排班的在途单怎么收尾随 P2-182）。
+    """
+    return db.query(SurgeryRecord.id).join(SurgeryRequest, SurgeryRecord.request_id == SurgeryRequest.id).filter(
+        SurgeryRequest.admission_id == admission_id, SurgeryRecord.outcome == "死亡").first() is not None
+
+
 @router.post("/requests", response_model=SurgeryRequestOut, status_code=201,
              dependencies=[Depends(require_roles("doctor"))])
 def create_request(
@@ -241,6 +257,8 @@ def create_request(
     # 自报，避免张冠李戴"——带出来了，但没校验调用方是不是那家。
     # 实测未修前：乙院 doctor 能给甲院的住院病人申请手术（201，org_id 是甲院）。
     assert_obj_org_writable(db, user, admission)
+    if _died_in_surgery(db, admission.id):   # P2-1396
+        raise HTTPException(status_code=409, detail=f"{_DIED_IN_SURGERY}，不可再申请手术")
     request = SurgeryRequest(
         patient_id=admission.patient_id,
         org_id=admission.org_id,
@@ -298,6 +316,8 @@ def approve_request(
         raise HTTPException(status_code=409, detail=f"当前状态 {SURGERY_STATUS_NAMES.get(request.status, request.status)} 不可审批")
     if request.created_by == user.id:
         raise HTTPException(status_code=403, detail="不得审批本人提出的手术申请")
+    if body.approved and _died_in_surgery(db, request.admission_id):   # 只拦批准，驳回照旧放行（P2-1396）
+        raise HTTPException(status_code=409, detail=f"{_DIED_IN_SURGERY}，不可审批通过")
     # 审批与「还待审批」压进同一条 UPDATE（P2-1184，与物资采购 P2-403、药品采购 P2-759、用血 P2-110 同一个写法）：上面那道
     # 预检是锁外读的——两位主任一个批准、一个驳回同时到，原先整行写回、后提交的把先提交的结论改掉，两路都 200：驳回的
     # 主任以为已经否决，申请却成了「已审批」，经办照常排进手术间、患者收到「手术已安排」
@@ -356,6 +376,8 @@ def schedule_surgery(
     assert_obj_org_writable(db, user, request)
     if request.status != "approved":
         raise HTTPException(status_code=409, detail=f"当前状态 {SURGERY_STATUS_NAMES.get(request.status, request.status)} 不可排班")
+    if _died_in_surgery(db, request.admission_id):   # 不再给死者排台、不再发「手术已安排」（P2-1396）
+        raise HTTPException(status_code=409, detail=f"{_DIED_IN_SURGERY}，不可排班")
     room = db.get(OperatingRoom, body.room_id)
     if room is None or not room.active:
         raise HTTPException(status_code=404, detail="手术间不存在或已停用")
