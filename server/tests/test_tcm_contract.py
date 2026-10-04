@@ -222,11 +222,20 @@ def test_体质辨识回执精确_偏颇与平和两分支(client, admin):
     }
 
 
-def test_体质辨识简表计分分支_未知维度被滤掉(client, admin):
-    body = client.post(
+def test_体质辨识简表计分分支_未知维度422(client, admin):
+    # P2-1410：这里原先钉的是「未知维度被滤掉」——认不得的键悄悄丢掉、照样判（拼错一个字母的维度就这么没了）。
+    # 口径收紧为有一个认不得就 422、列出可用键；简表计分分支的回执契约照旧钉在下面那份合法请求上
+    unknown = client.post(
         "/api/tcm/constitution",
         json={"answers": {"damp_heat": [5, 5, 5, 5], "qi_deficiency": [1, 1, 1, 1],
                           "not_a_key": [3]}},
+        headers=admin,
+    )
+    assert unknown.status_code == 422, unknown.text
+    assert set(unknown.json()) == {"detail"} and unknown.json()["detail"].endswith("不认：not_a_key")
+    body = client.post(
+        "/api/tcm/constitution",
+        json={"answers": {"damp_heat": [5, 5, 5, 5], "qi_deficiency": [1, 1, 1, 1]}},
         headers=admin,
     ).json()
     assert body == {

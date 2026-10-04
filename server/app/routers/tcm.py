@@ -73,11 +73,22 @@ class ConstitutionBody(BaseModel):
     answers: dict[str, list[int]] | None = None
 
 
+def _check_dimension_keys(given: dict[str, Any]) -> None:
+    """请求里的体质维度键有一个认不得就 422，并列出可用的键（P2-1410）：直报（scores）与简表（answers）同一个判据。
+
+    原先认不得的键悄悄丢掉（简表 `continue`、直报只留认得的），**全部**认不得才 422：送 `qi_deficency`（拼错一个字母）70、
+    阴虚 35，判平和质——气虚 70 哪儿都没有，拼对的同一份请求判气虚质、给补中益气汤；对接方拿到的是一个看着正常的结论。
+    平和质 `balanced` 是认得的键（spec 里列着）：收不收、怎么判随 P2-1060 待裁定，这里照旧收下、不进判定。"""
+    unknown = [k for k in given if k not in CONSTITUTIONS]
+    if unknown:
+        allowed = "、".join(f"{k}（{v['name']}）" for k, v in CONSTITUTIONS.items())
+        raise HTTPException(status_code=422, detail=f"体质维度只认 {allowed}，不认：{'、'.join(unknown)}")
+
+
 def _transformed_scores(answers: dict[str, list[int]]) -> dict[str, int]:
+    # 维度键先过 `_check_dimension_keys`（P2-1410）：原先认不得的键在这里 `continue`，悄悄丢掉
     scores: dict[str, int] = {}
     for key, items in answers.items():
-        if key not in CONSTITUTIONS:
-            continue
         if not items or any(not 1 <= v <= 5 for v in items):
             raise HTTPException(status_code=422, detail=f"体质 {key} 的条目得分须为 1-5 分")
         raw = sum(items)
@@ -147,10 +158,16 @@ def constitution_spec():
 
 @router.post("/constitution", response_model=ConstitutionResultOut)
 def identify_constitution(body: ConstitutionBody):
-    """体质辨识：支持转化分直报（scores）或标准化简表逐条计分（answers）。"""
+    """体质辨识：支持转化分直报（scores）或标准化简表逐条计分（answers），二选一。"""
+    # 两种都送就 422（P2-1410）：原先有 answers 就不看 scores——简表交阴虚、直报交气虚 70，整份 scores 不声不响地丢掉，
+    # 判平和质、score 0
+    if body.answers and body.scores:
+        raise HTTPException(status_code=422, detail="scores（转化分）与 answers（简表条目得分）二选一，不能同时送")
     if body.answers:
+        _check_dimension_keys(body.answers)
         scores = _transformed_scores(body.answers)
     elif body.scores:
+        _check_dimension_keys(body.scores)
         # L-12 整改：转化分直报须在 0-100 界内
         if any(not 0 <= v <= 100 for v in body.scores.values()):
             raise HTTPException(status_code=422, detail="转化分须为 0-100 的整数")
@@ -159,6 +176,7 @@ def identify_constitution(body: ConstitutionBody):
         raise HTTPException(status_code=422, detail="须提供 scores（转化分）或 answers（简表条目得分）")
     valid = {k: v for k, v in scores.items() if k in CONSTITUTIONS and k != "balanced"}
     if not valid:
+        # 认不得的键上面已经 422（P2-1410），走到这里的只交了平和质：认得、但不进判定（P2-1060 待裁定）
         raise HTTPException(status_code=422, detail="缺少有效的体质维度得分")
     # 最高分并列时与兼夹体质同一个次序（分降序、再按编码，P2-966）：原先 `max` 取请求里先出现的那个键——气虚 50、阳虚 50，
     # 先写气虚判气虚质、方剂补中益气汤，只换一下键序就判阳虚质、金匮肾气丸；网页按表单的固定次序拼 scores，等于排在前面的
