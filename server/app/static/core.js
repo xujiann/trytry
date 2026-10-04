@@ -467,7 +467,7 @@ async function renderConsultations() {
   ]);
   const consultations = actionableFirst(recent, applied, accepted);
   const CS = { applied: ["已申请", "orange"], accepted: ["已受理", ""], completed: ["已完成", "green"], declined: ["已拒绝", "red"] };
-  // 专家建档后端是 require_admin，不是 admin 就别摆那个表单
+  // 专家建档与暂停 / 恢复排班后端都是 require_admin，不是 admin 就别摆那张表单和那两个按钮
   const canExpert = currentRole() === "admin";
   // 会诊佐证材料（P2-432）：后端早就收 owner_type=consultation 的附件，页面上原先连上传入口都没有；上传限医师 / 经办
   const canAttach = ["doctor", "operator", "admin"].includes(currentRole());
@@ -517,12 +517,16 @@ async function renderConsultations() {
         <input name="specialty" placeholder="专业方向">
         <select name="available"><option value="1">可排班</option><option value="0">暂停排班</option></select>
         <button>建档</button></form>` : ""}
-      ${table(["ID", "姓名", "机构", "专业方向", "排班状态"], experts, (x) =>
+      ${table(["ID", "姓名", "机构", "专业方向", "排班状态"].concat(canExpert ? ["操作"] : []), experts, (x) =>
         `<tr><td>${x.id}</td><td>${esc(x.name)}</td><td>${x.org_id}</td>
          <td>${esc(x.specialty) || "—"}</td>
-         <td>${statusTag(EXPERT_STATUS, x.available ? "on" : "off")}</td></tr>`)}
+         <td>${statusTag(EXPERT_STATUS, x.available ? "on" : "off")}</td>
+         ${canExpert ? `<td>${x.available
+           ? `<button class="btn danger" data-act="expert-off" data-id="${x.id}">暂停排班</button>`
+           : `<button class="btn secondary" data-act="expert-on" data-id="${x.id}">恢复排班</button>`}</td>` : ""}</tr>`)}
       <p class="desc">受理时的专家下拉只列<b>可排班</b>的（当前 ${onDuty.length} 人）；
-        专家库为空时退回手工输入，不至于卡住受理。</p>`)}
+        专家库为空时退回手工输入，不至于卡住受理。专家请假先「暂停排班」，回来再「恢复排班」——
+        建档时误选了暂停排班的也在这里恢复（姓名唯一，不能同名重建）。</p>`)}
     ${attachmentPanelHtml("cons", "会诊佐证材料（病历影像截图 / 检查单 PDF，≤10MB）", "会诊单ID", canAttach)}`;
   bindAttachmentPanel("consultation", "cons");
   $("#cons-form").onsubmit = async (e) => {
@@ -588,6 +592,14 @@ async function renderConsultations() {
         // 计费的回馈看上方统计卡（已计费件数与金额会跟着变）
         await api(`/api/consultations/${id}/fee`, { method: "POST",
           body: JSON.stringify({ fee: picked.fee, fee_note: picked.fee_note }) });
+      } else if (act === "expert-off" || act === "expert-on") {
+        // 排班状态原先建档后就改不了（P2-1302）：专家请假暂停不了、受理照样选他；建档误选暂停排班的永远受理不了。
+        // 送目标状态而不是「切换」——旧页面上再点一次也不会把刚暂停的翻回去。暂停先确认（受理时就选不到他了），恢复一点即回
+        const expert = experts.find((x) => x.id === Number(id));
+        const off = act === "expert-off";
+        if (off && !await spdModal("暂停排班", [], {
+          intro: `暂停后受理会诊时不能再选「${expert ? expert.name : id}」，已受理的会诊不受影响；回来后点「恢复排班」。` })) return;
+        await api(`/api/consultations/experts/${id}`, { method: "PATCH", body: JSON.stringify({ available: !off }) });
       }
       route();
     } catch (err) { setMsg("#cons-msg", err.message, false); }

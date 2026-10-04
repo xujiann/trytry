@@ -3320,6 +3320,28 @@ def test_会诊计费不填金额提交不了_明确填0照常计费(page, base_
     assert settled() == before + 1
 
 
+def test_会诊专家暂停排班先确认_恢复排班一点即回(page, base_url, seed, admin_call, admin_read):
+    """P2-1302（第三十八批扫描 AB2-4）：专家库的「排班状态」原先建档后改不了——专家表只有这一列、没有按钮，后端也只有建档与
+    清单两个接口；专家请假暂停不了、受理照样选他，建档误选暂停排班的永远受理不了。现在每行有「暂停排班 / 恢复排班」：暂停先在
+    页内框里确认（点取消不动），恢复一点即回。
+
+    专家名取「E2E专家」：本文件别处的会诊用例按这个名字受理（库为空时手填）；库里有可排班的专家之后受理只认库里的名字
+    （P2-764）——同名，用例先后怎么排都对得上。"""
+    expert = admin_call("POST", "/api/consultations/experts", {
+        "name": "E2E专家", "org_id": seed["org"]["id"], "specialty": "心内科"})
+
+    def available():
+        return next(x for x in admin_read("/api/consultations/experts") if x["id"] == expert["id"])["available"]
+
+    _login(page, base_url)
+    _open_page(page, "consultations", "远程会诊")
+    _confirm_then(page, lambda: page.click(f'button[data-act="expert-off"][data-id="{expert["id"]}"]'),
+                  "受理会诊时不能再选「E2E专家」", lambda: available() is True, lambda: available() is False)
+    _redrawn(page, lambda: page.click(f'button[data-act="expert-on"][data-id="{expert["id"]}"]'))   # 修前没有这个按钮
+    assert available() is True
+    expect(page.locator(f'button[data-act="expert-off"][data-id="{expert["id"]}"]')).to_be_visible()
+
+
 def test_专病目录的路径节点认全角冒号与逗号_拆不出的点名(page, base_url, admin_read):
     """P1-137 前端同一族：「键:名称,键:名称」原先只按半角逗号、冒号拆——中文输入法填的「apply：申请，review：评估」一个节点都拆
     不出，建出来是个没有节点的专病，不报错。现在全角逗号、顿号、全角冒号都认；拆不出「键:名称」的那一段点名报出来。"""

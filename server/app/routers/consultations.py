@@ -347,3 +347,35 @@ def list_experts(available: bool | None = None, db: Session = Depends(get_db)):
     if available is not None:
         q = q.filter(ConsultExpert.available.is_(available))
     return [{"id": e.id, "name": e.name, "org_id": e.org_id, "specialty": e.specialty, "available": e.available} for e in q.all()]
+
+
+class ExpertAvailabilityUpdate(BaseModel):
+    # 只收排班状态、必填（P2-1302）：不送就 422，不替人猜是暂停还是恢复。送的是**目标状态**而不是「切换」——
+    # 两位管理员对着各自打开的旧页面先后点「暂停排班」，结果仍是暂停，不会被第二下翻回可排班
+    available: bool
+
+
+@router.patch("/experts/{expert_id}", response_model=ConsultExpertOut,
+              dependencies=[Depends(require_admin)])
+def set_expert_availability(
+    expert_id: int,
+    body: ExpertAvailabilityUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """暂停 / 恢复专家排班（P2-1302）。
+
+    专家原先只有建档与清单两个接口，「排班状态」建档后就改不了：受理时 `_check_expert` 按它拦（P2-764 的注释写着
+    「页面打开之后专家被设成暂停排班」，前提就是这个状态会变）——专家请假暂停不了，受理照样选他；建档时误选「暂停排班」的
+    永远受理不了，同名重建又撞「专家已存在」（姓名唯一）。权限与机构口径照抄同文件的 `create_expert`：
+    `require_admin` + `assert_org_writable`（按库里这位专家的所属机构判）。
+    """
+    expert = db.get(ConsultExpert, expert_id)
+    if expert is None:
+        raise HTTPException(status_code=404, detail="专家不存在")
+    assert_org_writable(db, user, expert.org_id)
+    expert.available = body.available
+    db.commit()
+    db.refresh(expert)
+    return {"id": expert.id, "name": expert.name, "org_id": expert.org_id, "specialty": expert.specialty,
+            "available": expert.available}

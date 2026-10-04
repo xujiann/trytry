@@ -524,6 +524,7 @@ SNAPSHOT_ENDPOINTS = {
     "GET /api/workflows/my-tasks",
     "PATCH /api/billing/charge-items/{item_id}",
     "PATCH /api/chronic/disease-types/{type_id}",
+    "PATCH /api/consultations/experts/{expert_id}",   # P2-1302：会诊专家暂停 / 恢复排班
     "PATCH /api/cost/allocation-rules/{rule_id}",
     "PATCH /api/dataquality/rules/{rule_id}",
     "PATCH /api/disease-programs/{program_id}",
