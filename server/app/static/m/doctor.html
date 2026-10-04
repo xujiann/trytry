@@ -112,11 +112,14 @@
       <p id="surgery-msg" class="msg"></p>
     </section>
 
-    <!-- 慢专病：本人待办、转诊办理、村医签约居民、积分与考核 -->
+    <!-- 慢专病：本人待办、今日随访与复诊、转诊办理、村医签约居民、积分与考核 -->
     <section id="tab-spd" class="tab-page hidden">
       <div id="spd-wb"></div>
       <div class="seg">
         <button class="seg-btn active" data-dspd="todo">我的待办</button>
+        <!-- 今日随访 / 今日复诊（P2-1317）：工作台报着这两个数，原先手机上没有一段列得出是哪几位 -->
+        <button class="seg-btn" data-dspd="followup">今日随访</button>
+        <button class="seg-btn" data-dspd="revisit">今日复诊</button>
         <button class="seg-btn" data-dspd="referral">转诊办理</button>
         <button class="seg-btn" data-dspd="patient">我的患者</button>
         <button class="seg-btn" data-dspd="perf">积分绩效</button>

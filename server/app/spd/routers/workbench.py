@@ -1404,7 +1404,9 @@ def doctor_mobile_workbench(
         },
         "todo": my_tasks,
         # 今日随访 / 复诊只数还没做完的（P2-734）：与同一块的今日任务、上面的到期计数同一口径——原先不看状态，
-        # 死亡收尾或手工移除的照数，同一屏上待办 0、今日任务 0，今日随访、复诊仍各是 1
+        # 死亡收尾或手工移除的照数，同一屏上待办 0、今日任务 0，今日随访、复诊仍各是 1。
+        # 医生移动端「今日随访」「今日复诊」两段按随访 / 复诊清单的 `mine=true&open_only=true&date_from=today&date_to=today`
+        # 取，与这两个数同一句（P2-1317）：改这里的判据要一起改清单的那几个参数
         "calendar": {
             "today": business_day.isoformat(),
             "followups": db.query(SpdFollowupRecord).filter(

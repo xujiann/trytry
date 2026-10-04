@@ -1398,6 +1398,8 @@ def list_revisits(
     date_from: str = "",
     date_to: str = "",
     overdue: bool = False,
+    mine: bool = False,
+    open_only: bool = False,
     today: str | None = None,
     offset: int = 0,
     limit: int = 200,
@@ -1408,6 +1410,10 @@ def list_revisits(
 
     `overdue=true` 现在按 **status** 过滤（进接口先跑一次超期扫描）：
     P0-2 之前逾期是查询现算的，督办按现算、考核按 status，两套口径对不上。
+
+    `mine=true` 只列复诊医生是本人的、`open_only=true` 只列还没复诊的（已排期 / 已逾期，`REVISIT_OPEN_STATUSES`）——
+    医生移动端「今日复诊」一段取 `mine=true&open_only=true&date_from=今天&date_to=今天`，与工作台日历「今日复诊」同一句
+    （P2-1317）。原先清单只有要填账号编号的 `doctor_user_id`（管理端页面拿不到本人编号），也表达不出「没复诊」。
     """
     business_day = resolve_business_date(today)
     if overdue:
@@ -1418,6 +1424,10 @@ def list_revisits(
     # P0-24：原先只在带 patient_id 时判可见性，不带就列出全域全部复诊计划（带患者姓名）。
     # 与 P0-23 的咨询清单同一口径：只见本机构服务过的患者的计划，全域角色不过滤。
     query = scope_patient_list(db, user, db.query(SpdRevisit), SpdRevisit, patient_id, "spd_revisit")
+    if mine:
+        query = query.filter(SpdRevisit.doctor_user_id == user.id)
+    if open_only:
+        query = query.filter(SpdRevisit.status.in_(REVISIT_OPEN_STATUSES))
     for column, value in (
         (SpdRevisit.status, status), (SpdRevisit.dept, dept),
         (SpdRevisit.doctor_user_id, doctor_user_id),

@@ -128,6 +128,7 @@ function clearWorkbench() {
   $("#round-vital").classList.add("hidden");
   roundAdmissionId = 0;
   spdMe = null;
+  spdCalendar = null;
   history.replaceState(null, "", location.pathname + location.search);   // 下一位落在待办：进页即取数，#who 跟着改写
 }
 
@@ -190,10 +191,13 @@ document.querySelectorAll("[data-dspd]").forEach((btn) => {
 
 /** 本人（工作台出参的 user）：「我的患者」按它筛 */
 let spdMe = null;
+/** 工作台的日历（出参的 calendar）：「今日随访 / 今日复诊」两段按它的 today 取（P2-1317） */
+let spdCalendar = null;
 
 async function loadSpdTab() {
   const wb = await api("/api/spd/workbench/doctor-mobile");
   spdMe = wb.user;
+  spdCalendar = wb.calendar;
   const roleText = (wb.user.member_roles || []).map((r) => ({
     doctor: "医生", nurse: "护士", rehab: "康复治疗师", case_manager: "个案管理师",
     village_doctor: "村医", expert: "专家",
@@ -232,6 +236,8 @@ async function loadSpdList() {
       box.innerHTML = '<p class="empty">加载中…</p>';
       try {
         if (activeDoctorSpd === "todo") await loadSpdTodo(box);
+        else if (activeDoctorSpd === "followup") await loadSpdTodayFollowups(box);
+        else if (activeDoctorSpd === "revisit") await loadSpdTodayRevisits(box);
         else if (activeDoctorSpd === "referral") await loadSpdReferral(box);
         else if (activeDoctorSpd === "patient") await loadSpdPatients(box);
         else await loadSpdPerf(box);
@@ -308,6 +314,37 @@ async function loadSpdTodo(box) {
       '<textarea name="note" rows="2" placeholder="办理结果（可留空）"></textarea>', "确认办结",
       (f) => spdPost(`/api/spd/tasks/${b.dataset.spdDone}/complete`,
         { result: { note: f.note.value.trim() } }, true))));
+}
+
+/* 今日随访 / 今日复诊（P2-1317）：工作台报「今日随访 N / 今日复诊 N」，原先这一页只有待办、转诊、患者、积分四段，全文件不调
+ * 随访记录与复诊清单——是哪几位在手机上无处可看。两段与那两个数同一句：本人（执行人 / 复诊医生）、计划日是工作台的「今天」
+ * （日历出参的 today，服务端的业务日，不取手机本地日期——跨时区的手机按本地取会差一天）、还没做完的（open_only）。 */
+async function spdCalendarDay() {
+  return (spdCalendar || (await api("/api/spd/workbench/doctor-mobile")).calendar).today;
+}
+
+async function loadSpdTodayFollowups(box) {
+  const day = encodeURIComponent(await spdCalendarDay());
+  const rows = await api(`/api/spd/followup-records?mine=true&open_only=true&date_from=${day}&date_to=${day}&limit=100`);
+  box.innerHTML = rows.map((r) => `<div class="m-card">
+    ${kv("患者", esc(r.patient_name || r.patient_id))}
+    ${kv("场景", esc(r.scene_name))}
+    ${kv("计划日期", esc(r.planned_at))}
+    ${kv("状态", esc(r.status_name))}
+  </div>`).join("") || '<p class="empty">今天没有要做的随访</p>';
+  if (rows.length === 100) box.insertAdjacentHTML("beforeend", '<p class="hint">只列出前 100 条，其余请到管理端随访看板查</p>');
+}
+
+async function loadSpdTodayRevisits(box) {
+  const day = encodeURIComponent(await spdCalendarDay());
+  const rows = await api(`/api/spd/revisits?mine=true&open_only=true&date_from=${day}&date_to=${day}&limit=100`);
+  box.innerHTML = rows.map((r) => `<div class="m-card">
+    ${kv("患者", esc(r.patient_name || r.patient_id))}
+    ${kv("病种", esc(r.program_code || "—"))}
+    ${kv("科室", esc(r.dept || "—"))}
+    ${kv("复查项目", esc(r.items || "—"))}
+  </div>`).join("") || '<p class="empty">今天没有排定的复诊</p>';
+  if (rows.length === 100) box.insertAdjacentHTML("beforeend", '<p class="hint">只列出前 100 条，其余请到管理端复诊看板查</p>');
 }
 
 /** 转诊卡片按后端出参 `actions` 给按钮（P2-794）：原先按状态给（P2-101，免得点错一个就 409），可推进权还看机构——

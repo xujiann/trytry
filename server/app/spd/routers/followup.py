@@ -52,7 +52,8 @@ from ..models import (
 )
 from ..reporting import compose_section, default_period_label
 from ..rules import RuleError, as_validated, grade_abnormal
-from ..service import (CALL_SETTLEABLE_STATUSES, REVISIT_OPEN_STATUSES, adjust_followup_record, close_followup_record,
+from ..service import (CALL_SETTLEABLE_STATUSES, FOLLOWUP_OPEN_STATUSES, REVISIT_OPEN_STATUSES, adjust_followup_record,
+                       close_followup_record,
                        followup_abnormal, answers_problem, followup_overdue, note_call_dispatch_failure,
                        settle_call_task, plan_offsets, spawn_followup_abnormal_task, unknown_code, unknown_ids,
                        unknown_program)
@@ -875,6 +876,7 @@ def list_followup_records(
     date_from: str = "",
     date_to: str = "",
     overdue: bool = False,
+    open_only: bool = False,
     today: str | None = None,
     offset: int = 0,
     limit: int = 100,
@@ -884,6 +886,9 @@ def list_followup_records(
     """随访看板：全院 / 科室 / 个人三个口径由参数组合而成，不做三个接口。
 
     `overdue=true` 按 status 过滤（进接口先跑一次超期扫描）——与督办、考核同一口径。
+    `open_only=true` 只列还没做完的（待随访 / 已超期，`FOLLOWUP_OPEN_STATUSES`，P2-1317）：医生移动端「今日随访」一段取
+    `mine=true&open_only=true&date_from=今天&date_to=今天`，与工作台日历「今日随访」（执行人是本人、计划日是今天、没做完，
+    P2-734）同一句。原先清单表达不出「没做完」，手机上那个数无处可点、同一天取回来的条数也对不上。
     """
     business_day = resolve_business_date(today)
     if overdue:
@@ -918,6 +923,8 @@ def list_followup_records(
         query = query.filter(SpdFollowupRecord.planned_at <= date_to)
     if overdue:
         query = query.filter(SpdFollowupRecord.status == "overdue")
+    if open_only:
+        query = query.filter(SpdFollowupRecord.status.in_(FOLLOWUP_OPEN_STATUSES))
     rows = paginate(
         query.order_by(SpdFollowupRecord.planned_at, SpdFollowupRecord.id),
         response, offset, limit,

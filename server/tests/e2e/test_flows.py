@@ -6139,6 +6139,82 @@ def test_团队工作台待办三格点进档案清单_列的就是那几份(pag
 
 
 @pytest.fixture(scope="module")
+def today_lists_seed(admin_call):
+    """P2-1317：同一家卫生院两位医生，今天各有一条随访、一条复诊（患者姓名分得开），供桌面看板与医生移动端两段用。"""
+    org = admin_call("POST", "/api/organizations", {
+        "name": "E2E P21317 卫生院", "org_type": "township", "level": "township"})
+    rule = admin_call("POST", "/api/spd/followup-rules", {"code": "E2E_P21317", "name": "E2E 当日随访", "points": [0]})
+    day = admin_call("GET", "/api/spd/workbench/doctor-mobile")["calendar"]["today"]   # 服务端的业务日
+    names = {}
+    for key in ("me", "other"):
+        doctor = admin_call("POST", "/api/users", {"username": f"e2e_p21317_{key}", "password": "passw0rd1",
+                                                   "role": "doctor", "full_name": f"E2E P21317 {key}", "org_id": org["id"]})
+        names[key] = f"E2E今日{'本人' if key == 'me' else '别人'}患者"
+        patient = admin_call("POST", "/api/patients", {
+            "name": names[key], "id_card": f"32098119800202{1317 + len(names):04d}"})
+        admin_call("POST", "/api/spd/enrollments", {
+            "patient_id": patient["id"], "program_code": "hypertension", "org_id": org["id"], "doctor_user_id": doctor["id"]})
+        admin_call("POST", "/api/spd/followup-plans", {
+            "patient_id": patient["id"], "rule_id": rule["id"], "org_id": org["id"], "executor_id": doctor["id"],
+            "base_date": day})
+        admin_call("POST", "/api/spd/revisits", {
+            "patient_id": patient["id"], "program_code": "hypertension", "plan_date": day, "doctor_user_id": doctor["id"]})
+    return {"day": day, "names": names}
+
+
+def test_医生移动端今日随访今日复诊两段_列的就是那两个数(page, base_url, today_lists_seed):
+    """P2-1317（第三十八批扫描 AB1-3 之二）：工作台报「今日随访 1 / 今日复诊 1」，手机上原先只有待办、转诊、患者、积分
+    四段，是哪几位无处可看。修后加两段，按「本人 + 工作台的今天 + 没做完」取，与那两个数同一句。"""
+    names = today_lists_seed["names"]
+    page.goto(f"{base_url}/m/doctor")
+    page.fill("#lg-user", "e2e_p21317_me")
+    page.fill("#lg-pass", "passw0rd1")
+    page.click('#login-form button[type="submit"]')
+    expect(page.locator("#workbench")).to_be_visible()
+    page.click('[data-tab="spd"]')
+    expect(page.locator("#spd-wb .kv", has_text="今日随访")).to_contain_text("1")
+    expect(page.locator("#spd-wb .kv", has_text="今日复诊")).to_contain_text("1")
+    page.click('[data-dspd="followup"]')   # 修前没有这一段
+    listed = page.locator("#spd-list")
+    expect(listed).to_contain_text(names["me"])
+    expect(listed).to_contain_text("待随访")
+    expect(listed).not_to_contain_text(names["other"])
+    expect(listed.locator(".m-card")).to_have_count(1)
+    page.click('[data-dspd="revisit"]')
+    expect(listed).to_contain_text(names["me"])
+    expect(listed).not_to_contain_text(names["other"])
+    expect(listed.locator(".m-card")).to_have_count(1)
+
+
+def test_桌面随访与复诊看板_只看本人加计划日送既有参数(page, base_url, today_lists_seed):
+    """P2-1317：随访看板原先只有状态 / 场景 / 只看超期，复诊看板只有状态 / 只看逾期，筛不出「本人 + 今天」。修后两块看板
+    加「只看本人」「计划日」，提交时送清单的 mine 与 date_from / date_to（同一天）。"""
+    day, names = today_lists_seed["day"], today_lists_seed["names"]
+    _login(page, base_url, "e2e_p21317_me", "passw0rd1")
+    _open_page(page, "spdfollowup", "智能随访服务端")
+    page.wait_for_function("() => !routing")   # 首屏那次不带筛选的取数（render 末尾）跑完再查，别让它后到、盖掉筛选结果
+    board = page.locator("#spd-fu-filter")
+    board.locator('[name="mine"]').check()   # 修前没有这两栏
+    board.locator('[name="day"]').fill(day)
+    with page.expect_request(lambda r: "/api/spd/followup-records?" in r.url and "mine=true" in r.url) as sent:
+        board.locator("button").click()
+    assert f"date_from={day}" in sent.value.url and f"date_to={day}" in sent.value.url, sent.value.url
+    expect(page.locator("#spd-fu-list")).to_contain_text(names["me"])
+    expect(page.locator("#spd-fu-list")).not_to_contain_text(names["other"])   # 同机构别人的
+
+    _open_page(page, "spdmanager", "个案管理师端·专属衔接")
+    page.wait_for_function("() => !routing")
+    board = page.locator("#spd-revisit-filter")
+    board.locator('[name="mine"]').check()
+    board.locator('[name="day"]').fill(day)
+    with page.expect_request(lambda r: "/api/spd/revisits?" in r.url and "mine=true" in r.url) as sent:
+        board.locator("button").click()
+    assert f"date_from={day}" in sent.value.url and f"date_to={day}" in sent.value.url, sent.value.url
+    expect(page.locator("#spd-revisit-list")).to_contain_text(names["me"])
+    expect(page.locator("#spd-revisit-list")).not_to_contain_text(names["other"])
+
+
+@pytest.fixture(scope="module")
 def batch_seed(base_url, seed):
     """同一个药两个批号入库：台账按批号查只剩那一批（P1-148）。"""
     import json

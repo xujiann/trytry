@@ -81,6 +81,16 @@ function spdSplitList(text) {
   return String(text || "").split(/[，,、\s]+/).map((s) => s.trim()).filter(Boolean);
 }
 
+/** 看板筛选栏的「计划日」（P2-1317）：一个日期框送清单既有的 date_from / date_to 两个参数（同一天即「当天」）；没填照旧不带。 */
+function spdDayRange(q) {
+  if (q.day) {
+    q.date_from = q.day;
+    q.date_to = q.day;
+    delete q.day;
+  }
+  return q;
+}
+
 function spdProgramOptions(catalog, blank, activeOnly) {
   return (blank ? '<option value="">全部病种</option>' : "")
     + catalog.programs.filter((p) => !activeOnly || p.active)
@@ -3231,6 +3241,8 @@ async function renderSpdFollowup() {
           <option value="inpatient">出院</option><option value="outpatient">门诊</option>
           <option value="surgery">术后</option><option value="checkup">体检</option></select>
         <label style="font-size:13px"><input type="checkbox" name="overdue" value="true"> 只看超期</label>
+        <label style="font-size:13px"><input type="checkbox" name="mine" value="true"> 只看本人</label>
+        <label style="font-size:13px">计划日 <input type="date" name="day"></label>
         <button class="secondary">查询</button>
       </form>
       <div id="spd-fu-list"></div>
@@ -3342,7 +3354,9 @@ async function renderSpdFollowup() {
     e.preventDefault();
     // 查询失败要说出来（P2-378）：原先 draw 抛错没人接，列表还是上一次的结果；先清空（P2-1010）：原先只写了原因，列表照旧
     $("#spd-fu-list").innerHTML = "";
-    try { await drawRecords(formJson(e.target)); } catch (err) { setMsg("#spd-fu-msg", err.message, false); }
+    // 「只看本人」「计划日」（P2-1317）：送清单既有的 mine（执行人是本人）与 date_from / date_to——原先筛不出「本人 + 今天」，
+    // 团队端、医生移动端报着「到期 / 今日随访 N」，这里没有一种查法对得上
+    try { await drawRecords(spdDayRange(formJson(e.target))); } catch (err) { setMsg("#spd-fu-msg", err.message, false); }
   };
   $("#spd-qc-form").onsubmit = (e) => {
     e.preventDefault();
@@ -4101,6 +4115,8 @@ async function renderSpdManager() {
           ${Object.entries(SPD_REVISIT_STATUS).map(([k, v]) =>
             `<option value="${k}">${esc(v[0])}</option>`).join("")}</select>
         <label style="font-size:13px"><input type="checkbox" name="overdue"> 只看逾期</label>
+        <label style="font-size:13px"><input type="checkbox" name="mine" value="true"> 只看本人</label>
+        <label style="font-size:13px">计划日 <input type="date" name="day"></label>
         <button class="secondary">筛选</button>
       </form><p class="msg" id="spd-revisit-msg"></p>
       <div id="spd-revisit-list">${spdRevisitTable(revisits)}</div>`)}
@@ -4133,9 +4149,17 @@ async function renderSpdManager() {
     const status = e.target.overdue.checked ? "" : e.target.status.value;
     if (status) params.set("status", status);
     if (e.target.overdue.checked) params.set("overdue", "true");
+    // 「只看本人」「计划日」（P2-1317）：送清单的 mine（复诊医生是本人，与医生移动端「今日复诊」同一句）与既有的
+    // date_from / date_to——原先筛不出「本人 + 今天」
+    if (e.target.mine.checked) params.set("mine", "true");
+    if (e.target.day.value) {
+      params.set("date_from", e.target.day.value);
+      params.set("date_to", e.target.day.value);
+    }
+    const filtered = [...params.keys()].some((k) => k !== "limit");
     // 查询失败要说出来（P2-378）：原先 api() 抛错没人接，列表还是上一次的结果
     try {
-      $("#spd-revisit-list").innerHTML = spdRevisitTable(status || e.target.overdue.checked
+      $("#spd-revisit-list").innerHTML = spdRevisitTable(filtered
         ? await api(`/api/spd/revisits?${params}`) : await openFirstRevisits());
     } catch (err) { $("#spd-revisit-list").innerHTML = `<p class="msg err">${esc(err.message)}</p>`; }
   };
