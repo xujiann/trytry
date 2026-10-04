@@ -3701,6 +3701,44 @@ def test_模拟诊疗病例能在界面上新建_作答按新建的答案评分(
     expect(history.locator("tbody tr").nth(1).locator(".tag")).to_have_text("未通过")
 
 
+def test_名老中医医案按病名筛出来_展开读得到按语(page, base_url, admin_read, admin_call):
+    """P2-1408（第四十一批扫描 AE4-4）：四诊、按语录得进去，页面上看不见——医案表只列名老中医 / 标题 / 病证 / 治法 / 处方；
+    检索只送 keyword（只搜处方、按语、标题），按病名、老师检索页面上没有入口。录一条四诊、按语都分了行的医案，按病名筛出来，
+    点「展开」读得到那段按语，再点收起。"""
+    admin_call("POST", "/api/tcm-heritage/master-cases", {
+        "master_name": "E2E李老", "title": "E2E 胃脘痛案", "disease": "E2E胃痛"})   # 另一个病名：筛掉的那条
+    _login(page, base_url)
+    _open_page(page, "tcmheritage", "名老中医传承与模拟诊疗")
+    form = page.locator("#mc-form")
+    form.locator('[name="master_name"]').fill("E2E陈老")
+    form.locator('[name="successor_name"]').fill("E2E王医生")
+    form.locator('[name="title"]').fill("E2E 膝关节冷痛案")
+    form.locator('[name="disease"]').fill("E2E痹证")
+    form.locator('[name="four_exams"]').fill("膝冷痛遇寒加重\n舌淡苔白腻，脉沉紧")
+    form.locator('[name="commentary"]').fill("附子先煎一小时\n量自10g渐加，口麻即止")
+    _submit(page, "#mc-form button")
+    created = next(c for c in admin_read("/api/tcm-heritage/master-cases?include_draft=true")
+                   if c["title"] == "E2E 膝关节冷痛案")
+    assert created["commentary"] == "附子先煎一小时\n量自10g渐加，口麻即止", created   # 多行文本框：换行照录
+    expect(page.locator("#mc-list")).to_contain_text("E2E 胃脘痛案")
+    search = page.locator("#mc-search")
+    search.locator('[name="disease"]').fill("E2E痹证")
+    search.locator("button").click()
+    shown = page.locator("#mc-list tbody tr:visible")
+    expect(shown).to_have_count(1)   # 按病名筛：胃痛那条不在了，展开行默认收着
+    expect(shown.first).to_contain_text("E2E 膝关节冷痛案")
+    detail = page.locator(f'#mc-list tr[data-mcdetail="{created["id"]}"]')
+    toggle = page.locator(f'#mc-list button[data-mcopen="{created["id"]}"]')
+    expect(detail).to_be_hidden()
+    toggle.click()
+    expect(detail).to_be_visible()
+    expect(detail).to_contain_text("附子先煎一小时")
+    expect(detail).to_contain_text("E2E王医生")
+    expect(toggle).to_have_text("收起")
+    toggle.click()
+    expect(detail).to_be_hidden()
+
+
 def test_考核指标能在界面上新建_口径与变量提示取自后端(page, base_url, admin_read):
     """P2-93（动词级孤儿）：考核指标库原先只能改、不能建——各县自己的考核口径只能靠接口调用方。口径下拉与「可用变量」
     提示取自 `/api/spd/meta`（后端 `INDICATOR_SOURCES` 一份），换口径提示跟着换；按比例计分的目标取指标的目标值（P2-104）。"""

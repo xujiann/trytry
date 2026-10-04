@@ -807,6 +807,7 @@ async function renderTcm() {
   // 发出去的是要患者自己煎的饮片
   // 平和质不收分：后端判定时 `k != "balanced"`——它是"八种偏颇都不够格"的结论，不是一个维度
   const BIASED = spec.constitutions.filter((c) => c.key !== "balanced");
+  // 适宜技术表加「操作要点」列（P2-1408）：description 入库表单录得进、出参也带，原先表里只列名称、分类、适应症
   $("#page-body").innerHTML = `
     ${panel("智能辨证", `
       <form class="inline" id="tcm-diag"><input name="symptoms" placeholder="症状（逗号分隔，如：乏力,气短）" required style="min-width:280px"><button>辨证</button></form>
@@ -845,8 +846,9 @@ async function renderTcm() {
         <input name="description" placeholder="操作要点" style="min-width:200px">
         <button>入库</button>
       </form><p class="msg" id="tcm-tech-msg"></p>` : ""}
-      ${table(["名称", "分类", "适应症"], techniques, (t) =>
-        `<tr><td>${esc(t.name)}</td><td>${esc(t.category)}</td><td>${esc(t.indication)}</td></tr>`)}`)}`;
+      ${table(["名称", "分类", "适应症", "操作要点"], techniques, (t) =>
+        `<tr><td>${esc(t.name)}</td><td>${esc(t.category)}</td><td>${esc(t.indication)}</td>
+         <td style="white-space:pre-wrap">${esc(t.description) || "—"}</td></tr>`)}`)}`;
   $("#tcm-diag").onsubmit = async (e) => {
     e.preventDefault();
     const symptoms = new FormData(e.target).get("symptoms").split(/[,，]/).map((s) => s.trim()).filter(Boolean);
@@ -2076,6 +2078,9 @@ async function renderTcmHeritage() {
   ]);
   const canSim = ["doctor", "director", "admin"].includes(currentRole());   // 与建病例接口同一权限
   // ADR-0009 第五批：面板外壳改用 `panel()`（定义见 core.js），迁一页、人工过一页。
+  // 医案库（P2-1408）：四诊摘要、按语改成多行文本框；医案行可「展开」看就诊日期、传承人、四诊摘要、按语（renderCaseTable）——
+  // 原先录得进、页面上哪儿都看不见；检索加老师、病名、证型三个筛选——接口一直收 master_name / disease / syndrome，原先只送
+  // keyword（只搜处方、按语、标题），搜「痹证」「陈老」都是空表
   $("#page-body").innerHTML = `
     ${panel("传承概览", `
       ${table(["名老中医", "医案数", "已发布", "涉及病种", "传承人"], stats.masters, (m) =>
@@ -2089,12 +2094,15 @@ async function renderTcmHeritage() {
           <input name="title" placeholder="医案标题" required><input name="disease" placeholder="病名">
           <input name="syndrome" placeholder="证型"><input name="visit_date" placeholder="就诊日期 YYYY-MM-DD"></div>
         <div class="inline">
-          <input name="four_exams" placeholder="四诊摘要" style="min-width:280px">
+          <textarea name="four_exams" rows="3" placeholder="四诊摘要" style="min-width:280px;vertical-align:top"></textarea>
           <input name="treatment_method" placeholder="治法"><input name="prescription" placeholder="处方" style="min-width:220px">
-          <input name="commentary" placeholder="按语" style="min-width:280px"><button>保存草稿</button></div></form>
+          <textarea name="commentary" rows="3" placeholder="按语" style="min-width:280px;vertical-align:top"></textarea>
+          <button>保存草稿</button></div></form>
       <p class="msg" id="mc-msg"></p>`)}
     ${panel("医案库", `
-      <form class="inline" id="mc-search"><input name="keyword" placeholder="搜方药/按语/标题"><button>检索</button></form>
+      <form class="inline" id="mc-search">
+        <input name="master_name" placeholder="老师"><input name="disease" placeholder="病名"><input name="syndrome" placeholder="证型">
+        <input name="keyword" placeholder="搜方药/按语/标题"><button>检索</button></form>
       <div id="mc-list">${renderCaseTable(cases)}</div>`)}
     ${panel("模拟诊疗病例", `
       ${canSim ? `<details id="sim-new"><summary>新建模拟病例</summary>
@@ -2164,11 +2172,13 @@ async function renderTcmHeritage() {
   }
   $("#mc-search").onsubmit = async (e) => {
     e.preventDefault();
-    const kw = new FormData(e.target).get("keyword") || "";
+    // 老师 / 病名 / 证型 / 关键词照接口的参数名送，留空的不送（P2-1408）
+    const query = new URLSearchParams([["include_draft", "true"],
+      ...[...new FormData(e.target).entries()].filter(([, v]) => v !== "")]);
     // 先清空、查不到把原因写出来（P2-378，与 P2-358 同一写法）：原先 api() 抛错没人接，上一次的结果照旧挂着
     $("#mc-list").innerHTML = "";
     try {
-      const rows = await api(`/api/tcm-heritage/master-cases?include_draft=true&keyword=${encodeURIComponent(kw)}`);
+      const rows = await api(`/api/tcm-heritage/master-cases?${query}`);
       $("#mc-list").innerHTML = renderCaseTable(rows);
     } catch (err) {
       $("#mc-list").innerHTML = `<p class="msg err">${esc(err.message)}</p>`;
@@ -2176,6 +2186,14 @@ async function renderTcmHeritage() {
   };
   $("#mc-list").onclick = (e) => {
     const d = e.target.dataset;
+    if (d.mcopen) {
+      // 展开 / 收起这一条的就诊日期、传承人、四诊摘要、按语（P2-1408）：展开行紧跟在这一行后面（renderCaseTable）
+      const detail = e.target.closest("tr").nextElementSibling;
+      if (!detail || detail.dataset.mcdetail !== d.mcopen) return;
+      detail.classList.toggle("hidden");
+      e.target.textContent = detail.classList.contains("hidden") ? "展开" : "收起";
+      return;
+    }
     if (d.publish) return postAction(`/api/tcm-heritage/master-cases/${d.publish}/publish`, {}, "#mc-msg");
     if (d.unpublish) return postAction(`/api/tcm-heritage/master-cases/${d.unpublish}/unpublish`, {}, "#mc-msg");
   };
@@ -2253,8 +2271,21 @@ function renderCaseTable(rows) {
     `<td>${esc(c.disease || "—")} / ${esc(c.syndrome || "—")}</td><td>${esc(c.treatment_method || "—")}</td>` +
     `<td>${esc(c.prescription || "—")}</td>` +
     `<td>${c.published ? '<span class="tag ok">已发布</span>' : "草稿"}</td>` +
-    `<td>${c.published ? `<button class="btn sm" data-unpublish="${c.id}">撤回</button>`
-                       : `<button class="btn sm" data-publish="${c.id}">发布</button>`}</td></tr>`);
+    `<td><button class="btn secondary" data-mcopen="${c.id}">展开</button> ` +
+    `${c.published ? `<button class="btn sm" data-unpublish="${c.id}">撤回</button>`
+                   : `<button class="btn sm" data-publish="${c.id}">发布</button>`}</td></tr>` +
+    `<tr class="hidden" data-mcdetail="${c.id}"><td colspan="7">${masterCaseDetail(c)}</td></tr>`);
+}
+
+/* 医案行展开后的内容（P2-1408）：就诊日期、传承人、四诊摘要、按语——出参一直带着，原先清单行只列名老中医 / 标题 / 病证 /
+   治法 / 处方：按按语里的词检索命中了，处方列写的是另一回事，看不出为什么命中、也读不到那段按语。一律 esc()；多行照录入时的
+   换行显示，没填的写 —。 */
+function masterCaseDetail(c) {
+  const text = (v) => `<span style="white-space:pre-wrap">${esc(v) || "—"}</span>`;
+  return `<div style="font-size:13px;line-height:1.7">` +
+    `<div>就诊日期：${text(c.visit_date)}　传承人：${text(c.successor_name)}</div>` +
+    `<div><b>四诊摘要</b>：${text(c.four_exams)}</div>` +
+    `<div><b>按语</b>：${text(c.commentary)}</div></div>`;
 }
 
 
