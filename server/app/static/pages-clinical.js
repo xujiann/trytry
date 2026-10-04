@@ -2825,14 +2825,16 @@ async function renderCritical() {
          <td>${esc(r.reported_by)}</td><td>${esc(r.reported_at.slice(0, 16).replace("T", " "))}</td>
          <td>${esc(r.notified_at.slice(0, 16).replace("T", " "))}</td></tr>`)}`, { accent: "#c62828" }) : ""}
     ${panel("危急值清单", `<p class="msg" id="crit-msg"></p>${
-      // 所见照原样换行显示（P2-1363）：LIS 回传的逐项结果（哪一项、多少、参考范围、标志）只在所见里，清单原先只列结论
-      table(["报告ID", "申请单", "结论", "所见", "闭环状态", "操作"], critical, (r) => {
+      // 所见照原样换行显示（P2-1363）：LIS 回传的逐项结果（哪一项、多少、参考范围、标志）只在所见里，清单原先只列结论。
+      // 报告时间（P2-1364）：清单原先不出时间，何时出具只能查库；与上面「超时未确认」一栏同一口径（落库时刻原样截到分钟）
+      table(["报告ID", "申请单", "结论", "所见", "报告时间", "闭环状态", "操作"], critical, (r) => {
         const actions = (r.critical_status === "notified" || r.critical_status === "")
           ? `<button class="btn secondary" data-ack="${r.id}">确认接收</button>`
           : r.critical_status === "acknowledged"
           ? `<button class="btn secondary" data-resolve="${r.id}">处置反馈</button>` : "—";
         return `<tr><td>${r.id}</td><td>${r.request_id}</td><td><span class="tag red">${esc(r.conclusion)}</span></td>
           <td style="white-space:pre-wrap">${esc(r.finding) || "—"}</td>
+          <td>${esc(r.reported_at.slice(0, 16).replace("T", " "))}</td>
           <td>${statusTag(CRIT_STATUS, r.critical_status)}</td>
           <td>${actions} <button class="btn" data-trail="${r.id}">留痕</button></td></tr>`;
       })}`)}
@@ -2855,8 +2857,9 @@ async function renderCritical() {
       if (trail) {
         const actions = await api(`/api/exams/reports/${trail}/critical-actions`);
         $("#crit-trail-panel").classList.remove("hidden");
-        $("#crit-trail").innerHTML = table(["动作", "操作人"], actions, (a) =>
-          `<tr><td>${esc(a.action)}</td><td>${esc(a.actor)}</td></tr>`);
+        // 每一步的时刻（P2-1364）：何时通知、何时确认、何时处置，原先只有动作与操作人
+        $("#crit-trail").innerHTML = table(["时间", "动作", "操作人"], actions, (a) =>
+          `<tr><td>${esc(a.at.slice(0, 16).replace("T", " "))}</td><td>${esc(a.action)}</td><td>${esc(a.actor)}</td></tr>`);
       }
     } catch (err) { setMsg("#crit-msg", err.message, false); }
   };

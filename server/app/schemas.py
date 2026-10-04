@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Annotated
 
 from pydantic import AfterValidator, BaseModel, BeforeValidator, Field, FiniteFloat
@@ -173,6 +174,10 @@ class ExamReportOut(ExamReportCreate):
     id: int
     request_id: int
     critical_status: str = ""
+    # 出具时刻（P2-1364）：报告表现成的 `reported_at`，修订不改它（修订时刻看修订史）。危急值清单原先不出时间，何时出具只能
+    # 查库。只增键、加在末尾；与同模块已有的时刻（修订史的 `at`、超时未确认的 `reported_at`）同一口径——落库的 naive UTC
+    # 原样出 ISO 串，按本地时间显示随 P1-105 一起定
+    reported_at: datetime
 
     model_config = {"from_attributes": True}
 
@@ -209,6 +214,10 @@ class CriticalActionOut(BaseModel):
     report_id: int
     action: str
     actor: str
+    # 这一步的时刻（P2-1364）：取留痕的 `created_at`。模型注释写的是「通知→确认→处置反馈全程记录」，每一步都落了时刻，出参
+    # 原先只有动作与操作人——何时通知、何时确认、何时处置都查不到，从通知到处置各用了多久只能查库。只增键、加在末尾，
+    # 口径同 `ExamReportOut.reported_at`
+    at: datetime = Field(validation_alias="created_at")
 
     model_config = {"from_attributes": True}
 
