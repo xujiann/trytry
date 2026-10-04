@@ -417,9 +417,12 @@ def match_slots(
 
     start = resolve_business_date(from_date, field="from_date")
     end = (start + timedelta(days=days - 1)).isoformat()
+    # 候选号源的下界不早于业务日（P2-1301 跟进，与寻医 `find_doctors`、资源视图同一口径）：原先直接拿 `from_date` 当下界——
+    # 起始日期填过去，过去没约满的号也算「最早可约」、排在最前，照着给的号去约只得 409「该号源日期已过」（P2-64）。
+    # 窗口照请求的报，只是早于今天的号不算候选
     query = db.query(AppointmentSlot).filter(
         AppointmentSlot.resource_type == resource_type,
-        AppointmentSlot.slot_date >= start.isoformat(),
+        AppointmentSlot.slot_date >= max(start, clock.today()).isoformat(),
         AppointmentSlot.slot_date <= end,
         AppointmentSlot.booked < AppointmentSlot.capacity,
     )
