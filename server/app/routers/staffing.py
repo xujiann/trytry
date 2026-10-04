@@ -133,6 +133,48 @@ def _days(start: str, end: str, today: date) -> int:
     return max((e - s).days, 0)
 
 
+def _rows_in_year(
+    db: Session, scope: list[int] | None, target_year: int, today: date,
+) -> list[tuple[Secondment, str | None, int | None]]:
+    """统计年度内的派驻逐条截到年度内：(派驻, 职称等级, 落在年度内的天数)。下沉统计与台账的 `needs_level` 筛选共用（P2-1314）。
+
+    日期非法的天数给 None，由调用方单独计数（D-3，见 `dispatch_stats`）；整段不在统计年度内的不返回。未结束的算到今天。
+
+    P1-2：这里原先把 Employee 与 Secondment 整表拉进内存再在 Python 里筛。数据量小的时候看不出来，但随年份累积会慢慢变差。
+    改为 SQL 侧先筛：用 ISO 日期字符串的字典序与时序一致这一点，把"整段落在统计年度外"的派驻直接排除掉；职称等级用外连接
+    一次带出，不再整表建字典。
+    """
+    year_start, year_end = date(target_year, 1, 1), date(target_year, 12, 31)
+    query = (
+        db.query(Secondment, Employee.title_level)
+        .outerjoin(Employee, Employee.id == Secondment.employee_id)
+        .filter(Secondment.start_date <= year_end.isoformat())
+        .filter((Secondment.end_date == "") | (Secondment.end_date >= year_start.isoformat()))
+    )
+    if scope is not None:
+        query = query.filter(Secondment.to_org_id.in_(scope))
+    out: list[tuple[Secondment, str | None, int | None]] = []
+    for row, title_level in query.all():
+        # 截取落在统计年度内的区间
+        try:
+            start = datetime.strptime(row.start_date, "%Y-%m-%d").date()
+            end = datetime.strptime(row.end_date, "%Y-%m-%d").date() if row.end_date else today
+        except ValueError:
+            out.append((row, title_level, None))
+            continue
+        span_start, span_end = max(start, year_start), min(end, year_end)
+        if span_end < span_start:
+            continue  # 该派驻整段不在统计年度内
+        out.append((row, title_level, (span_end - span_start).days))
+    return out
+
+
+def _needs_title_level(row: Secondment, title_level: str | None, days_in_year: int) -> bool:
+    """长期派驻当年满半年、职称等级未填（P2-1314）：下沉统计不计入「中级及以上」、单独报 `unknown_title_level` 的那一类，
+    台账 `needs_level` 筛的也是这一句——页面提示「请在下方台账补齐等级」，两边数的必须是同一批人次。"""
+    return row.assignment_type == "long_term" and days_in_year >= LONG_TERM_DAYS and (title_level or "none") == "none"
+
+
 def _out(row: Secondment, emp: Employee | None, names: dict, today: date) -> dict:
     return {
         "id": row.id,
@@ -213,11 +255,17 @@ def list_secondments(
     group_id: int | None = None,
     assignment_type: str | None = None,
     ongoing: bool | None = None,
+    needs_level: bool | None = None,
     offset: int = 0,
     limit: int = 50,
     db: Session = Depends(get_db),
 ):
-    """派驻台账。`group_id` 按接收机构所属分组筛选。"""
+    """派驻台账。`group_id` 按接收机构所属分组筛选。
+
+    `needs_level=true` 只列「长期派驻当年满半年、职称等级未填」的（`false` 列其余；P2-1314）：下沉统计把这批人次单独报成
+    `unknown_title_level`，页面提示「请在下方台账补齐等级」——可它们恰是早建的行，台账按编号倒序只取一页就挤出去了，又没有
+    对应的筛选。判据与 `dispatch_stats` 同一组帮手，年度取当年（下沉统计的缺省年度）。
+    """
     query = db.query(Secondment)
     scope = resolve_org_scope(db, group_id, to_org_id)
     if scope is not None:
@@ -228,10 +276,14 @@ def list_secondments(
         query = query.filter(Secondment.end_date == "")
     elif ongoing is False:
         query = query.filter(Secondment.end_date != "")
+    today = clock.today()
+    if needs_level is not None:
+        flagged = Secondment.id.in_([row.id for row, title_level, days in _rows_in_year(db, scope, today.year, today)
+                                     if days is not None and _needs_title_level(row, title_level, days)])
+        query = query.filter(flagged if needs_level else ~flagged)
     rows = paginate(query.order_by(Secondment.id.desc()), response, offset, limit)
     employees = {e.id: e for e in db.query(Employee).all()}
     names = {o.id: o.name for o in db.query(Organization).all()}
-    today = clock.today()
     return [_out(r, employees.get(r.employee_id), names, today) for r in rows]
 
 
@@ -298,27 +350,11 @@ def dispatch_stats(
     - 派驻天数取落在统计年度内的部分，跨年派驻不重复计满。
     """
     target_year = year or clock.today().year
-    year_start = date(target_year, 1, 1)
-    year_end = date(target_year, 12, 31)
     today = clock.today()
+    # 取数与截年度内天数在 `_rows_in_year`（P1-2 的 SQL 预筛在那里），台账的 `needs_level` 筛选走同一个（P2-1314）
+    rows = _rows_in_year(db, resolve_org_scope(db, group_id, None), target_year, today)
 
-    # P1-2：这里原先把 Employee 与 Secondment 整表拉进内存再在 Python 里筛。
-    # 数据量小的时候看不出来，但随年份累积会慢慢变差。改为 SQL 侧先筛：
-    # 用 ISO 日期字符串的字典序与时序一致这一点，把"整段落在统计年度外"的
-    # 派驻直接排除掉；职称等级用外连接一次带出，不再整表建字典。
-    year_start_str, year_end_str = year_start.isoformat(), year_end.isoformat()
-    query = (
-        db.query(Secondment, Employee.title_level)
-        .outerjoin(Employee, Employee.id == Secondment.employee_id)
-        .filter(Secondment.start_date <= year_end_str)
-        .filter((Secondment.end_date == "") | (Secondment.end_date >= year_start_str))
-    )
-    scope = resolve_org_scope(db, group_id, None)
-    if scope is not None:
-        query = query.filter(Secondment.to_org_id.in_(scope))
-    rows = query.all()
-
-    org_ids = {row.to_org_id for row, _level in rows}
+    org_ids = {row.to_org_id for row, _level, _days in rows}
     names = (
         {
             o.id: o.name
@@ -331,27 +367,13 @@ def dispatch_stats(
     stats: dict[int, dict] = {}
     unknown_level = 0
     invalid_date = 0
-    for row, title_level in rows:
-        # 截取落在统计年度内的区间
-        try:
-            start = datetime.strptime(row.start_date, "%Y-%m-%d").date()
-        except ValueError:
-            # D-3：新数据已在入口挡下非法日期，存量数据里可能还有。
+    for row, title_level, days_in_year in rows:
+        if days_in_year is None:
+            # D-3：新数据已在入口挡下非法日期，存量数据里可能还有（开始或结束日期任一非法）。
             # **单独报出来，不能像原先那样 continue 掉**——一条记录无声无息地
             # 从指标里消失，比指标少一个人更难查。
             invalid_date += 1
             continue
-        end = today
-        if row.end_date:
-            try:
-                end = datetime.strptime(row.end_date, "%Y-%m-%d").date()
-            except ValueError:
-                invalid_date += 1
-                continue
-        span_start, span_end = max(start, year_start), min(end, year_end)
-        if span_end < span_start:
-            continue  # 该派驻整段不在统计年度内
-        days_in_year = (span_end - span_start).days
 
         entry = stats.setdefault(
             row.to_org_id,
@@ -369,11 +391,10 @@ def dispatch_stats(
             entry["ongoing"] += 1
         if row.assignment_type == "long_term" and days_in_year >= LONG_TERM_DAYS:
             entry["long_term_6m"] += 1
-            level = title_level or "none"
-            if level in SENIOR_LEVELS:
+            if (title_level or "none") in SENIOR_LEVELS:
                 entry["long_term_6m_senior"] += 1
-            elif level == "none":
-                unknown_level += 1
+        if _needs_title_level(row, title_level, days_in_year):
+            unknown_level += 1
 
     return {
         "year": target_year,

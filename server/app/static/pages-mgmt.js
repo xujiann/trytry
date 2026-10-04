@@ -2136,11 +2136,14 @@ const ASSIGN_TYPES = { long_term: "长期派驻", support: "短期支援", round
 // 与后端 staffing.TITLE_LEVELS 同一张表（键与名由 tests/test_staffing_title_level_options.py 钉住）
 const TITLE_LEVELS = { none: "未填", junior: "初级", intermediate: "中级", deputy_senior: "副高", senior: "正高" };
 
+/** 派驻台账的筛选（P2-1314）：只留在内存里、不进存储——点了提示条才只看待补职称等级的那几条，「看全部」回去。 */
+const STAFFING_FILTER = { needs_level: false };
+
 async function renderStaffing() {
   $("#page-desc").textContent =
     "监测指标只认长期派驻满半年且中级及以上——巡诊不算下沉，职称等级必须显式维护而不从职称文本推断";
   const [rows, stats, orgs] = await Promise.all([
-    api("/api/staffing/secondments?limit=100"),
+    api(`/api/staffing/secondments?limit=100${STAFFING_FILTER.needs_level ? "&needs_level=true" : ""}`),
     api("/api/staffing/dispatch-stats"),
     api("/api/organizations"),
   ]);
@@ -2148,7 +2151,8 @@ async function renderStaffing() {
     ${panel(`下沉指标（${stats.year} 年度）`, `
       ${stats.unknown_title_level
         ? `<p class="msg err">有 ${stats.unknown_title_level} 人次满足长期派驻满半年，
-            但职称等级未维护，未计入"中级及以上"。请在下方台账补齐等级。</p>` : ""}
+            但职称等级未维护，未计入"中级及以上"。请在下方台账补齐等级。
+            <button class="btn sm" data-stneeds="1">台账只看这 ${stats.unknown_title_level} 人次</button></p>` : ""}
       ${table(["接收机构", "在派", "累计", "长期满半年", "其中中级及以上"], stats.orgs, (o) =>
         `<tr><td>${esc(o.org_name)}</td><td>${o.ongoing}</td><td>${o.total}</td>
          <td>${o.long_term_6m}</td><td><b>${o.long_term_6m_senior}</b></td></tr>`)}
@@ -2172,6 +2176,8 @@ async function renderStaffing() {
     `)}
 
     ${panel("派驻台账", `
+      ${STAFFING_FILTER.needs_level ? `<p class="desc">只看长期派驻满半年、职称等级未维护的
+        <button class="btn sm secondary" data-stneeds="0">看全部</button></p>` : ""}
       ${table(["员工", "职称", "等级", "派出", "接收", "类型", "起止", "天数", "操作"], rows, (r) =>
         `<tr><td>${esc(r.employee_name)}</td><td>${esc(r.title || "—")}</td>
          <td>${r.title_level === "none"
@@ -2187,7 +2193,13 @@ async function renderStaffing() {
     postAction("/api/staffing/secondments",
       formJson(e.target, ["employee_id", "from_org_id", "to_org_id"]), "#st-msg"); };
   $("#page-body").onclick = async (e) => {
-    const { stend, stlevel } = e.target.dataset;
+    const { stend, stlevel, stneeds } = e.target.dataset;
+    if (stneeds) {
+      // 提示条要人「在下方台账补齐等级」，可要补的恰是早建的行、不在最新 100 条里（P2-1314）：点了台账按同一个判据重取，
+      // 补完一条重画时提示条与台账一起少一条
+      STAFFING_FILTER.needs_level = stneeds === "1";
+      return route();
+    }
     if (stend) {
       // P2-43：原先点一下就结束、结束日一律记今天。"长期派驻满半年"按起止日期算，记错了这一人次
       // 就进不了下沉指标，且不能撤回。后端早就收可选的结束日期（补录用），这里一并给出。
