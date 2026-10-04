@@ -2582,8 +2582,8 @@ const PH_EVENT_VIEW = { id: 0 };
 async function renderPublicHealth() {
   $("#page-desc").textContent = "应急事件指挥（I-IV级）、诊间医防提醒、五域卫生监测";
   // 处置中的事件单独取一遍、排在最前（P2-457，同 P2-456）：清单只回最新 100 起，挤出窗口的就没有「处置记录 / 结案」
-  const [recent, active, monitors] = await Promise.all([api("/api/publichealth/events"),
-    api("/api/publichealth/events?status=active"), api("/api/publichealth/monitors")]);
+  const [recent, active, monitors, orgs] = await Promise.all([api("/api/publichealth/events"),
+    api("/api/publichealth/events?status=active"), api("/api/publichealth/monitors"), api("/api/organizations")]);
   const events = actionableFirst(recent, active);
   // 处置记录（P2-477）：原先记得进、页面上看不到——哪起事件做过什么、谁做的，结案之后更是无从查起
   const viewing = events.find((ev) => ev.id === PH_EVENT_VIEW.id);
@@ -2591,6 +2591,13 @@ async function renderPublicHealth() {
     ? await api(`/api/publichealth/events/${viewing.id}/actions`).catch((err) => ({ error: err.message }))
     : [];
   const DM = { nutrition: "营养", environment: "环境", occupational: "职业", radiation: "放射", school: "学校" };
+  // 卫生监测清单印机构与日期（P2-1436）：原先只有领域、指标、值/阈值、状态四列——各机构的记录混在一张表里，标红的「超标」
+  // 看不出是哪家、哪天，没法下去复核（接口本就返回 org_id 与 record_date）。机构名按机构清单映射，映射不到回显编号；没填日期印「—」
+  const orgNames = Object.fromEntries(orgs.map((o) => [o.id, o.name]));
+  const monitorTable = (rows) => table(["机构", "领域", "指标", "值/阈值", "日期", "状态"], rows, (m) =>
+    `<tr><td>${esc(orgNames[m.org_id] || m.org_id)}</td><td>${esc(DM[m.domain] || m.domain)}</td><td>${esc(m.indicator)}</td>`
+    + `<td>${m.value} / ${m.threshold}</td><td>${esc(m.record_date) || "—"}</td>`
+    + `<td>${m.exceeded ? '<span class="tag red">超标</span>' : '<span class="tag green">正常</span>'}</td></tr>`);
   $("#page-body").innerHTML = `
     ${panel("事件立案", `
       <form class="inline" id="ev-form">
@@ -2614,11 +2621,28 @@ async function renderPublicHealth() {
         <input name="org_id" type="number" placeholder="机构ID" required><input name="indicator" placeholder="监测指标" required>
         <input name="value" type="number" step="any" placeholder="监测值" required><input name="threshold" type="number" step="any" placeholder="阈值" required>
         <input name="record_date" placeholder="日期"><button>登记</button></form>
-      ${table(["领域", "指标", "值/阈值", "状态"], monitors, (m) =>
-        `<tr><td>${esc(DM[m.domain] || m.domain)}</td><td>${esc(m.indicator)}</td><td>${m.value} / ${m.threshold}</td>
-         <td>${m.exceeded ? '<span class="tag red">超标</span>' : '<span class="tag green">正常</span>'}</td></tr>`)}`)}`;
+      <form class="inline" id="mon-filter">
+        <label style="font-size:13px"><input type="checkbox" name="exceeded" value="1"> 只看超标</label>
+        <button>查询</button></form>
+      <div id="mon-list">${monitorTable(monitors)}</div>`)}`;
   $("#ev-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/publichealth/events", formJson(e.target), "#ph-msg"); };
   $("#mon-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/publichealth/monitors", formJson(e.target, ["org_id", "value", "threshold"]), "#ph-msg"); };
+  // 只看超标（P2-1436）：接口本就收 exceeded、先筛再截最新 200 条，页面原先不用——超标的那几条挤在正常记录里翻不出来。
+  // 照本页诊间提醒查询的写法：先清空、查不到把原因写出来
+  $("#mon-filter").onsubmit = async (e) => {
+    e.preventDefault();
+    $("#mon-list").innerHTML = "";
+    const params = new URLSearchParams();
+    if (new FormData(e.target).get("exceeded")) params.set("exceeded", "true");
+    let rows;
+    try {
+      rows = await api(`/api/publichealth/monitors?${params}`);
+    } catch (err) {
+      $("#mon-list").innerHTML = `<p class="msg err">${esc(err.message)}</p>`;
+      return;
+    }
+    $("#mon-list").innerHTML = monitorTable(rows);
+  };
   $("#rem-form").onsubmit = async (e) => {
     e.preventDefault();
     // 先清空、查不到把原因写出来（P2-378，与 P2-358 同一写法）：原先 api() 抛错没人接，上一次的结果照旧挂着
