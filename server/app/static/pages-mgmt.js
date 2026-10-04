@@ -1026,6 +1026,13 @@ async function renderWorkflows() {
   };
 }
 
+/* 统一申请单中心按状态 / 类型筛（P2-1311）：后端早就收 status / request_type（P2-162 只改了后端），页面原先只有患者号一格——
+   卡片上数得出「待处理 1」，列出的最新 200 条里一条待处理都没有，又无处按状态筛。筛选只留在内存里、不进存储（同 JOB_RUN_FILTER）。
+   状态的取值与文案用本页的 UNIFIED_STATUS（卡片、统一状态列同一张表；回执的 by_status 只有计数没有文案）；类型名取自回执的
+   type_names，见过的记下来——筛到某一类为空时它不在这次回执里，下拉框照样认得出选中的是哪一类。 */
+const SR_FILTER = { status: "", request_type: "" };
+const SR_TYPE_NAMES = {};
+
 async function renderServiceRequests() {
   $("#page-desc").textContent = "预约 / 检查 / 会诊 / 用血 / 手术五类单据聚合视图，状态映射到统一口径";
   const pid = localStorage.getItem("medplat_sr_patient") || "";
@@ -1037,12 +1044,22 @@ async function renderServiceRequests() {
   // 失败退化成"筛选那一段报错 + 空聚合"，页面本身照常渲染。
   let data = { by_status: {}, by_type: {}, type_names: {}, total: 0, items: [] };
   let pidError = "";
-  try { data = await api(`/api/service-requests${pid ? `?patient_id=${pid}` : ""}`); }
+  const query = new URLSearchParams(Object.entries({ patient_id: pid, ...SR_FILTER }).filter(([, v]) => v));
+  try { data = await api(`/api/service-requests${query.toString() ? `?${query}` : ""}`); }
   catch (err) { pidError = err.message; }
+  Object.assign(SR_TYPE_NAMES, data.type_names);
+  const options = (pairs, picked) => pairs.map(([v, text]) =>
+    `<option value="${esc(v)}"${v === picked ? " selected" : ""}>${esc(text)}</option>`).join("");
+  // 标题照实写（P2-1311）：total 数的是所有状态（P2-162 的口径），原先叫「在办」，已完成、已取消也数在里面
+  const filtered = Boolean(SR_FILTER.status || SR_FILTER.request_type);
   // ADR-0009 第二步的**第一页**：面板外壳改用 `panel()`（定义见 core.js）。
   // 迁移范围只限本函数——组件与手写可以共存，ADR 的节奏就是"迁一页、人工过一页"。
   $("#page-body").innerHTML = panel("筛选", `
       <form class="inline" id="sr-form"><input name="patient_id" type="number" value="${esc(pid)}" placeholder="患者ID（留空看全部）">
+        <select name="status"><option value="">全部状态</option>${
+          options(Object.entries(UNIFIED_STATUS).map(([k, [text]]) => [k, text]), SR_FILTER.status)}</select>
+        <select name="request_type"><option value="">全部类型</option>${
+          options(Object.entries(SR_TYPE_NAMES), SR_FILTER.request_type)}</select>
         <button>查询</button></form>
       ${pidError ? `<p class="msg err">${esc(pidError)}</p>` : ""}
       <div class="cards">
@@ -1053,7 +1070,7 @@ async function renderServiceRequests() {
       </div>
       <p class="desc">刻意不建第六张单据表：五类单据各有必要的领域字段与状态机，这里做的是聚合视图。</p>`)
     // total 是全部命中项，清单只列最新的 returned 条（P2-162）——截断了就明说，别让人拿清单行数当总数
-    + panel(`在办事项（${data.total}${data.truncated ? `，列出最新 ${data.returned} 条` : ""}）`,
+    + panel(`${filtered ? "筛选结果" : "全部事项"}（${data.total}${data.truncated ? `，列出最新 ${data.returned} 条` : ""}）`,
       table(["类型", "单号", "患者", "机构", "事项", "统一状态", "原生状态", "时间"], data.items, (i) => {
         // `text` 在 UNIFIED_STATUS 里查不到时会**回落成后端原始状态码**，
         // 那是服务端数据，必须转义——迁移这一页时才看出来它一直是裸插值。
@@ -1064,7 +1081,11 @@ async function renderServiceRequests() {
           <td>${esc(i.created_at.slice(0, 16).replace("T", " "))}</td></tr>`;
       }));
   $("#sr-form").onsubmit = (e) => { e.preventDefault();
-    localStorage.setItem("medplat_sr_patient", new FormData(e.target).get("patient_id") || ""); route(); };
+    const f = new FormData(e.target);
+    localStorage.setItem("medplat_sr_patient", f.get("patient_id") || "");
+    SR_FILTER.status = f.get("status") || "";
+    SR_FILTER.request_type = f.get("request_type") || "";
+    route(); };
 }
 
 /* ---------------- 定时任务 ---------------- */

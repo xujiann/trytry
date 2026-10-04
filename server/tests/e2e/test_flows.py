@@ -442,6 +442,39 @@ def test_exam_order_report_and_critical_closed_loop(page, base_url, seed):
     expect(page.locator("#crit-trail")).to_contain_text("处置反馈")
 
 
+def test_统一申请单中心按状态和类型筛_标题照实写(page, base_url, admin_call):
+    """P2-1311（第三十八批扫描 AB1-6）：筛选栏原先只有患者号——卡片数得出「待处理」，最新 200 条里却可能一条都没有、又无处按状态筛；
+    标题「在办事项（N）」把已完成、已取消也数进去。修后加状态与类型下拉、选了带参数重取，标题不筛写「全部事项」、筛了写「筛选结果」。"""
+    org = admin_call("POST", "/api/organizations",
+                     {"name": "E2E统一申请单卫生院", "org_type": "township", "level": "township"})
+    patient = admin_call("POST", "/api/patients", {"name": "E2E统一申请单患者", "id_card": "320981197202025218", "gender": "男"})
+    def exam(name):
+        return admin_call("POST", "/api/exams", {"patient_id": patient["id"], "from_org_id": org["id"],
+                                                 "center_type": "lab", "item_code": "E2E-P21311", "item_name": name})
+
+    pending, done = exam("E2E统一申请单待处理"), exam("E2E统一申请单已完成")
+    admin_call("POST", f"/api/exams/{done['id']}/claim")
+    admin_call("POST", f"/api/exams/{done['id']}/report", {"finding": "", "conclusion": "E2E 未见异常", "critical": False})
+
+    _login(page, base_url)
+    _open_page(page, "servicerequests", "统一申请单中心")
+    titles = page.locator("#page-body .panel h3")
+    expect(titles.nth(1)).to_contain_text("全部事项（")   # 修前「在办事项（」
+    page.fill("#sr-form input[name=patient_id]", str(patient["id"]))
+    page.select_option("#sr-form select[name=status]", "pending")   # 修前没有这个下拉
+    page.select_option("#sr-form select[name=request_type]", "exam")
+    _submit(page, "#sr-form button")
+
+    expect(titles.nth(1)).to_have_text("筛选结果（1）")
+    rows = page.locator("#page-body table tbody tr")
+    expect(rows).to_have_count(1)
+    expect(rows.first.locator("td").nth(1)).to_have_text(str(pending["id"]))
+    expect(rows.first).to_contain_text("E2E统一申请单待处理")
+    expect(rows.first).to_contain_text("待处理")
+    expect(page.locator("#sr-form select[name=status]")).to_have_value("pending")   # 重画后选中的还在
+    expect(page.locator("#sr-form select[name=request_type]")).to_have_value("exam")
+
+
 @pytest.fixture(scope="session")
 def recognition_seed(base_url, seed):
     """开单前互认的前置：同一患者同一项目 30 天内已有一份报告（互认目录未配置 = 不管控）。"""
