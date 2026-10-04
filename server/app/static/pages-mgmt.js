@@ -63,10 +63,12 @@ async function renderClinicalDocs() {
   // 交班表单默认选正在看的病区，其次是当前住院记录所在的病区
   const handoverWard = String(HANDOVER_FILTER.ward_id || (inHospital.find((a) => a.id === current) || {}).ward_id || "");
 
+  // 选择框写「病区 床号 姓名」（P2-1335，与医生移动端查房同一句）：原先只有「#住院号 患者ID 诊断」，同诊断的几位分不开，
+  // 病程、护理、体温单容易写到别人名下
   $("#page-body").innerHTML = `
     ${panel("选择住院记录", `
       <form class="inline" id="doc-pick"><select name="admission_id">${
-        inHospital.map((a) => `<option value="${a.id}" ${a.id === current ? "selected" : ""}>#${a.id} 患者${a.patient_id} ${esc(a.diagnosis_name || "")}</option>`).join("")
+        inHospital.map((a) => `<option value="${a.id}" ${a.id === current ? "selected" : ""}>${esc(a.ward_name)} ${esc(a.bed_no)} ${esc(a.patient_name)} · ${esc(a.diagnosis_name || "住院")}（住院号 ${a.id}）</option>`).join("")
       }</select><button>切换</button></form>
       ${completeness ? `<p class="msg ${completeness.complete ? "ok" : "err"}">${
         completeness.complete ? "文书完整" : "缺项：" + completeness.missing.join("、")}</p>` : '<p class="msg">暂无在院患者</p>'}

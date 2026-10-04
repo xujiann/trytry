@@ -964,9 +964,11 @@ async function loadRound() {
     return;
   }
   if (!admissions.some((a) => a.id === roundAdmissionId)) roundAdmissionId = admissions[0].id;
+  // 选项写「病区 床号 姓名」（P2-1335，与桌面住院临床文书同一句）：原先只有「诊断（住院号 N）」，同诊断的几位分不开，
+  // 查房的病程、体征容易记到别人名下
   picker.innerHTML = admissions.map((a) =>
     `<option value="${a.id}" ${a.id === roundAdmissionId ? "selected" : ""}>
-       ${esc(a.diagnosis_name || "住院")}（住院号 ${a.id}）</option>`).join("");
+       ${esc(a.ward_name)} ${esc(a.bed_no)} ${esc(a.patient_name)} · ${esc(a.diagnosis_name || "住院")}（住院号 ${a.id}）</option>`).join("");
   $("#round-note").classList.remove("hidden");
   $("#round-vital").classList.remove("hidden");
   await refreshRoundDetail();

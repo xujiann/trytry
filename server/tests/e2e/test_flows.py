@@ -5058,7 +5058,9 @@ def test_住院页的转床_开医嘱_病案首页都在页内表单里录入(pa
     page.click(f'button[data-transfer="{adm_id}"]')
     _redrawn(page, lambda: _spd_modal(page, {"bed_id": str(bed2)}))
     row = page.locator("tr", has=page.locator(f'button[data-transfer="{adm_id}"]'))
-    expect(row).to_contain_text(f"E2E内科病区 / {bed2}")
+    # 病区 床号、姓名（P2-1335）：原先印「E2E内科病区 / {床位主键}」、患者列只有患者 ID
+    expect(row).to_contain_text("E2E内科病区 N-02")
+    expect(row).to_contain_text("E2E住院患者")
 
     page.click(f'button[data-order="{adm_id}"]')
     _redrawn(page, lambda: _spd_modal(page, {"order_type": "temp", "content": "E2E呋塞米 20mg iv st"}))

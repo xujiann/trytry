@@ -228,9 +228,15 @@ class AdmissionOut(BaseModel):
     status: str
     admitted_at: str
     discharged_at: str | None
+    # 认人用的三项（P2-1335）：只增键、排在末尾，原有键与次序不动。页面原先拿 `bed_id`（床位主键，全县连续编号）当床号，
+    # 印成「外科病区 / 7」——床号按病区从头编，那其实是外科 02 床；住院临床文书、医生移动端查房的选择框只有住院号、
+    # 患者 ID 与诊断，同诊断的几位分不开。居民端对同一次住院早就按床号显示（portal.py `portal_my_admissions`）
+    ward_name: str
+    bed_no: str
+    patient_name: str
 
 
-def _admission_out(a: Admission) -> dict:
+def _admission_out(a: Admission, wards: dict[int, str], beds: dict[int, str], patients: dict[int, str]) -> dict:
     return {
         "id": a.id,
         "patient_id": a.patient_id,
@@ -242,7 +248,26 @@ def _admission_out(a: Admission) -> dict:
         "status": a.status,
         "admitted_at": a.admitted_at.isoformat(),
         "discharged_at": a.discharged_at.isoformat() if a.discharged_at else None,
+        "ward_name": wards.get(a.ward_id, ""),
+        "bed_no": beds.get(a.bed_id, ""),
+        "patient_name": patients.get(a.patient_id, ""),
     }
+
+
+def _admissions_out(db: Session, admissions: list[Admission]) -> list[dict]:
+    """住院行出参：入院 / 转科 / 出院回执与住院清单都从这里出（同形）。
+
+    病区名、床号、患者姓名按这一批的 id 各取一次（P2-1335，与随访清单 `followups._name_maps` 同一写法），不逐行查库：
+    清单一页最多 500 行，逐行查就是上千次往返。
+    """
+    if not admissions:
+        return []
+    wards = row_dict(db.query(Ward.id, Ward.name).filter(Ward.id.in_({a.ward_id for a in admissions})).all())
+    beds = row_dict(db.query(Bed.id, Bed.bed_no).filter(Bed.id.in_({a.bed_id for a in admissions})).all())
+    patients = row_dict(
+        db.query(Patient.id, Patient.name).filter(Patient.id.in_({a.patient_id for a in admissions})).all()
+    )
+    return [_admission_out(a, wards, beds, patients) for a in admissions]
 
 
 @router.post(
@@ -302,7 +327,7 @@ def create_admission(
     # uq_admission_patient_admitted（部分唯一索引）是兜底，抢输者拿到的
     # 409 文案与顺序请求完全一致——对调用方来说两种情形没有区别。
     insert_or_conflict(db, admission, "该患者已在院，不可重复入院登记")
-    return _admission_out(admission)
+    return _admissions_out(db, [admission])[0]
 
 
 @router.get("/admissions", response_model=list[AdmissionOut])
@@ -319,10 +344,7 @@ def list_admissions(
     if status:
         q = q.filter(Admission.status == status)
     q = scope_patient_list(db, user, q, Admission, patient_id, "admission")
-    return [
-        _admission_out(a)
-        for a in paginate(q.order_by(Admission.id.desc()), response, offset, limit)
-    ]
+    return _admissions_out(db, paginate(q.order_by(Admission.id.desc()), response, offset, limit))
 
 
 class TransferBody(BaseModel):
@@ -388,7 +410,7 @@ def transfer_admission(admission_id: int, body: TransferBody, db: Session = Depe
     _release_bed(db, old_bed_id)
     db.commit()
     db.refresh(admission)
-    return _admission_out(admission)
+    return _admissions_out(db, [admission])[0]
 
 
 def _admission_visible_or_404(db: Session, admission_id: int, user: User, resource: str) -> Admission:
@@ -618,7 +640,7 @@ def discharge_admission(admission_id: int, db: Session = Depends(get_db), user: 
     })
     db.commit()
     db.refresh(admission)
-    return _admission_out(admission)
+    return _admissions_out(db, [admission])[0]
 
 
 def _assert_billing_settled(db: Session, admission: Admission) -> None:

@@ -17,6 +17,8 @@
 - 入院/转科/出院回执与列表行**同形**（`_admission_out` 唯一产地）；
   医嘱停止的两条产地：手工停止带 `stopped_by_name`，出院批量停止**不带**
   （bulk UPDATE 不回填姓名，保持空串）——两条都钉住。
+- 住院行末尾三键 `ward_name` / `bed_no` / `patient_name` 是 P2-1335 只增追加的（页面按床号与姓名认人，
+  原先只有床位主键与患者 ID），原有十键与次序不动；转科后两项随新床变。
 """
 import pytest
 from fastapi.testclient import TestClient
@@ -30,6 +32,7 @@ BED_KEYS = ["id", "ward_id", "bed_no", "status"]
 ADMISSION_KEYS = [
     "id", "patient_id", "org_id", "ward_id", "bed_id", "doctor_name",
     "diagnosis_name", "status", "admitted_at", "discharged_at",
+    "ward_name", "bed_no", "patient_name",
 ]
 CASE_KEYS = [
     "id", "admission_id", "discharge_diagnosis", "operation", "total_cost",
@@ -221,6 +224,9 @@ def test_入院回执精确形状与键序(seed):
         "status": "admitted",
         "admitted_at": body["admitted_at"],
         "discharged_at": None,
+        "ward_name": "契约一病区",
+        "bed_no": "A-01",
+        "patient_name": "契约住院患者一",
     }
     assert isinstance(body["admitted_at"], str)
 
@@ -228,6 +234,7 @@ def test_入院回执精确形状与键序(seed):
 def test_转科回执_仅病区床位变(seed):
     assert seed["a1_transferred"] == {
         **seed["a1"], "ward_id": seed["w2"]["id"], "bed_id": seed["b2"]["id"],
+        "ward_name": "契约二病区", "bed_no": "B-01",
     }
 
 

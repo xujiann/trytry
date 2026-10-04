@@ -2947,7 +2947,9 @@ async function renderInpatient() {
         const prints = `<button class="btn secondary" data-print-bill="${a.id}">打印费用清单</button>
              <button class="btn secondary" data-print-case="${a.id}">打印病案首页</button>`
           + (a.status === "admitted" ? "" : ` <button class="btn secondary" data-print-discharge="${a.id}">打印出院小结</button>`);
-        return `<tr><td>${a.id}</td><td>${a.patient_id}</td><td>${esc(wardName[a.ward_id] || a.ward_id)} / ${a.bed_id}</td>
+        // 病区 床号、患者姓名（P2-1335，后端随住院行带出）：原先「病区/床位」印床位主键 `bed_id`（全县连续编号）——「外科病区 / 7」
+        // 其实是外科 02 床，病区里真有 07 床时指的就是另一位；「患者」列只有患者 ID
+        return `<tr><td>${a.id}</td><td>${esc(a.patient_name) || a.patient_id}</td><td>${esc(a.ward_name)} ${esc(a.bed_no)}</td>
           <td>${esc(a.diagnosis_name)}</td><td>${statusTag(AS, a.status)}</td>
           <td>${actions} <button class="btn" data-orders="${a.id}">医嘱单</button> ${prints}</td></tr>`;
       }))}
