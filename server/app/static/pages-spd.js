@@ -297,13 +297,13 @@ function spdLatestScales(scales) {
 }
 
 // 与 spdQuestionFields 配对：没答的题不进 answers（规则按「没有这个字段」处理，不当成答了空串或 0）；
-// 多选拆成列表，数值题能读成数就交数
+// 多选拆成列表、同一项写了几遍只留首次那个（P2-1274：每个选项只能选一次，后端评分同样按标签去重），数值题能读成数就交数
 function spdCollectAnswers(items, form, prefix) {
   const answers = {};
   for (const it of items || []) {
     const raw = String(form[prefix + it.key] ?? "").trim();
     if (!raw) continue;
-    if (it.type === "multi") answers[it.key] = raw.split(/[,，、]/).map((s) => s.trim()).filter(Boolean);
+    if (it.type === "multi") answers[it.key] = [...new Set(raw.split(/[,，、]/).map((s) => s.trim()).filter(Boolean))];
     else if (it.type === "number" && !Number.isNaN(Number(raw))) answers[it.key] = Number(raw);
     else answers[it.key] = raw;
   }

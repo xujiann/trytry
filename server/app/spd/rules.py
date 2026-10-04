@@ -376,7 +376,7 @@ _SCORE_DIGITS = 6
 def score_scale(items: list[dict], answers: dict, scoring: dict) -> dict:
     """量表评分：按题目选项分值累加，再落到 scoring.ranges 给出风险等级与建议。
 
-    题型只认三种：single（单选，取选中项分值）、multi（多选，累加）、
+    题型只认三种：single（单选，取选中项分值）、multi（多选，选中的各项累加，同一项只计一次）、
     number（数值题，配 `score_per_unit` 时按值折算，否则不计分）。
     未作答的题按 0 分计入，并在返回里给出 `answered` / `total_items`——
     做了一半的量表不该看起来和"全选最低分"一样。
@@ -392,8 +392,12 @@ def score_scale(items: list[dict], answers: dict, scoring: dict) -> dict:
         item_type = item.get("type", "single")
         options = {str(o.get("label")): o.get("score", 0) for o in item.get("options", [])}
         if item_type == "multi":
-            for one in value if isinstance(value, list) else [value]:
-                parts.append(float(options.get(str(one), 0) or 0))
+            # 按标签去重、保持首次出现的顺序再累加（P2-1274）：多选题每个选项只能选一次。原先逐个元素累加，管理端逐题作答的
+            # 多选是「逗号分隔」文本框，只有「头晕」一个症状的录成「头晕,头晕」按两遍计分，从低危变中危疑似、进目标池；评估录
+            # 「胸闷,心悸,胸闷」（应 3 分中危）得 5 分高危，档案风险改写 high 并自动派高危复诊。不在选项里的标签照旧按 0 分
+            picked = dict.fromkeys(str(one) for one in (value if isinstance(value, list) else [value]))
+            for one in picked:
+                parts.append(float(options.get(one, 0) or 0))
         elif item_type == "number":
             per = _as_number(item.get("score_per_unit"))
             number = _as_number(value)
