@@ -12,7 +12,7 @@ from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import or_
+from sqlalchemy import and_, exists, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -29,6 +29,7 @@ from .followups import FOLLOWUP_TITLE_MAX
 from ..models import (
     Admission,
     FollowupTask,
+    HighValueConsumable,
     OperatingRoom,
     Organization,
     Patient,
@@ -308,6 +309,26 @@ class ApproveIn(BaseModel):
     note: str = ""
 
 
+#: 否决被拦时文案里列出的耗材条码个数上限（P2-1399）：再多的写「等 N 件」，不让一句报错拖成一屏
+IMPLANT_BARCODES_SHOWN = 5
+
+
+def _refuse_if_implanted(db: Session, request_id: int) -> None:
+    """已按这张申请登记了高值耗材（耗材的 `used_surgery_id` 指向它）的，不可否决：409 并列出条码（P2-1399）。
+
+    急诊先植入、后被否决，追溯链原先记成「植入于已取消的手术」（申请已是已取消），想改挂到重提的申请又因耗材「已使用」
+    409——登记没有逆操作（P2-752），登错了改不回。与 `materials.use_consumable` 里「不让登记到已取消的手术」（P2-763）是
+    同一条规矩的两侧：那边拦「往已取消的手术上登记」，这边拦「把已登记了耗材的手术取消」。
+    """
+    barcodes = [code for (code,) in db.query(HighValueConsumable.barcode).filter(
+        HighValueConsumable.used_surgery_id == request_id).order_by(HighValueConsumable.id)]
+    if barcodes:
+        more = f" 等 {len(barcodes)} 件" if len(barcodes) > IMPLANT_BARCODES_SHOWN else ""
+        raise HTTPException(status_code=409, detail=f"这张申请已登记了高值耗材（条码 "
+                                                    f"{'、'.join(barcodes[:IMPLANT_BARCODES_SHOWN])}{more}），"
+                                                    "不能否决——否决后耗材追溯会记成植入于一台已取消的手术")
+
+
 @router.post("/requests/{request_id}/approve", response_model=SurgeryStatusOut,
              dependencies=[Depends(require_roles("director"))])
 def approve_request(
@@ -327,14 +348,24 @@ def approve_request(
         raise HTTPException(status_code=403, detail="不得审批本人提出的手术申请")
     if body.approved and _died_in_surgery(db, request.admission_id):   # 只拦批准，驳回照旧放行（P2-1396）
         raise HTTPException(status_code=409, detail=f"{_DIED_IN_SURGERY}，不可审批通过")
+    expect = SurgeryRequest.status == "requested"
+    if not body.approved:
+        # 已按这张申请登记了高值耗材的不可否决（P2-1399）。先锁外看一眼（报错要列出条码），「没有耗材指向它」再压进下面
+        # 那条带状态条件的 UPDATE：看完到翻转之间提交的登记也拦得住。剩下的窗口在登记那一侧——`use_consumable` 锁外读申请
+        # 状态，它读到「待审批」、登记却在这条 UPDATE 开始执行之后才提交的，两路都成，耗材照样挂到已取消的申请上（两条
+        # UPDATE 改的是两张表，这条看不见那边还没提交的行）；要收口得两侧都先锁申请那一行再判，属登记链路的改动，不在此列
+        _refuse_if_implanted(db, request.id)
+        expect = and_(expect, ~exists().where(HighValueConsumable.used_surgery_id == request.id))
     # 审批与「还待审批」压进同一条 UPDATE（P2-1184，与物资采购 P2-403、药品采购 P2-759、用血 P2-110 同一个写法）：上面那道
     # 预检是锁外读的——两位主任一个批准、一个驳回同时到，原先整行写回、后提交的把先提交的结论改掉，两路都 200：驳回的
     # 主任以为已经否决，申请却成了「已审批」，经办照常排进手术间、患者收到「手术已安排」
-    if not move_row(db, SurgeryRequest, request.id, SurgeryRequest.status == "requested",
+    if not move_row(db, SurgeryRequest, request.id, expect,
                     status="approved" if body.approved else "cancelled", approved_by=user.id,
                     approved_at=utcnow()):
         db.rollback()
         db.refresh(request)  # 抢输了就按库里的现状措辞
+        if request.status == "requested" and not body.approved:
+            _refuse_if_implanted(db, request.id)   # 还待审批却没改到：输给了刚提交的耗材登记（P2-1399）
         raise HTTPException(status_code=409, detail=f"当前状态 {SURGERY_STATUS_NAMES.get(request.status, request.status)} 不可审批")
     db.commit()
     return {"id": request.id, "status": request.status}
