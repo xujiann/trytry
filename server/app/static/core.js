@@ -346,7 +346,14 @@ function lineChart(months, series, colors) {
   return `<svg width="${w}" height="${h}" role="img">${svg}</svg>`;
 }
 
-/* 块2：指标下钻——指标卡/预警横幅点击后拉取明细，行可跳转对应业务页 */
+/* 块2：指标下钻——指标卡/预警横幅点击后拉取明细；目标页列得出这一类的，明细行可跳转对应业务页 */
+
+/* 明细行点了跳去业务页的，只有目标页确实列得出这一类的指标（P2-1315）：跳转只是 `nav(page)`、不带筛选，目标页只取最新
+   一页又没有这一类的筛选时（转诊的上转 / 下转 / 结案、退回处方、已报告 / 已互认的检查、基层诊疗人次、慢病超期），
+   跳过去找不到这一行——这几项明细行照常显示、不画跳转。医废滞留的目标页已按预警接口逐包列出（P2-1309），可跳。逐项核对与
+   依据见 tests/test_metrics_drilldown_jump_targets.py 的对照表；目标页补了取数 / 筛选，先改那张表再加进来 */
+const DRILL_GO = new Set(["critical_values", "stock_alerts", "infectious_recent", "pending_reviews", "medwaste_overdue"]);
+
 async function openDrilldown(metric, offset = 0) {
   // 局部变量叫 `drill` 而不是 `panel`：`panel()` 是面板组件（本文件上方），
   // 在会用到它的文件里再声明一个同名局部变量，迟早有人在这儿写下 `panel(...)`
@@ -357,6 +364,7 @@ async function openDrilldown(metric, offset = 0) {
   drill.innerHTML = "<div class='panel'>明细加载中…</div>";
   const limit = 20;
   const d = await api(`/api/metrics/drilldown?metric=${encodeURIComponent(metric)}&offset=${offset}&limit=${limit}`);
+  const go = DRILL_GO.has(metric);
   const pager = [];
   if (offset > 0) pager.push(`<button class="btn secondary" data-drillpage="${Math.max(offset - limit, 0)}">上一页</button>`);
   if (offset + limit < d.total) pager.push(`<button class="btn secondary" data-drillpage="${offset + limit}">下一页</button>`);
@@ -365,9 +373,10 @@ async function openDrilldown(metric, offset = 0) {
   // docs/adr/0009 第十一批，别当成"漏迁的"。
   drill.innerHTML = `<div class="panel" style="border-left:4px solid #0b6e6e">
     <h3>${esc(d.label)} 明细（${d.total}）　<button class="btn secondary" data-drillclose="1">关闭</button></h3>
-    <p class="desc" style="font-size:12.5px">点击明细行跳转「${esc(d.page)}」业务页；口径与驾驶舱指标、预警横幅一致</p>
+    <p class="desc" style="font-size:12.5px">${go ? `点击明细行跳转「${esc(d.page)}」业务页`
+      : `「${esc(d.page)}」业务页列不出、也筛不出这一类，明细行不跳转，在这里翻页查看`}；口径与驾驶舱指标、预警横幅一致</p>
     ${table(d.columns, d.items, (row) =>
-      `<tr data-drillgo="${esc(d.page)}" style="cursor:pointer">${
+      `<tr${go ? ` data-drillgo="${esc(d.page)}" style="cursor:pointer"` : ""}>${
         d.fields.map((f) => `<td>${esc(row[f] ?? "—")}</td>`).join("")}</tr>`)}
     <div style="margin-top:8px">${pager.join(" ")}　<span style="font-size:12.5px;color:#5b6773">第 ${Math.floor(offset / limit) + 1} 页 / 共 ${Math.max(Math.ceil(d.total / limit), 1)} 页</span></div></div>`;
   drill.dataset.metric = metric;
