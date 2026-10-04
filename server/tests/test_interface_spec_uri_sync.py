@@ -56,3 +56,16 @@ def test_批量导出的manifest字段与单轮上限照代码写():
     assert not missing, f"对接规范没写 manifest 的这些字段：{missing}"
     limits = [int(n) for n in re.findall(r"至多(?:导出|取) (\d+) 条", SPEC)]
     assert limits and set(limits) == {integration.FHIR_EXPORT_BATCH_LIMIT}, (limits, integration.FHIR_EXPORT_BATCH_LIMIT)
+
+
+def test_随访映射行的LOINC照入站实际认的编码写():
+    """跟进（P2-1267）：映射表随访一行原先写「sbp/dbp→85354-9(LOINC)」，入站（`fhir_observation`）只按 `_LOINC_FIELDS`
+    认分量 8480-6 / 8462-4，85354-9 是血压组合、本身不取数——照规范把收缩压、舒张压报成 85354-9 是 422「未识别到支持的
+    观测指标」。这里逐个对：入站认的每个 LOINC 都写在这一行，血压两项写成「字段→编码」，85354-9 不再是哪个字段的目标。"""
+    row = next(line for line in SPEC.splitlines() if line.startswith("| 随访 FollowUp |"))
+    missing = sorted(code for code in integration._LOINC_FIELDS if code not in row)
+    assert not missing, f"随访映射行没写入站实际认的这些 LOINC：{missing}"
+    for code, field in integration._LOINC_FIELDS.items():
+        if field in ("sbp", "dbp"):
+            assert f"{field}→{code}" in row, (field, code, row)
+    assert not re.search(r"→\s*85354-9", row), row
