@@ -226,6 +226,21 @@ _DISPENSE_FLOW = {"ordered": "dispensed", "dispensed": "decocted", "decocted": "
 _NO_DECOCT_FLOW = {"ordered": "dispensed", "dispensed": "delivering", "delivering": "delivered"}
 
 
+def _next_status(order: TcmDispenseOrder) -> str | None:
+    """这张单按煎法走的下一步（状态码），终态为 None：代煎走 `_DISPENSE_FLOW`，自煎（不代煎）走 `_NO_DECOCT_FLOW`。
+
+    流转（`advance_order`）与出参的 `next_status_name` 共用这一个判据（P2-1407）：页面照出参写按钮的字、不另抄一份流转表，
+    按钮上写的下一步就是点下去真走的那一步。"""
+    return (_DISPENSE_FLOW if order.decoct else _NO_DECOCT_FLOW).get(order.status)
+
+
+def _with_next_step(order: TcmDispenseOrder) -> TcmDispenseOrder:
+    """挂上 `next_status_name` 供响应模型取用（不入库，同 referrals `_with_label`）：下一步状态的中文，终态为 None（P2-1407）。"""
+    nxt = _next_status(order)
+    setattr(order, "next_status_name", DISPENSE_ORDER_STATUS_NAMES.get(nxt, nxt) if nxt else None)
+    return order
+
+
 class DispenseCreate(BaseModel):
     patient_id: int
     from_org_id: int
@@ -239,6 +254,10 @@ class DispenseOut(DispenseCreate):
     status: str
     # 出参不带「不能只填空格」（P1-109）：修之前存进去的纯空白行要原样读出来，而不是让整个清单 500
     herbs: str = Field(min_length=1, max_length=1024)
+    #: 下一步流转到的状态（中文，`_with_next_step` 挂上），终态为 null（P2-1407）。新增字段、排在末尾，原有键与次序不动：
+    #: 页面的「流转」按钮原先一律只写「流转」——同在「已调配」的代煎单与自煎单看着一模一样，点下去一张记成「已煎煮」
+    #: （没煎也这么记）、一张直接「配送中」；页面按它写明下一步
+    next_status_name: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -261,7 +280,7 @@ def create_order(
     db.add(order)
     db.commit()
     db.refresh(order)
-    return order
+    return _with_next_step(order)
 
 
 @router.get("/dispense-orders", response_model=list[DispenseOut])
@@ -269,7 +288,7 @@ def list_orders(status: str | None = None, db: Session = Depends(get_db)):
     query = db.query(TcmDispenseOrder)
     if status:
         query = query.filter(TcmDispenseOrder.status == status)
-    return query.order_by(TcmDispenseOrder.id.desc()).limit(200).all()
+    return [_with_next_step(o) for o in query.order_by(TcmDispenseOrder.id.desc()).limit(200).all()]
 
 
 @router.post(
@@ -281,8 +300,7 @@ def advance_order(order_id: int, db: Session = Depends(get_db)):
     order = db.get(TcmDispenseOrder, order_id)
     if order is None:
         raise HTTPException(status_code=404, detail="中药订单不存在")
-    flow = _DISPENSE_FLOW if order.decoct else _NO_DECOCT_FLOW
-    next_status = flow.get(order.status)
+    next_status = _next_status(order)
     if next_status is None:
         raise HTTPException(status_code=409, detail=f"状态 {DISPENSE_ORDER_STATUS_NAMES.get(order.status, order.status)} 已是终态")
     # 走一步压进带状态条件的 UPDATE（P2-317）：原先锁外读改写，煎药房与配送同时点，后提交的照自己读到的旧状态写——
@@ -295,7 +313,7 @@ def advance_order(order_id: int, db: Session = Depends(get_db)):
             detail=f"订单状态已变为 {DISPENSE_ORDER_STATUS_NAMES.get(order.status, order.status)}，请刷新后再操作")
     db.commit()
     db.refresh(order)
-    return order
+    return _with_next_step(order)
 
 
 # ---------- ㉑ 中医药适宜技术库 ----------

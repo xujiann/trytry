@@ -801,6 +801,10 @@ async function renderTcm() {
     ...["ordered", "dispensed", "decocted", "delivering"].map((st) => api(`/api/tcm/dispense-orders?status=${st}`))]);
   const orders = actionableFirst(recent, ...open);
   const DS = { ordered: "已下单", dispensed: "已调配", decocted: "已煎煮", delivering: "配送中", delivered: "已送达" };
+  // 代煎单的「煎法」列与按钮上的下一步（P2-1407）：原先清单不显示代煎 / 自煎、按钮一律写「流转」——同在「已调配」的两张单
+  // 看着一模一样，点下去代煎单记成「已煎煮」（没煎也这么记）、自煎单直接「配送中」。下一步取后端的 next_status_name（终态为
+  // null 即不摆按钮），页面不另抄一份流转表。下单表单原先把不代煎写成「免煎」——免煎通常指配方颗粒，后端没有颗粒这一说，
+  // 发出去的是要患者自己煎的饮片
   // 平和质不收分：后端判定时 `k != "balanced"`——它是"八种偏颇都不够格"的结论，不是一个维度
   const BIASED = spec.constitutions.filter((c) => c.key !== "balanced");
   $("#page-body").innerHTML = `
@@ -825,12 +829,14 @@ async function renderTcm() {
       <form class="inline" id="tcm-order">
         <input name="patient_id" type="number" placeholder="患者ID" required><input name="from_org_id" type="number" placeholder="机构ID" required>
         <input name="herbs" placeholder="处方饮片" required style="min-width:220px"><input name="doses" type="number" value="7" min="1" style="min-width:60px">
-        <select name="decoct"><option value="true">代煎</option><option value="false">免煎</option></select><button>下单</button>
+        <select name="decoct"><option value="true">代煎</option><option value="false">自煎（不代煎）</option></select><button>下单</button>
       </form><p class="msg" id="tcm-msg"></p>
-      ${table(["ID", "患者", "饮片", "剂数", "状态", "操作"], orders, (o) =>
+      ${table(["ID", "患者", "饮片", "剂数", "煎法", "状态", "操作"], orders, (o) =>
         `<tr><td>${o.id}</td><td>${o.patient_id}</td><td>${esc(o.herbs)}</td><td>${o.doses}</td>
+         <td>${o.decoct ? "代煎" : "自煎"}</td>
          <td><span class="tag ${o.status === "delivered" ? "green" : "orange"}">${esc(DS[o.status] || o.status)}</span></td>
-         <td>${o.status !== "delivered" ? `<button class="btn secondary" data-adv="${o.id}">流转</button>` : "—"}</td></tr>`)}`)}
+         <td>${o.next_status_name
+           ? `<button class="btn secondary" data-adv="${o.id}">标为${esc(o.next_status_name)}</button>` : "—"}</td></tr>`)}`)}
     ${panel("适宜技术库", `
       ${currentRole() === "admin" ? `<form class="inline" id="tcm-tech-form" style="margin-bottom:8px">
         <input name="name" placeholder="技术名称" required>
