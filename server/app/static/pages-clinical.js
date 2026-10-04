@@ -1470,7 +1470,7 @@ async function renderVaccination() {
         <input name="vaccinated_date" placeholder="接种日期"><input name="org_id" type="number" placeholder="接种机构ID" required>
         <input name="site" placeholder="接种部位"><input name="vaccinator" placeholder="接种人"><button>登记接种</button></form>
       <p class="desc">新接种一律建议选批次：出了问题按批号召回、查受种者时，没挂批次的这一针查不出来。
-        下拉只列可用的批次（未过期、未封存、尚有余量），选了自动带出疫苗编码、名称与接种机构。</p>
+        下拉只列可用的批次（未过期、未封存、尚有余量），同一疫苗先到期的在前；选了自动带出疫苗编码、名称与接种机构。</p>
       <form class="inline" id="contra-form">
         <input name="patient_id" type="number" placeholder="患者ID" required><input name="vaccine_code" placeholder="疫苗编码" required>
         <input name="reason" placeholder="禁忌原因" required>
@@ -1562,7 +1562,12 @@ async function renderVaccination() {
     catch (err) { setMsg("#vac-msg", err.message, false); }
   };
   // 取数放最后：监听已与 innerHTML 同一同步块挂好（P2-31 根修的写法）
-  usableBatches = await api("/api/vaccine-supply/batches?usable_only=true").catch(() => []);
+  // 下拉按 疫苗、效期升序、批号 排，同一疫苗先到期的在前（P2-1359）：接口按登记倒序（最新在前），原样列出来，25 天后到期
+  // 的旧批次排在 700 天后到期的新批次后面——新批次先打掉、旧批次放到过期。药品侧发药按 FEFO（dispense 模块说明第 2 条）。
+  // 只在这里排，接口顺序不动（疫苗批次台账照旧按登记倒序）
+  const cmp = (x, y) => (x < y ? -1 : x > y ? 1 : 0);
+  usableBatches = (await api("/api/vaccine-supply/batches?usable_only=true").catch(() => []))
+    .sort((a, b) => cmp(a.vaccine_code, b.vaccine_code) || cmp(a.expire_date, b.expire_date) || cmp(a.batch_no, b.batch_no));
   $("#vac-batch").innerHTML = `<option value="">疫苗批次（选了就查效期 / 封存 / 库存并扣减一支）</option>` +
     usableBatches.map((b) => `<option value="${b.id}">${esc(b.vaccine_name)} · 批号 ${esc(b.batch_no)} · 机构 ${b.org_id}` +
       ` · 余 ${b.remaining} 支 · 效期 ${esc(b.expire_date)}</option>`).join("");
