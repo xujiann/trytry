@@ -154,3 +154,86 @@ def test_并发排同一手术间起点错开的重叠时段_恰一台排上(pg_
             r.status for r in db.query(SurgeryRequest).filter(SurgeryRequest.id.in_(world["request_ids"])))
     assert len(rows) == 1 and rows[0].request_id == ok[0][1], rows
     assert statuses == ["approved"] * (RACERS - 1) + ["scheduled"], statuses  # 输家的申请原样留在已审批
+
+
+@pytest.fixture(scope="module")
+def patient_world(pg_engine):
+    """同一患者跨手术间（P2-1397）：一位在院患者、八间手术间、八台已审批的手术申请，名字带随机后缀。"""
+    Session = sessionmaker(bind=pg_engine)
+    tag = uuid.uuid4().hex[:8]
+    with Session() as db:
+        org = Organization(name=f"PG同患者排班医院{tag}", org_type="lead_hospital", level="county")
+        user = User(username=f"pg_pt_{tag}", password_hash="x", full_name=f"同患者排班员{tag}", role="director")
+        patient = Patient(
+            name=f"PG同患者排班患者{tag}", id_card=f"3310{uuid.uuid4().int % 10**14:014d}",
+            gender="男", birth_date="1971-04-04", ehc_no=f"PG-PT-{tag}",  # 直连建档要自带健康卡号
+        )
+        db.add_all([org, user, patient])
+        db.flush()
+        ward = Ward(org_id=org.id, name=f"外科病区{tag}")
+        rooms = [OperatingRoom(org_id=org.id, name=f"手术间{tag}-{i}") for i in range(RACERS)]
+        db.add_all([ward, *rooms])
+        db.flush()
+        bed = Bed(ward_id=ward.id, bed_no=f"B{tag}")
+        db.add(bed)
+        db.flush()
+        admission = Admission(patient_id=patient.id, org_id=org.id, ward_id=ward.id, bed_id=bed.id,
+                              status="admitted", created_by=user.id)
+        db.add(admission)
+        db.flush()
+        requests = [
+            SurgeryRequest(admission_id=admission.id, patient_id=patient.id, org_id=org.id,
+                           surgery_name=f"同患者并发排班手术{i}", status="approved", created_by=user.id)
+            for i in range(RACERS)
+        ]
+        db.add_all(requests)
+        db.commit()
+        ids = {"org_id": org.id, "user_id": user.id, "patient_id": patient.id, "ward_id": ward.id,
+               "bed_id": bed.id, "admission_id": admission.id, "room_ids": [r.id for r in rooms],
+               "request_ids": [r.id for r in requests]}
+
+    yield ids
+
+    with Session() as db:  # 共用库：自己造的行自己收拾（先子后父，created_by / FK 拦着）
+        db.query(SurgerySchedule).filter(SurgerySchedule.room_id.in_(ids["room_ids"])).delete()
+        db.query(SurgeryRequest).filter(SurgeryRequest.id.in_(ids["request_ids"])).delete()
+        db.query(Admission).filter_by(id=ids["admission_id"]).delete()
+        db.query(Bed).filter_by(id=ids["bed_id"]).delete()
+        db.query(OperatingRoom).filter(OperatingRoom.id.in_(ids["room_ids"])).delete()
+        db.query(Ward).filter_by(id=ids["ward_id"]).delete()
+        db.query(Patient).filter_by(id=ids["patient_id"]).delete()
+        db.query(User).filter_by(id=ids["user_id"]).delete()
+        db.query(Organization).filter_by(id=ids["org_id"]).delete()
+        db.commit()
+
+
+def test_同一患者并发排进不同手术间的重叠时段_恰一台排上(pg_engine, patient_world):
+    """P2-1397：八台各排进一间空手术间，起点错开、两两重叠——各锁各的手术间行、互不阻塞，判定读的是别的排班行，不在患者行上
+    排队就八台全排进去。不变量：恰一台排上，其余七台都是「该患者在 … 已排有另一台手术」的 409。"""
+    Session = sessionmaker(bind=pg_engine)
+
+    def worker(i):
+        with Session() as db:
+            user = db.get(User, patient_world["user_id"])
+            try:
+                receipt = schedule_surgery(
+                    patient_world["request_ids"][i],
+                    ScheduleIn(room_id=patient_world["room_ids"][i], scheduled_date=DAY,
+                               start_time=f"08:{i * 5:02d}", end_time="10:00"),
+                    db=db, user=user,
+                )
+            except HTTPException as exc:
+                return ("rejected", exc.status_code, exc.detail)
+            return ("ok", receipt["request_id"], receipt["start_time"])
+
+    _warm_pool(pg_engine, RACERS)
+    results, errors = _race_on_pg(worker, times=RACERS)
+    assert not errors, f"异常不该漏给调用方：{errors}"
+    ok = [r for r in results if r[0] == "ok"]
+    rejected = [r for r in results if r[0] == "rejected"]
+    assert len(ok) == 1, f"应恰一台排上，实际 {results}"
+    assert len(rejected) == RACERS - 1
+    assert all(code == 409 and "已排有另一台手术" in detail for _, code, detail in rejected), rejected
+    with Session() as db:
+        rows = db.query(SurgerySchedule).filter(SurgerySchedule.room_id.in_(patient_world["room_ids"])).all()
+    assert len(rows) == 1 and rows[0].request_id == ok[0][1], rows

@@ -31,6 +31,7 @@ from ..models import (
     FollowupTask,
     OperatingRoom,
     Organization,
+    Patient,
     SurgeryRecord,
     SurgeryRequest,
     SurgerySchedule,
@@ -368,7 +369,7 @@ def schedule_surgery(
     就都排进去；(room_id, date, start_time) 唯一约束只挡得住起点完全相同的那种。原先把起点不同的情形
     记作「极窄竞态由排班人复核，不上悲观锁」，真 PG 实测八路同时排起点错开的重叠时段，八台全排进同一
     手术间（P1-117）。故判定与写入圈在手术间这一行的临界区里（`serialized_on`，PG 上 `SELECT … FOR UPDATE`），
-    不同手术间之间互不阻塞。
+    不同手术间之间互不阻塞。同一患者同日的时段也不许重叠（P2-1397），外面再圈一层患者那一行（先患者、后手术间）。
     """
     request = db.get(SurgeryRequest, request_id)
     if request is None:
@@ -384,7 +385,11 @@ def schedule_surgery(
     if body.end_time <= body.start_time:
         raise HTTPException(status_code=422, detail="结束时间须晚于开始时间")
 
-    with serialized_on(db, OperatingRoom, room.id):
+    # 先锁患者、后锁手术间（P2-1397）：下面还判同一患者有没有时段重叠的另一台——同一患者的两台同时排进两个手术间，两路锁的
+    # 是不同的手术间行、互不阻塞，判定读的又是别的排班行（与 P1-117 同一个形状），两路都读到「没有重叠」、各插一条；故再在
+    # 患者那一行上圈一层。两把锁只在这里一起拿、次序恒为患者在前，PG 上不会两路各握一把互等成死锁；以后别处要同时拿这两把
+    # （如改期换台），也照这个次序
+    with serialized_on(db, Patient, request.patient_id), serialized_on(db, OperatingRoom, room.id):
         # 同手术间当天的，加上日期不是规范写法的存量行，逐条按日历读了再判重叠（P2-894）：P1-61 / P2-46 之前日期、时刻
         # 都不卡形状，「2026-10-5」等值比不上「2026-10-05」、「０８:００」按字符串比排在一切半角时刻之后——同一手术间同一
         # 时段又排进一台（与 P1-117 同一个后果）。时刻认不出的按占满当天算：宁可拦下让人核对，也不把两台排进同一手术间
@@ -404,6 +409,29 @@ def schedule_surgery(
                 raise HTTPException(
                     status_code=409,
                     detail=f"手术间在 {taken.start_time}-{taken.end_time} 已被占用",
+                )
+        # 同一患者同一天时段重叠的另一台（P2-1397）：上面只按手术间判，同一患者的两台排进两个手术间的重叠时段原先都 201，
+        # 居民收到两条时段重叠的「手术已安排」。已取消的不算；日期、时刻的存量非规范写法照上面手术间那段的口径读（时刻认不出
+        # 的按占满当天算）。术者、麻醉医师撞台是业务口径（术者是自由文本，按姓名判会误伤同名），不在此列
+        clashes = (
+            db.query(SurgerySchedule)
+            .join(SurgeryRequest, SurgerySchedule.request_id == SurgeryRequest.id)
+            .filter(
+                SurgeryRequest.patient_id == request.patient_id,
+                SurgeryRequest.status != "cancelled",
+                SurgerySchedule.request_id != request.id,
+                or_(SurgerySchedule.scheduled_date == body.scheduled_date, ~_canonical_date(SurgerySchedule)),
+            )
+            .order_by(SurgerySchedule.start_time, SurgerySchedule.id)
+            .all()
+        )
+        for taken in clashes:
+            start, end = legacy_time(taken.start_time), legacy_time(taken.end_time)
+            if legacy_date(taken.scheduled_date) == body.scheduled_date and (
+                    start is None or end is None or (start < body.end_time and end > body.start_time)):
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"该患者在 {taken.start_time}-{taken.end_time} 已排有另一台手术，同一患者的手术时段不能重叠",
                 )
 
         # D-1：排班记录、申请状态、患者通知必须同进同出。此处原先分两次 commit，
