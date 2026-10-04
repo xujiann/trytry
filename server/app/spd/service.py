@@ -1445,18 +1445,26 @@ def paused_enrollment(db: Session, patient_id: int, program_code: str) -> SpdEnr
     )
 #: 迁出登记之后、确认之前原档案成了这些状态的，这次迁出不再生效：死亡（P1-111），已迁出 / 已排除 / 已结案（P2-527）
 MIGRATION_VOID_STATUSES = ENROLLMENT_ENDED_STATUSES
+#: 跨机构迁出的迁入机构就是档案当前的管理机构（P2-1273）：登记时 422 的那一句，存量事件「不再生效」也以它开头
+MIGRATION_SAME_ORG = "迁入机构与当前管理机构相同"
 
 
-def migration_void_reason(enrollment_status: str) -> str:
+def migration_void_reason(enrollment_status: str, *, same_org: bool = False) -> str:
     """这次迁出还能不能确认：能确认返回空串，不能返回原因。
 
     确认迁入的 409 文案、生命周期清单的「不再生效」、工作台「待确认迁入」的计数同一句（P2-592）——原先只有确认接口
     认它，计数照数、清单照画「确认迁入」，点下去才 409。
+
+    `same_org`：事件的迁入机构就是档案当前的管理机构（P2-1273）。登记时已 422，这里兜住修之前登记下的：原先本机构自己
+    一确认，在办工作全部收尾、原档案「已迁出」、同机构另起一份没有主管医生的档案。迁出事件没有驳回 / 撤回入口，算作
+    「不再生效」它就离开了待确认，不另造状态。工作台两处计数是 SQL，同一判据写在那边（迁入机构 ≠ 档案机构）。
     """
     if enrollment_status == "dead":
         return "该患者已登记死亡，这次迁出不再生效"
     if enrollment_status in MIGRATION_VOID_STATUSES:
         return f"原档案{ENROLL_STATUS_LABELS.get(enrollment_status, enrollment_status)}，这次迁出不再生效"
+    if same_org:
+        return f"{MIGRATION_SAME_ORG}，这次迁出不再生效"
     return ""
 
 

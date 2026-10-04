@@ -57,7 +57,7 @@ from ..models import (
 )
 from ..rules import RuleError, as_validated, evaluate, is_suspect_risk, score_scale, screen
 from ..service import (ENROLL_STATUS_LABELS, PACKAGE_ITEM_NAME_MAX, paused_enrollment, SCALE_ADVICE_MAX, MEASUREMENT_SOURCE_NAMES, TASK_OPEN_STATUSES, actively_enrolled, award_points, build_facts,
-                       MIGRATION_VOID_STATUSES,
+                       MIGRATION_SAME_ORG, MIGRATION_VOID_STATUSES,
                        candidate_reason, candidate_undistributed, close_open_work, enrollment_still_active, exclusion_problem,
                        match_program, migration_void_reason,
                        package_items_ok,
@@ -1481,6 +1481,11 @@ def lifecycle_event(
     cross_org = body.event == "migrate" and body.target_org_id is not None
     if cross_org and db.get(Organization, body.target_org_id) is None:
         raise HTTPException(status_code=404, detail="目标机构不存在")
+    # 迁入机构填成本机构不收（P2-1273，与平台转诊、会诊、派驻、药品调拨拦「两端同一机构」同一类）：原先照收、挂一条
+    # 「待确认迁入」，本机构自己一确认，在办任务取消、按方案排的随访移除、原档案「已迁出」，同机构另起一份没有主管
+    # 医生 / 团队 / 村医的在管档案——患者还在本机构管，排好的工作全没了
+    if cross_org and body.target_org_id == enrollment.org_id:
+        raise HTTPException(status_code=422, detail=MIGRATION_SAME_ORG)
 
     # 还有没结束的召回，不再召回（P2-788）：原先照收——「召回」连点两下生出两条待联系召回，登记其中一条召回成功、档案恢复在管，
     # 另一条照旧挂在待联系清单里、还能再登记一次「已召回」。上一次召回失败了的照样能重新发起（登记进度那里就是这么叫人做的）。
@@ -1566,8 +1571,9 @@ def confirm_migration(
     # 原档案已迁出 / 已排除 / 已结案的，这次迁出同样不再生效（P2-527）：原先只挡死亡——同一档案先后登记迁往乙、丙两家，
     # 乙家确认之后丙家再确认照样 200，回执里的「迁入档案」是乙家那份、丙家什么也没有；迁出登记之后档案被排除、患者又在
     # 别家重新纳管，迟到的确认把已排除的档案改成「已迁出」，还把别家那份记成从这里迁过去的。
-    # 判据与生命周期清单、工作台计数同一句（`service.migration_void_reason`，P2-592）
-    void = migration_void_reason(enrollment.status)
+    # 判据与生命周期清单、工作台计数同一句（`service.migration_void_reason`，P2-592）。迁入机构就是档案当前机构的
+    # 存量事件（修 P2-1273 之前登记下的）同样不再生效：本机构确认下去，在办工作全部收尾、原地另起一份档案
+    void = migration_void_reason(enrollment.status, same_org=event.target_org_id == enrollment.org_id)
     if void:
         raise HTTPException(status_code=409, detail=void)
     # 条件翻转（P2-1175，同 lifecycle_event 的 P2-344）：上面两道预检都是锁外读的——读到「还没确认、原档案没作废」之后，
@@ -1660,7 +1666,8 @@ def list_lifecycle_events(
     for row in rows:
         enrollment = enrollments.get(row.enrollment_id)
         brief = briefs.get(enrollment.patient_id) if enrollment else None
-        void = ((migration_void_reason(enrollment.status) if enrollment else "纳管档案不存在")
+        void = ((migration_void_reason(enrollment.status, same_org=row.target_org_id == enrollment.org_id)
+                 if enrollment else "纳管档案不存在")
                 if row.event == "migrate" and not row.confirmed else "")
         out.append({
             "id": row.id, "enrollment_id": row.enrollment_id, "event": row.event,

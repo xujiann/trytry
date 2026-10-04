@@ -714,13 +714,15 @@ def admin_workbench(
                 SpdServiceApply.status == "pending"
             ).count(),
             # 迁出待确认期间患者离世的（P1-111）、原档案已迁出 / 排除 / 结案的（P2-527），目标机构都确认不了，不算进待办
-            # ——判据与确认接口同一句（`MIGRATION_VOID_STATUSES`，P2-592；原先只除了死亡）
+            # ——判据与确认接口同一句（`MIGRATION_VOID_STATUSES`，P2-592；原先只除了死亡）。迁入机构就是档案当前机构的
+            # 存量事件同样确认不了（`migration_void_reason` 的 same_org，P2-1273）
             "pending_migrations": db.query(SpdLifecycleEvent).join(
                 SpdEnrollment, SpdEnrollment.id == SpdLifecycleEvent.enrollment_id
             ).filter(
                 SpdLifecycleEvent.event == "migrate",
                 SpdLifecycleEvent.confirmed.is_(False),
                 SpdEnrollment.status.notin_(MIGRATION_VOID_STATUSES),
+                SpdLifecycleEvent.target_org_id.is_distinct_from(SpdEnrollment.org_id),   # 空值安全，与 same_org 判据一致
             ).count(),
             "swept": swept,
         },
@@ -1155,13 +1157,15 @@ def center_workbench(
             "excluded": scoped(SpdEnrollment, SpdEnrollment.org_id).filter(SpdEnrollment.status == "excluded").count(),
             # 「待确认迁入」只数迁到本范围的（P2-61）：确认由迁入机构做（`confirm_migration` 判
             # `target_org_id`），原先数的是全县，乡镇看到的待办一条都不归自己确认。
-            # 确认不了的（患者离世 P1-111、原档案已迁出 / 排除 / 结案 P2-527）同样不算，与确认接口同一句（P2-592）
+            # 确认不了的（患者离世 P1-111、原档案已迁出 / 排除 / 结案 P2-527、迁入机构就是档案当前机构 P2-1273）同样不算，
+            # 与确认接口同一句（P2-592）
             "pending_migrations": _apply_scope(
                 db.query(SpdLifecycleEvent), SpdLifecycleEvent.target_org_id, orgs
             ).join(SpdEnrollment, SpdEnrollment.id == SpdLifecycleEvent.enrollment_id).filter(
                 SpdLifecycleEvent.event == "migrate",
                 SpdLifecycleEvent.confirmed.is_(False),
                 SpdEnrollment.status.notin_(MIGRATION_VOID_STATUSES),
+                SpdLifecycleEvent.target_org_id.is_distinct_from(SpdEnrollment.org_id),   # 空值安全，与 same_org 判据一致
                 *([SpdEnrollment.program_code == program_code] if program_code else []),
             ).count(),
             "recalling": scoped(SpdEnrollment, SpdEnrollment.org_id).filter(SpdEnrollment.status == "recalled").count(),
