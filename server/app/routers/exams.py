@@ -862,6 +862,9 @@ def amend_report(
     - 修订前值写入 ReportRevision 历史表（前结论/前所见/前危急标记/修订人），可追溯；
     - 危急值联动：修订后仍为危急值 → 闭环状态复位为"已通知"须重新确认；
       解除危急标记 → 闭环状态清空；两种变化均写入 CriticalAction 留痕。
+
+    送来的各项都与现值相同（没送的不算）→ 422「没有改动」，不记修订史、不动闭环、不发通知（P2-1365）；有一项真改了照上面走。
+    结论与危急标记都没变、只改了所见的，仍按「修订后仍为危急值」复位闭环、重发通知——要不要复位是另一句业务口径，有意不在这里改。
     """
     report = db.get(ExamReport, report_id)
     if report is None:
@@ -875,6 +878,16 @@ def amend_report(
     req = db.get(ExamRequest, report.request_id)
     if req is not None:
         assert_patient_visible(db, user, req.patient_id)
+    # 同值重送不算修订（P2-1365）：送来的每一项都与现值相同（没送的不算）就是什么都没改。原先照样记一条与原值一字不差的
+    # 修订史；仍是危急值的，已处置的闭环被复位成「已通知」、重发通知、重进待办与超时催办，打印件印「已修订 N 次」——页面
+    # 修订框选了「是危急值」就送 critical:true、所见非空就送，原样点提交就走到这里。判在归属校验之后：拿送来的值与现值比，
+    # 先判归属，免得无关机构凭 422 / 403 的不同试出别家报告的结论
+    sent = [(name, new, old) for name, new, old in (
+        ("结论", body.conclusion, report.conclusion), ("所见", body.finding, report.finding),
+        ("危急值标记", body.critical, report.critical)) if new is not None]
+    if all(new == old for _, new, old in sent):
+        raise HTTPException(status_code=422,
+                            detail=f"没有改动：送来的{'、'.join(name for name, _, _ in sent)}与报告现值相同")
     actor = user.full_name or user.username
     was_critical = report.critical
     # 互认了这份报告的别家申请单（源机构自己互认自己的不算）：改判为危急值时一并通知
