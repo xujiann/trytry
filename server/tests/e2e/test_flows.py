@@ -6522,6 +6522,48 @@ def test_体检只按分项标了异常_清单上列出异常分项而不是空�
     expect(row.locator(".tag.red")).to_have_text("E2E血红蛋白")   # 修前是空的红标签
 
 
+def test_体检登记表单带两条分项_重复编码报在体检面板_回读两条(page, base_url, seed, admin_read):
+    """P2-1404（第四十一批扫描 AE3-3）：登记表单原先没有分项框（接口早就收 `items`），页面登记的体检分项永远是 0 条；同一项目
+    可以重复录；登记的报错写到页面最上方证明面板的 `#cert-msg`。修后表单可增删分项行（首屏不摆空行），提交时逐行组成
+    `items`；同一次体检里项目编码重复整单 422，报在体检面板自己的消息行。开三行、第三行与第一行同编码 → 报错、证明面板的
+    消息行不动 → 删掉第三行再登记 → `/items` 回两条，清单上标出勾了异常的那项。"""
+    _login(page, base_url)
+    _open_page(page, "certs", "证明与体检")
+    form = page.locator("#chk-form")
+    rows = form.locator(".chk-item")
+    expect(rows).to_have_count(0)                                    # 分项选填：首屏不摆空行
+    form.locator('[name="patient_id"]').fill(str(seed["patient"]["id"]))
+    form.locator('[name="org_id"]').fill(str(seed["org"]["id"]))
+    form.locator('[name="exam_date"]').fill("2026-09-05")
+    form.locator('[name="summary"]').fill("E2E分项登记")
+    for _ in range(3):
+        form.locator("#chk-add-item").click()
+    expect(rows).to_have_count(3)
+    for i, (code, name, value, unit, ref, abnormal) in enumerate((
+            ("GLU", "E2E空腹血糖", "5.2", "mmol/L", "3.9-6.1", False),
+            ("SBP", "E2E收缩压", "182", "mmHg", "90-139", True),
+            ("GLU", "E2E空腹血糖", "12.8", "mmol/L", "3.9-6.1", False))):
+        for key, text in (("item_code", code), ("item_name", name), ("result_value", value), ("unit", unit),
+                          ("ref_range", ref)):
+            rows.nth(i).locator(f'[data-item="{key}"]').fill(text)
+        if abnormal:
+            rows.nth(i).locator('[data-item="abnormal"]').check()
+    form.locator('button:has-text("登记")').click()
+    expect(page.locator("#chk-msg")).to_contain_text("同一次体检里项目编码重复：GLU")   # 修前 201，两条 GLU 都收
+    expect(page.locator("#cert-msg")).to_have_text("")                               # 不再写到页面最上方
+    expect(rows).to_have_count(3)                                                    # 没重画：填好的三行都在
+    rows.nth(2).locator("[data-chkdelrow]").click()
+    expect(rows).to_have_count(2)
+    _submit(page, '#chk-form button:has-text("登记")')
+    made = [c for c in admin_read(f"/api/checkups?patient_id={seed['patient']['id']}") if c["summary"] == "E2E分项登记"]
+    assert [(c["has_abnormal"], c["abnormal_text"]) for c in made] == [(True, "E2E收缩压")], made
+    items = admin_read(f"/api/checkups/{made[0]['id']}/items")
+    assert [(i["item_code"], i["result_value"], i["unit"], i["ref_range"], i["abnormal"]) for i in items] == [
+        ("GLU", "5.2", "mmol/L", "3.9-6.1", False), ("SBP", "182", "mmHg", "90-139", True)], items
+    row = page.locator(f'tr:has(td[data-chkstate="{made[0]["id"]}"])')
+    expect(row.locator(".tag.red")).to_have_text("E2E收缩压")
+
+
 @pytest.fixture(scope="session")
 def consent_page_seed(seed, admin_call):
     """知情同意页的前置：经办、管理层各一个账号；种子患者名下两条窗口代录的有效同意（经办撤一条，管理层看另一条）。"""

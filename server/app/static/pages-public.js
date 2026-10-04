@@ -336,6 +336,29 @@ const CHK_REVIEW = { todo: ["待总检", "orange"], done: ["已总检", "green"]
 const CHK_RESULT = { ok: ["正常", "green"], none: ["未录结果", ""] };
 // 未录结果的行也不摆「总检」：后端对它 409「尚无体检结果」（P2-1403），摆出来点了也只是在框里报错
 
+// 体检分项的一行（P2-1404）：登记表单原先没有分项框，接口早就收 `CheckupCreate.items`，页面登记的体检分项永远是 0 条。
+// 写法照开方明细（core.js `RX_ITEM_ROW`）：一行一个 div，「添加分项」往后插、「删除本行」删自己那行，提交时逐行取值。分项
+// 选填：首屏不摆空行，最后一行也能删。框不带 name——formJson 按 name 收表头那几栏，带了就把最后一行摊成顶层字段；逐行取值
+// 走 chkItems。按钮写明 type="button"：缺省是提交按钮，在框里按回车会先「点」到它
+const CHK_ITEM_ROW = `<div class="chk-item" style="display:flex;gap:8px;margin:4px 0;flex-wrap:wrap;align-items:center">
+  <input data-item="item_code" placeholder="项目编码" required>
+  <input data-item="item_name" placeholder="项目名称" required>
+  <input data-item="result_value" placeholder="结果" required>
+  <input data-item="unit" placeholder="单位" style="min-width:70px">
+  <input data-item="ref_range" placeholder="参考范围">
+  <label><input data-item="abnormal" type="checkbox"> 异常</label>
+  <button type="button" class="btn secondary" data-chkdelrow>删除本行</button></div>`;
+
+/** 体检分项逐行取值（P2-1404）：表单上有几行就送几项；「异常」照报告勾，系统不按参考范围判。 */
+function chkItems(form) {
+  return [...form.querySelectorAll(".chk-item")].map((row) => {
+    const box = (key) => row.querySelector(`[data-item="${key}"]`);
+    return { item_code: box("item_code").value, item_name: box("item_name").value,
+      result_value: box("result_value").value, unit: box("unit").value, ref_range: box("ref_range").value,
+      abnormal: box("abnormal").checked };
+  });
+}
+
 async function renderCerts() {
   $("#page-desc").textContent = "出生/死亡医学证明签发与出生缺陷登记（限医师/公卫）；成人健康体检记录与异常清单";
   // 总检后端是 require_roles("doctor")（admin 全通）；公卫岗只录入，摆了只会点出 403
@@ -397,7 +420,12 @@ async function renderCerts() {
         <input name="exam_date" placeholder="体检日期 YYYY-MM-DD" required pattern="\\d{4}-\\d{2}-\\d{2}">
         <input name="summary" placeholder="体检结论" style="min-width:160px">
         <input name="abnormal_items" placeholder="异常项（有则填）" style="min-width:160px">
-        <button>登记</button></form>`)}
+        <div id="chk-items" style="flex-basis:100%"></div>
+        <button type="button" class="btn secondary" id="chk-add-item">添加分项</button>
+        <button>登记</button></form>
+      <p class="msg" id="chk-msg"></p>
+      <p class="desc">分项选填，一行一项：项目编码、名称、结果必填，单位、参考范围选填；超出参考范围的照报告勾「异常」——
+        系统不按参考范围自动判。同一项目只录一行。分项随登记一次交齐，登记后不能补录、更正。</p>`)}
     ${abnormal.length ? panel(`⚠ 体检异常清单（${abnormal.length}，供慢病筛查建档衔接）`,
       table(["体检ID", "患者", "日期", "异常项"], abnormal, (a) =>
         `<tr><td>${a.id}</td><td>${a.patient_id}</td><td>${esc(a.exam_date)}</td><td><span class="tag red">${esc(a.abnormal_text)}</span></td></tr>`)) : ""}
@@ -422,7 +450,16 @@ async function renderCerts() {
     try { await draw(new FormData(e.target).get("cert_type")); }
     catch (err) { setMsg("#cert-msg", err.message, false); }
   };
-  $("#chk-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/checkups", formJson(e.target, ["patient_id", "org_id"]), "#cert-msg"); };
+  // 「添加分项」「删除本行」（P2-1404）：分项选填，最后一行也能删（开方明细至少一味药才收起删除，这里不必）
+  const chkRows = $("#chk-items");
+  $("#chk-add-item").onclick = () => chkRows.insertAdjacentHTML("beforeend", CHK_ITEM_ROW);
+  chkRows.onclick = (e) => { if (e.target.dataset.chkdelrow !== undefined) e.target.closest(".chk-item").remove(); };
+  // 报错写在体检面板自己的消息行（P2-1404）：原先写到页面最上方证明面板的 #cert-msg，中间隔着最多 200 行的证明表——
+  // 分项编码重复这类 422，人在登记表单这儿根本看不见
+  $("#chk-form").onsubmit = (e) => {
+    e.preventDefault();
+    postAction("/api/checkups", { ...formJson(e.target, ["patient_id", "org_id"]), items: chkItems(e.target) }, "#chk-msg");
+  };
   const showItems = async (id, review) => {
     const items = await api(`/api/checkups/${id}/items`);
     $("#chk-detail").classList.remove("hidden");
@@ -446,6 +483,8 @@ async function renderCerts() {
   };
   $("#page-body").onclick = async (e) => {
     const { printcert, printchk, chkitems, chkreview, deathcard } = e.target.dataset;
+    // 体检这几样（分项结果、总检后的回显、打印报告）同样写在体检面板的消息行（P2-1404）；证明的打印与死因报告卡照旧
+    const msgSel = chkitems || chkreview || printchk ? "#chk-msg" : "#cert-msg";
     try {
       if (deathcard) {
         const c = await api(`/api/certs/${deathcard}/death-report-card`);
@@ -485,7 +524,7 @@ async function renderCerts() {
       // 两条打印各写一处字面量地址（P2-490）：写成一个三元，调用点解析推不出地址，读动词棘轮把两个打印接口都记成没有入口
       if (printcert) return await openPrintPage(`/api/print/certs/${printcert}`);
       if (printchk) return await openPrintPage(`/api/print/checkups/${printchk}`);
-    } catch (err) { setMsg("#cert-msg", err.message, false); }
+    } catch (err) { setMsg(msgSel, err.message, false); }
   };
   // 取数放最后：监听已与 innerHTML 同一同步块挂好，窗口为零（P2-31 根修，样板见 pages-spd.js renderSpdPath）
   await draw();

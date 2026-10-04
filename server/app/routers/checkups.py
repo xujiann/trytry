@@ -135,6 +135,16 @@ def create_checkup(body: CheckupCreate, db: Session = Depends(get_db), user: Use
         raise HTTPException(status_code=404, detail="患者不存在")
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="机构不存在")
+    # 同一次体检里同一项目编码只收一行，整单 422 点名（P2-1404）：原先照收，空腹血糖 5.2 与 12.8 各一条并排印在报告上，
+    # 哪个作数没人说得清。不替人挑哪一行（同审方规则导入 P2-733）；前后空格不算区别，页面上手敲多一个空格照样认得出
+    counts: dict[str, int] = {}
+    for item in body.items:
+        code = item.item_code.strip()
+        counts[code] = counts.get(code, 0) + 1
+    duplicated = [code for code, n in counts.items() if n > 1]
+    if duplicated:
+        raise HTTPException(status_code=422, detail=f"同一次体检里项目编码重复：{'、'.join(duplicated[:20])}"
+                                                    "（每个项目只录一行，核对哪一行作数后再登记）")
     payload = body.model_dump(exclude={"items"})
     # 异常口径：汇总异常串非空 或 任一分项异常
     has_abnormal = bool(body.abnormal_items.strip()) or any(i.abnormal for i in body.items)
