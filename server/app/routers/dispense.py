@@ -16,7 +16,7 @@
    回补之前**——判定与翻转同一条 SQL，抢不到的拿 409。
 """
 import math
-from typing import cast, overload
+from typing import Any, cast, overload
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
@@ -227,6 +227,30 @@ def dispensable_by_drug() -> Subquery:
     )
 
 
+def _stocks_with_dispensable(db: Session) -> tuple[Query, ColumnElement[Any]]:
+    """`DrugStock` 左连 `dispensable_by_drug`、没有可发批次的按 0 算：返回（每行 `(DrugStock, 可发量)` 的查询, 可发量表达式）。
+
+    库存表（`q_stock_dispensable`，P2-1360）与缺药口径（`q_dispensable_shortage`）共用这一个构造，后者再加 `可发量 < 阈值`：
+    两处各写一份左连，改了一边另一边不会跟（与 `dispensable_clause` 收成一句同一个道理）。
+    """
+    sub = dispensable_by_drug()
+    dispensable = func.coalesce(sub.c.dispensable, 0)
+    query = (
+        db.query(DrugStock, dispensable.label("dispensable"))
+        .outerjoin(sub, and_(sub.c.org_id == DrugStock.org_id, sub.c.drug_code == DrugStock.drug_code))
+    )
+    return query, dispensable
+
+
+def q_stock_dispensable(db: Session) -> Query:
+    """全部库存行连同此刻的可发量，每行 `(DrugStock, 可发量)`（P2-1360）：一条 SQL 分组算出再左连，不逐行查批次。
+
+    库存表（`pharmacy.list_stocks`）拿它给每一行注明可发量：手册写「账面数与可发量不一致时，库存表…注明（可发 N）」，
+    原先 `/stocks` 不给可发量，页面只能拿缺药预警的行注明。与缺药口径同一个构造（`_stocks_with_dispensable`）。
+    """
+    return _stocks_with_dispensable(db)[0]
+
+
 def q_dispensable_shortage(db: Session) -> Query:
     """可发量低于阈值的库存行（缺药口径的唯一来源，P2-1250），每行 `(DrugStock, 可发量)`。
 
@@ -234,14 +258,10 @@ def q_dispensable_shortage(db: Session) -> Query:
     缺药预警（`pharmacy.stock_alerts`）、待办（`todos._stock_alerts`）、驾驶舱（`metrics.q_stock_alerts` 委托这里）、
     供应风险（`medication.supply_risk`）都走它。原先四处各比 `DrugStock.quantity < threshold`：批次过了效期，汇总一片
     不少，四处都当有货，发药同时 409。没有过期量时可发量就等于汇总（对账不变式），结果与原先一致。
+    左连那一段与库存表共用（`_stocks_with_dispensable`，P2-1360）。
     """
-    sub = dispensable_by_drug()
-    dispensable = func.coalesce(sub.c.dispensable, 0)
-    return (
-        db.query(DrugStock, dispensable.label("dispensable"))
-        .outerjoin(sub, and_(sub.c.org_id == DrugStock.org_id, sub.c.drug_code == DrugStock.drug_code))
-        .filter(dispensable < DrugStock.threshold)
-    )
+    query, dispensable = _stocks_with_dispensable(db)
+    return query.filter(dispensable < DrugStock.threshold)
 
 
 def broadcast_shortage(stock: DrugStock) -> None:

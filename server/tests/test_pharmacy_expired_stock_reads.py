@@ -146,7 +146,8 @@ def test_页面缺药行与台账印可发量():
     core = (STATIC / "core.js").read_text(encoding="utf-8")
     body = core[core.index("async function renderPharmacy()"):]
     body = body[:body.index("\n}\n")]
-    assert "a.dispensable_quantity" in body and "${stockQty(s)}" in body
+    # 可发量取库存行自带的（P2-1360）：原先取缺药预警行的 `a.dispensable_quantity`，只有缺药行注得上
+    assert "s.dispensable_quantity" in body and "${stockQty(s)}" in body
     assert "<td>${b.dispensable}</td>" in body and "<td>${b.available}</td>" not in body
     assert 'b.status === "normal" && b.expired' in body and "已过期" in body
     assert "g.dispensable_stock" in body

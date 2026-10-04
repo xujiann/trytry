@@ -2112,10 +2112,10 @@ async function renderPharmacy() {
     : s.quantity <= 0 ? '<span class="tag orange">无库存</span>'
     : s.threshold ? '<span class="tag green">正常</span>' : '<span class="tag">未设预警</span>';
   // 缺药按可发量判（P2-1250）：过了效期的批次还算在汇总里，缺药行只印汇总就是「库存 100 / 阈值 20」却标缺药——
-  // 两者不等时同一格里跟上可发量
-  const dispensableOf = new Map(alerts.map((a) => [a.id, a.dispensable_quantity]));
-  const stockQty = (s) => dispensableOf.has(s.id) && dispensableOf.get(s.id) !== s.quantity
-    ? `${s.quantity}（可发 ${dispensableOf.get(s.id)}）` : `${s.quantity}`;
+  // 两者不等时同一格里跟上可发量。每一行都这样注（P2-1360）：可发量取库存行自带的那个数，原先只取缺药预警的行，阈值 0 的
+  // 行（批次入库 / 调入 / 验收新建的库存行都是 0）、可发仍高于阈值的行只印账面数——手册写的是两者不一致时都注明
+  const stockQty = (s) => s.dispensable_quantity !== s.quantity
+    ? `${s.quantity}（可发 ${s.dispensable_quantity}）` : `${s.quantity}`;
   // 取值真源是 models/pharmacy.py:DrugBatch.status——只有这两个值，
   // 且它只表达"人决定召回"，过没过期是按效期现算的另一回事（见该列的注释）
   const BATCH_STATUS = { normal: ["正常", "green"], recalled: ["已召回", "red"] };

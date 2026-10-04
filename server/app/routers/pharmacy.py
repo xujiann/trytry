@@ -63,7 +63,7 @@ from ..models import (
 from ..schemas import StockOut, StockUpsert, TransferCreate
 from .dispense import (_claim_batch, _fefo_batches, _required_quantity, batch_available, batch_dispensable,
                        broadcast_if_crossed, broadcast_shortage, dispensable_by_drug, prescription_not_reversed,
-                       q_dispensable_shortage)
+                       q_dispensable_shortage, q_stock_dispensable)
 
 router = APIRouter(prefix="/api/pharmacy", tags=["中心药房"])
 
@@ -198,11 +198,28 @@ def upsert_stock(body: StockUpsert, db: Session = Depends(get_db)):
     return stock
 
 
-@router.get("/stocks", response_model=list[StockOut], dependencies=[Depends(get_current_user)])
+class StockListOut(StockOut):
+    """库存表行：库存行原样（`quantity` 仍是可用汇总，键与次序不动）+ 末尾此刻的可发量（P2-1360）。
+
+    与缺药预警行（`StockAlertOut`）同形、各管各的：这里是全部库存行，那里只是可发量低于阈值的。"""
+
+    dispensable_quantity: int
+
+
+@router.get("/stocks", response_model=list[StockListOut], dependencies=[Depends(get_current_user)])
 def list_stocks(org_id: int | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user),):
-    query = db.query(DrugStock)
-    query = scope_org_list(db, user, query, DrugStock, org_id)
-    return query.order_by(DrugStock.org_id, DrugStock.drug_code).all()
+    """库存表：每行带此刻的可发量（P2-1360），与缺药预警同一个构造（`dispense.q_stock_dispensable`，一条分组查询左连）。
+
+    手册写「账面数与可发量不一致时，库存表…会在数量后注明（可发 N）」（P2-1250 的口径），原先这里不给可发量，页面只能拿
+    缺药预警的行注明——阈值 0 的行（批次入库、调入、验收新建的库存行都是 0）、可发量仍高于阈值的行只印账面数：库存 100、
+    其中 75 已过期，表上只写 100，县里据此不会往这里调拨。
+    """
+    query = scope_org_list(db, user, q_stock_dispensable(db), DrugStock, org_id)
+    return [
+        {"id": s.id, "org_id": s.org_id, "drug_code": s.drug_code, "drug_name": s.drug_name,
+         "quantity": s.quantity, "threshold": s.threshold, "dispensable_quantity": int(dispensable)}
+        for s, dispensable in query.order_by(DrugStock.org_id, DrugStock.drug_code).all()
+    ]
 
 
 @router.post(
