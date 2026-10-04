@@ -517,6 +517,23 @@ def my_team_ids(db: Session, user_id: int) -> list[int]:
         SpdTeamMember.user_id == user_id, SpdTeamMember.active.is_(True))]
 
 
+def acts_as_village_doctor(db: Session, user_id: int) -> bool:
+    """「谁是村医」：医生移动端按村医视角（页头「签约居民」、「我的患者」按签约村医筛）认的判据（P2-1339）。
+
+    有在用的村医档案，或以在岗成员身份在哪个服务团队里是「村医」。档案这一半与建档自动填签约村医（`create_enrollment`，
+    P1-217；签约积分、随访积分随档案上的签约村医记）、考核对象（`assess`）、运行中枢村医数认的是同一句。原先移动端只看
+    团队角色——成员角色缺省是「医生」，有在用村医档案、进团队时没改角色的村医，签约照记成他、积分照拿、考核照算，手机上
+    却不是村医视角：页头数「在管患者」0、「我的患者」按责任医生筛成 0 条。团队角色这一半照旧认（只放宽、不收窄）：只有
+    团队村医角色、没有村医档案的人算不算村医是另一句业务口径，这里不改。
+    """
+    if db.query(SpdVillageDoctor.id).filter(
+            SpdVillageDoctor.user_id == user_id, SpdVillageDoctor.active.is_(True)).first() is not None:
+        return True
+    return db.query(SpdTeamMember.id).filter(
+        SpdTeamMember.user_id == user_id, SpdTeamMember.active.is_(True),
+        SpdTeamMember.member_role == "village_doctor").first() is not None
+
+
 def team_view_scope(entity: Any, role: str, user_id: int, team_ids: list[int]):
     """团队工作台三个视角各自的「我的」档案：成员端是主管医生是我的、个案管理师端是个案管理师是我的、专家端是我所在团队的。
 

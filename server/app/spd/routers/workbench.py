@@ -52,7 +52,8 @@ from ..reporting import latest_plan_period_scores, score_in_orgs
 from ..service import (FOLLOWUP_OPEN_STATUSES, MIGRATION_VOID_STATUSES, REFERRAL_REVIEW_STATUSES, REVISIT_OPEN_STATUSES,
                        TASK_OPEN_STATUSES, _age_of, candidate_undistributed, enrollment_pathless, enrollment_unassessed,
                        enrollment_unstaged, followup_abnormal, followup_overdue, my_team_ids, referral_last_moved_at,
-                       sweep_overdue_on_read, task_escalated_open, task_overdue, task_unclaimed, team_view_scope)
+                       sweep_overdue_on_read, task_escalated_open, task_overdue, task_unclaimed, team_view_scope,
+                       acts_as_village_doctor)
 
 # 团队层级文案（措辞照抄 SpdTeam.level 列注释；工作台「所属团队」显示它——P2-74）
 TEAM_LEVEL_NAMES = {"county": "县级团队", "township": "乡镇团队", "village": "村级团队", "center": "专病中心团队"}
@@ -1350,6 +1351,7 @@ def doctor_mobile_workbench(
     按角色层级给不同的待办：村医看签约与随访，卫生院看审核与承接，
     县级看接收与督办，管理者看预警与绩效。角色从**团队成员身份**推出来，
     而不是从 `users.role`——同一个人在县医院是医师、在专病团队里是专家。
+    是不是村医另认在用的村医档案（P2-1339，`service.acts_as_village_doctor`）。
     """
     business_day = resolve_business_date(today)
     orgs = _scope(db, user, None, stats=False)
@@ -1360,7 +1362,9 @@ def doctor_mobile_workbench(
         .all()
     )
     member_roles = sorted({m.member_role for m in memberships})
-    is_village = "village_doctor" in member_roles
+    # 有在用村医档案或团队角色是村医（P2-1339）：原先只看团队角色，有村医档案、团队角色是缺省「医生」的村医签约积分照拿，
+    # 手机上却不是村医视角，「签约居民」不显示、「我的患者」0 条。与建档自动填签约村医、考核对象认的档案同一句
+    is_village = acts_as_village_doctor(db, user.id)
     village_profile = (
         db.query(SpdVillageDoctor).filter(SpdVillageDoctor.user_id == user.id).first()
     )
