@@ -263,20 +263,57 @@ def hl7v2_patient(
     字段约定（PID 段管道分隔）：PID-3 身份证号、PID-5 姓名（FN^GN 或纯文本）、
     PID-7 出生日期（YYYYMMDD）、PID-8 性别（M/F）、PID-13 联系电话。
     响应中的患者敏感字段按调用者角色统一脱敏（H1）。
+
+    只收建档类消息（MSH-9 为 ADT^A04 / A28 / A01，或不带 MSH-9 的简化消息），其余 422 拒收并指路、落交换日志
+    （`_refuse_non_patient_event`，P2-1266）。
     """
     return _run_inbound("hl7v2_patient", x_source_system, lambda: _do_hl7v2_patient(body, db, user))
 
 
-def parse_hl7v2_patient(message: str) -> tuple[dict, str]:
+#: 简化建档口（本接口与 ESB 的 hl7v2_patient 转换）受理的 MSH-9（P2-1266）：A04 挂号建档、A28 新增人员信息同属建档。
+#: A01 照旧收、只取 PID 建档——存量用例（本口与 ESB）都拿只带 PID 的 A01 当建档报文，而 /hl7v2/adt 的 A01 要 PV1 床位，
+#: 这类报文改投过去也收不下；本口还收不收 A01（带 PV1 的入院信息在这里不落库）待裁定
+_PATIENT_EVENTS = {"ADT^A01", "ADT^A04", "ADT^A28"}
+
+
+def _refuse_non_patient_event(message: str) -> None:
+    """简化建档口只收建档类消息：MSH-9 是别的事件时 422，detail 指路（P2-1266，第三十七批扫描 AA3-3）。
+
+    原先全程不看 MSH-9：A08 改电话、A03 出院、ORU 检验结果发到这里一律 201 + `MSA|AA`，实际只按证件号查档或建档——
+    对端收到 AA 不再重发，交换日志记成功，信息更新、出院、结果全丢。兄弟入口 /hl7v2/adt、/hl7v2/oru 各有白名单、其余
+    一律 422 明确拒收，这里同一口径：/adt 白名单里的事件（A03 / A08）指路 /hl7v2/adt，ORU^R01 指路 /hl7v2/oru（只指向
+    收得下它的入口），其余 ADT 事件与非 ADT 消息平台不受理。不带 MSH-9 的简化消息照旧收（接口说明写的就是「简化」消息，
+    存量对接可能不带）；缺 MSH 段的由解析照旧报「缺少 MSH 消息头段」。
+    """
+    event = _hl7_event(message)
+    if not event or event in _PATIENT_EVENTS:
+        return
+    code = event.split("^")[1] if event.startswith("ADT^") else ""
+    accepted = "本接口只收 ADT^A04 / A28 / A01 建档消息（或不带 MSH-9 的简化消息）"
+    if code in _ADT_EVENTS:
+        detail = f"消息类型 {event}（{_ADT_EVENTS[code]}）不是建档消息：{accepted}，请改投 /api/integration/hl7v2/adt"
+    elif event == "ORU^R01":   # 与 /hl7v2/oru 的受理口径同一句（`_do_hl7v2_oru`）
+        detail = f"消息类型 {event}（检验结果）不是建档消息：{accepted}，请改投 /api/integration/hl7v2/oru"
+    else:
+        detail = f"不支持的消息类型 {event}：{accepted}，平台不受理该事件"
+    raise HTTPException(status_code=422, detail=detail)
+
+
+def parse_hl7v2_patient(message: str, *, any_event: bool = False) -> tuple[dict, str]:
     """HL7 v2 ADT 消息 → (患者字段字典, 消息控制ID)。
 
     纯转换逻辑，不触库：入站接口与 ESB 编排 transform 步骤共用同一实现
     （块1：集成平台总线复用本函数，避免解析口径分叉）。
+
+    这两处拿到字段都只建档，所以只收建档类消息，别的事件 422（`_refuse_non_patient_event`，P2-1266）；ESB 那一侧
+    照它解析失败的老路记失败、重试到死信。ADT 入站按自己的事件白名单判过之后才取 PID，传 `any_event=True`。
     """
     lines = [ln.strip() for ln in message.replace("\r", "\n").split("\n") if ln.strip()]
     msh_line = next((ln for ln in lines if ln.startswith("MSH|")), None)
     if msh_line is None:
         raise HTTPException(status_code=422, detail="缺少 MSH 消息头段")
+    if not any_event:
+        _refuse_non_patient_event(message)
     msh_fields = msh_line.split("|")
     control_id = msh_fields[9] if len(msh_fields) > 9 else ""
     pid_line = next((ln for ln in lines if ln.startswith("PID|")), None)
@@ -845,7 +882,7 @@ def _do_hl7v2_adt(body: Hl7Message, db: Session, user: User, event: str):
             status_code=422,
             detail=f"不支持的消息类型 {event or '(缺失)'}：本接口仅受理 ADT^A01/A03/A04/A08",
         )
-    data, control_id = parse_hl7v2_patient(body.message)
+    data, control_id = parse_hl7v2_patient(body.message, any_event=True)   # 事件已按白名单判过（P2-1266）
     ack = _build_ack(control_id)
 
     if code == "A04":  # 挂号建档：现状等价（EMPI 幂等）

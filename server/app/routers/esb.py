@@ -524,6 +524,7 @@ def _parse_payload(payload: dict, config: dict) -> dict:
         raw = payload.get(config.get("source_field", "message"))
         if not isinstance(raw, str) or not raw.strip():
             raise ValueError("HL7 v2 转换需要 payload 中的报文文本字段")
+        # 只收建档类消息：A08 / A03 / ORU 等在解析里 422（与 /hl7v2/patient 同一判据），这里照解析失败记失败、重试到死信（P2-1266）
         data, control_id = parse_hl7v2_patient(raw)
         return {**data, "control_id": control_id}
     resource = payload.get(config.get("source_field", "resource"), payload)
