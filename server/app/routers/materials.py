@@ -6,6 +6,7 @@
 - **高值耗材追溯**：一物一码，使用时绑定患者与手术，形成"这枚支架用在谁身上、
   哪台手术、哪个批次、哪家供应商"的完整链条。这是耗材召回时唯一有用的东西。
 """
+from collections.abc import Iterable
 from datetime import date
 from typing import cast
 
@@ -23,7 +24,7 @@ from ..texttypes import NON_BLANK
 from ..visibility import assert_obj_org_writable, assert_org_writable, assert_patient_visible, scope_org_list, visible_org_ids
 from ..database import get_db
 from ..datetypes import OptionalDateStr, check_date
-from ..deps import get_current_user, paginate, require_roles, rows_by_id
+from ..deps import get_current_user, paginate, require_roles, row_dict, rows_by_id
 from ..models import (
     Asset,
     AssetMovement,
@@ -33,6 +34,7 @@ from ..models import (
     Organization,
     Patient,
     Supplier,
+    SurgeryRecord,
     SurgeryRequest,
     User,
     utcnow,
@@ -384,13 +386,27 @@ def register_consumable(body: ConsumableIn, db: Session = Depends(get_db), user:
     return _consumable_out(db, item)
 
 
-def _consumable_out(db: Session, c: HighValueConsumable, refs: tuple[dict, dict] | None = None) -> dict:
-    """`refs` 是清单按页一次 IN 取齐的（患者、手术），P2-1157：原先逐行各 `db.get` 一次；单条出参不给，照旧逐个取。"""
+def _actual_surgery_names(db: Session, surgery_ids: Iterable[int | None]) -> dict[int, str]:
+    """这几台手术里已有术中记录的 `{申请号: 实际术式}`（P2-1400），空集合不打库。"""
+    wanted = {i for i in surgery_ids if i is not None}
+    if not wanted:
+        return {}
+    return row_dict(db.query(SurgeryRecord.request_id, SurgeryRecord.actual_surgery_name)
+                    .filter(SurgeryRecord.request_id.in_(wanted)).all())
+
+
+def _consumable_out(db: Session, c: HighValueConsumable, refs: tuple[dict, dict, dict] | None = None) -> dict:
+    """`refs` 是清单按页一次 IN 取齐的（患者、手术、实际术式），P2-1157：原先逐行各 `db.get` 一次；单条出参不给，照旧逐个取。
+
+    手术名做完的按术中记录的实际术式（P2-1400），取法同居民端「我的手术」（P2-556）：中转开腹的，「查看记录」、居民端写实际
+    的，追溯链原先还印申请单上的那台——召回时按术式核对，对不上。没有术中记录的照旧取申请单。
+    """
     if refs is None:
         patient = db.get(Patient, c.used_patient_id) if c.used_patient_id else None
         surgery = db.get(SurgeryRequest, c.used_surgery_id) if c.used_surgery_id else None
+        actual = _actual_surgery_names(db, [c.used_surgery_id])
     else:
-        patient, surgery = refs[0].get(c.used_patient_id), refs[1].get(c.used_surgery_id)
+        patient, surgery, actual = refs[0].get(c.used_patient_id), refs[1].get(c.used_surgery_id), refs[2]
     return {
         "id": c.id,
         "barcode": c.barcode,
@@ -405,7 +421,7 @@ def _consumable_out(db: Session, c: HighValueConsumable, refs: tuple[dict, dict]
         "used_patient_id": c.used_patient_id,
         "used_patient_name": patient.name if patient else "",
         "used_surgery_id": c.used_surgery_id,
-        "used_surgery_name": surgery.surgery_name if surgery else "",
+        "used_surgery_name": actual.get(surgery.id, surgery.surgery_name) if surgery else "",
         "used_at": c.used_at.isoformat() if c.used_at else "",
     }
 
@@ -534,5 +550,6 @@ def list_consumables(
             query = query.filter(HighValueConsumable.org_id.in_(orgs))
     rows = paginate(query.order_by(HighValueConsumable.id.desc()), response, offset, limit)
     refs = (rows_by_id(db, Patient, (c.used_patient_id for c in rows)),
-            rows_by_id(db, SurgeryRequest, (c.used_surgery_id for c in rows)))
+            rows_by_id(db, SurgeryRequest, (c.used_surgery_id for c in rows)),
+            _actual_surgery_names(db, (c.used_surgery_id for c in rows)))
     return [_consumable_out(db, c, refs) for c in rows]

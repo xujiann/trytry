@@ -541,6 +541,15 @@ def list_schedules(
             found.append((day, s, r, room))
     found.sort(key=lambda row: (row[0], row[1].room_id, legacy_time(row[1].start_time) or row[1].start_time))
     rows = [(s, r, room) for _, s, r, room in found[:300]]
+    # 做完的手术按术中记录的实际术式与术者（P2-1400），取法同居民端「我的手术」（P2-556）：中转开腹、换了主刀的，
+    # 「查看记录」与居民端写实际的，排班表原先还印申请单上的——手术记录署的术者（P2-1307）在这张表上对不上。只取这两项；
+    # 没有术中记录的照旧取申请单
+    records = {
+        rec.request_id: rec
+        for rec in db.query(SurgeryRecord.request_id, SurgeryRecord.actual_surgery_name, SurgeryRecord.surgeon_name)
+        .filter(SurgeryRecord.request_id.in_([r.id for _, r, _ in rows] or [0]))
+        .all()
+    }
     return [
         {
             "id": s.id,
@@ -549,8 +558,8 @@ def list_schedules(
             "scheduled_date": s.scheduled_date,
             "start_time": s.start_time,
             "end_time": s.end_time,
-            "surgery_name": r.surgery_name,
-            "surgeon_name": r.surgeon_name,
+            "surgery_name": records[r.id].actual_surgery_name if r.id in records else r.surgery_name,
+            "surgeon_name": (records[r.id].surgeon_name if r.id in records else "") or r.surgeon_name,
             "anesthesia_type": r.anesthesia_type,
             "urgency": r.urgency,
             "status": r.status,
