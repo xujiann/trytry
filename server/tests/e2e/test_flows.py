@@ -4075,7 +4075,9 @@ def test_surgery_full_flow(page, base_url, seed, admin_read):
 
 def test_提手术申请时勾得上非计划重返手术室(page, base_url, admin_call, admin_read):
     """P2-172：手册写「非计划重返手术室：提手术申请时如实勾选」，申请表单上原先没有这一项——
-    接口收 `unplanned_return`，页面从不送，质量指标「非计划重返手术室率」恒为 0。"""
+    接口收 `unplanned_return`，页面从不送，质量指标「非计划重返手术室率」恒为 0。
+
+    P2-1398：重返是同一次住院内的再次手术，本次住院此前没有手术的勾不上（422），故先经接口提一台。"""
     org = admin_call("POST", "/api/organizations",
                      {"name": "E2E重返县医院", "org_type": "lead_hospital", "level": "county"})
     ward = admin_call("POST", "/api/inpatient/wards", {"org_id": org["id"], "name": "E2E重返外科"})
@@ -4083,6 +4085,7 @@ def test_提手术申请时勾得上非计划重返手术室(page, base_url, adm
     patient = admin_call("POST", "/api/patients", {"name": "E2E重返患者", "id_card": "320981198505051721"})
     adm = admin_call("POST", "/api/inpatient/admissions", {
         "patient_id": patient["id"], "ward_id": ward["id"], "bed_id": bed["id"], "diagnosis_name": "胆囊结石"})
+    admin_call("POST", "/api/surgery/requests", {"admission_id": adm["id"], "surgery_name": "E2E腹腔镜胆囊切除术"})
 
     _login(page, base_url)
     _open_page(page, "surgery", "手术麻醉")
@@ -4094,7 +4097,8 @@ def test_提手术申请时勾得上非计划重返手术室(page, base_url, adm
     expect(page.locator("#page-body")).to_contain_text("非计划重返")
 
     rows = admin_read(f"/api/surgery/requests?admission_id={adm['id']}")
-    assert [(r["surgery_name"], r["unplanned_return"]) for r in rows] == [("E2E胆漏再探查术", True)]   # 修前无处可勾
+    assert [(r["surgery_name"], r["unplanned_return"]) for r in rows] == [
+        ("E2E胆漏再探查术", True), ("E2E腹腔镜胆囊切除术", False)]   # 修前无处可勾
 
 
 def test_提手术申请时填得上拟施术者(page, base_url, admin_call, admin_read):

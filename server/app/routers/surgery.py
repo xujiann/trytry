@@ -205,6 +205,7 @@ class SurgeryRequestIn(BaseModel):
     urgency: str = Field(default="elective", pattern="^(elective|urgent|emergency)$")
     # 非计划重返手术室：由医师在提出申请时显式标记。不做推断——分期手术、
     # 计划内二次探查都是正常的，"同一住院有第二台手术"这种规则只会冤枉人。
+    # 反过来本次住院此前没有手术的勾不上（422，见 create_request，P2-1398）
     unplanned_return: bool = False
     planned_date: OptionalDateStr = ""
 
@@ -260,6 +261,13 @@ def create_request(
     assert_obj_org_writable(db, user, admission)
     if _died_in_surgery(db, admission.id):   # P2-1396
         raise HTTPException(status_code=409, detail=f"{_DIED_IN_SURGERY}，不可再申请手术")
+    # 「非计划重返手术室」是同一次住院内的**再次**手术（模型列注释、申请表单的勾选说明都这么写）：本次住院此前连一张未取消的手术
+    # 申请都没有，就无「重返」可言（P2-1398）。原先住院里唯一一台手术勾了也 201，「非计划重返手术室率」算成 1/2。与上面
+    # `SurgeryRequestIn` 的「不做推断」不矛盾：那句说的是不能由「同一住院有第二台」推断出重返（分期、计划内二次探查都不算），
+    # 这里只拦连第一台都没有的勾错，有前一台的勾不勾仍以医师标记为准。勾错、漏勾的事后更正是业务口径，不在此列
+    if body.unplanned_return and db.query(SurgeryRequest.id).filter(
+            SurgeryRequest.admission_id == admission.id, SurgeryRequest.status != "cancelled").first() is None:
+        raise HTTPException(status_code=422, detail="本次住院此前没有手术，不能标为非计划重返手术室")
     request = SurgeryRequest(
         patient_id=admission.patient_id,
         org_id=admission.org_id,
