@@ -388,6 +388,10 @@ async function renderFollowups() {
 // 科目类别（措辞照抄 AccountSubject.category 列注释；后端 CATEGORY_NAMES 同此）
 const ACC_CATEGORIES = { asset: "资产", liability: "负债", net_asset: "净资产", income: "收入", expense: "费用" };
 
+/** 会计页的机构筛选（P2-1438）：只留在内存里、不进存储（同交接班的 `HANDOVER_FILTER`）——看哪一家是这一次查看的条件。
+    本页只给管理层（全域角色），选哪家后端都收，不会因换了账号被拒。 */
+const ACC_FILTER = { org_id: "" };
+
 async function renderAccounting() {
   $("#page-desc").textContent = "会计科目 + 记账凭证（借贷必平强校验）→ 过账锁定 → 试算平衡表；作废而不删除";
   const thisMonth = localToday().slice(0, 7);
@@ -396,12 +400,16 @@ async function renderAccounting() {
   // 它们一直进不了试算平衡与合并报表，页面也不提示。草稿是等着过账的待办，过一张少一张，取全有数；整期不封顶（全域账号看的
   // 是全县各家的凭证），已过账 / 已作废的照旧只取最新一页。页长写明而不靠后端缺省：标题按「这一页取没取满」判截断
   const RECENT = 50;
+  // 选了机构，凭证清单与试算平衡表都只看这一家（P2-1438）：原先不带机构，试算平衡只看得到全县合计，看不了单独一家的账
+  // （指引㉛「独立建账」）。合并报表本来就是各家分列 + 合计，不跟着筛
+  const orgQuery = ACC_FILTER.org_id ? `&org_id=${encodeURIComponent(ACC_FILTER.org_id)}` : "";
   const load = (p) => Promise.all([
     api("/api/accounting/subjects"),
-    api(`/api/accounting/vouchers?period=${encodeURIComponent(p)}&limit=${RECENT}`),
-    fetchAllPages(api, `/api/accounting/vouchers?period=${encodeURIComponent(p)}&status=draft`),
-    api(`/api/accounting/trial-balance?period=${encodeURIComponent(p)}`),
-    api(`/api/accounting/consolidated-statements?period=${encodeURIComponent(p)}`)]);
+    api(`/api/accounting/vouchers?period=${encodeURIComponent(p)}&limit=${RECENT}${orgQuery}`),
+    fetchAllPages(api, `/api/accounting/vouchers?period=${encodeURIComponent(p)}&status=draft${orgQuery}`),
+    api(`/api/accounting/trial-balance?period=${encodeURIComponent(p)}${orgQuery}`),
+    api(`/api/accounting/consolidated-statements?period=${encodeURIComponent(p)}`),
+    api("/api/organizations")]);
   let period = localStorage.getItem("medplat_acc_period") || thisMonth;
   let loaded;
   try {
@@ -415,19 +423,28 @@ async function renderAccounting() {
     period = thisMonth;
     loaded = await load(period);
   }
-  const [subjects, recentVouchers, drafts, balance, consolidated] = loaded;
+  const [subjects, recentVouchers, drafts, balance, consolidated, orgs] = loaded;
   const vouchers = actionableFirst(recentVouchers, drafts);
+  // 凭证行写明是哪家（P2-1438）：全域账号看的是全县各家的凭证，两家都有「记-1」，作废时分不清。凭证只给机构编号，机构名
+  // 从机构清单取，映射不到回显编号；选了机构的，凭证与试算平衡两个面板的标题也写上是哪家
+  const orgName = Object.fromEntries(orgs.map((o) => [o.id, o.name]));
+  const orgOf = (id) => orgName[id] || id;
+  const scope = ACC_FILTER.org_id ? `${period} ${orgOf(ACC_FILTER.org_id)}` : period;
   // 标题写实数（P1-250）：原先写的是这一页的行数「凭证（50）」——截断后的数，看着像这个月只录了 50 张。最新一页没取满，
   // 整期就都在这里；取满了，草稿是全的，其余只是最新的那几张
-  const voucherTitle = recentVouchers.length < RECENT ? `${period} 凭证（${vouchers.length}）`
-    : `${period} 凭证：本期草稿 ${drafts.length} 张（全列）、其余显示最新 ${vouchers.length - drafts.length} 张`;
+  const voucherTitle = recentVouchers.length < RECENT ? `${scope} 凭证（${vouchers.length}）`
+    : `${scope} 凭证：本期草稿 ${drafts.length} 张（全列）、其余显示最新 ${vouchers.length - drafts.length} 张`;
   const canSubject = currentRole() === "admin";   // 建科目仅管理员（后端 require_admin）
   const VS = { draft: ["草稿", "orange"], posted: ["已过账", "green"], void: ["已作废", "red"] };
   const options = subjects.map((s) => `<option value="${esc(s.code)}">${esc(s.code)} ${esc(s.name)}</option>`).join("");
   $("#page-body").innerHTML = `
-    ${panel("会计期间", `
-      <form class="inline" id="acc-period"><input name="period" value="${esc(period)}" placeholder="YYYY-MM"><button>切换</button></form>
-      <p class="msg" id="acc-period-msg"></p>`)}
+    ${panel("会计期间与机构", `
+      <form class="inline" id="acc-period"><input name="period" value="${esc(period)}" placeholder="YYYY-MM">
+        <select name="org_id"><option value="">全部机构</option>${orgs.map((o) =>
+          `<option value="${o.id}"${String(o.id) === ACC_FILTER.org_id ? " selected" : ""}>${esc(o.name)}</option>`).join("")}</select>
+        <button>切换</button></form>
+      <p class="msg" id="acc-period-msg"></p>
+      <p class="desc">选了机构，凭证清单与试算平衡表只看这一家；下方各家分列的叠加汇总不跟着筛。</p>`)}
     ${panel("录入凭证", `
       <form id="voucher-form">
         <div class="inline"><input name="org_id" type="number" placeholder="机构ID" required>
@@ -440,11 +457,11 @@ async function renderAccounting() {
         <button>保存凭证（草稿）</button></form>
       <p class="msg" id="acc-msg"></p>`)}
     ${panel(voucherTitle,
-      table(["ID", "凭证号", "日期", "摘要", "借方", "贷方", "状态", "操作"], vouchers, (v) => {
+      table(["ID", "凭证号", "机构", "日期", "摘要", "借方", "贷方", "状态", "操作"], vouchers, (v) => {
         const ops = v.status === "draft"
           ? `<button class="btn secondary" data-post="${v.id}">过账</button>`
           : (v.status === "posted" ? `<button class="btn danger" data-void="${v.id}">作废</button>` : "—");
-        return `<tr><td>${v.id}</td><td>${esc(v.voucher_no)}</td><td>${esc(v.voucher_date)}</td>
+        return `<tr><td>${v.id}</td><td>${esc(v.voucher_no)}</td><td>${esc(orgOf(v.org_id))}</td><td>${esc(v.voucher_date)}</td>
           <td>${esc(v.summary)}</td><td>${v.total_debit.toFixed(2)}</td><td>${v.total_credit.toFixed(2)}</td>
           <td>${statusTag(VS, v.status)}</td>
           <td><button class="btn" data-detail="${v.id}">明细</button> ${ops}</td></tr>`;
@@ -471,7 +488,7 @@ async function renderAccounting() {
       ${consolidated.voucher_totals.balanced ? "" :
         `<p class="msg err">本期凭证借贷不平，差额 ${consolidated.voucher_totals.difference} 元——报表照出，差额在此标明</p>`}
     `)}
-    ${panel("试算平衡表（仅统计已过账）", `
+    ${panel(`试算平衡表（${ACC_FILTER.org_id ? `${orgOf(ACC_FILTER.org_id)}，` : ""}仅统计已过账）`, `
       <p class="msg ${balance.balanced ? "ok" : "err"}">借方合计 ${balance.total_debit.toFixed(2)}　贷方合计 ${
         balance.total_credit.toFixed(2)}　${balance.balanced ? "平衡" : "不平衡"}</p>
       ${table(["科目", "名称", "类别", "借方", "贷方"], balance.lines, (l) =>
@@ -520,13 +537,16 @@ async function renderAccounting() {
   $("#add-entry").onclick = addEntryRow;
   $("#acc-period").onsubmit = async (e) => {
     e.preventDefault();
-    const value = String(new FormData(e.target).get("period") || "").trim();
+    const f = new FormData(e.target);
+    const value = String(f.get("period") || "").trim();
     // 先让后端判这个期间合不合法，合法才记住：校验只有后端一份（require_month），
     // 前端不另抄一遍规则；坏值存进去，下次进页面就要走上面那条回落。
     try {
       await api(`/api/accounting/trial-balance?period=${encodeURIComponent(value)}`);
     } catch (err) { setMsg("#acc-period-msg", err.message, false); return; }
-    localStorage.setItem("medplat_acc_period", value); route();
+    localStorage.setItem("medplat_acc_period", value);
+    ACC_FILTER.org_id = String(f.get("org_id") ?? "");   // 机构筛选（P2-1438），缺省全部
+    route();
   };
   // 科目原先只能在凭证下拉里看、不能建（P2-93 动词级孤儿）：建科目的接口一直在，明细科目只能靠接口调用方
   const subjectForm = $("#acc-subject-form");
@@ -581,7 +601,7 @@ async function renderCost() {
   const orgId = Number(localStorage.getItem("medplat_cost_org") || 0);
   const load = (p) => Promise.all([
     api("/api/mgmt/departments"), api(`/api/cost/departments?period=${encodeURIComponent(p)}`),
-    api("/api/cost/allocation-rules")]);
+    api("/api/cost/allocation-rules"), api("/api/organizations")]);
   let period = localStorage.getItem("medplat_cost_period") || thisMonth;
   let loaded;
   try {
@@ -595,9 +615,15 @@ async function renderCost() {
     period = thisMonth;
     loaded = await load(period);
   }
-  const [depts, costs, rules] = loaded;
+  const [depts, costs, rules, orgs] = loaded;
   const unit = orgId ? await api(`/api/cost/unit-cost?period=${encodeURIComponent(period)}&org_id=${orgId}`).catch(() => null) : null;
   const deptName = Object.fromEntries(depts.map((d) => [d.id, d.name]));
+  // 写明是哪家（P2-1438，同 P2-1402 手术间的「机构名 · 名称」）：本页给管理层看，科室、分摊规则、科室成本都是全县各家混在
+  // 一起的，原先哪里都不写机构——两家都有「内科」，归集下拉里是一模一样的两条，选错了成本就记到别家（接口按所选科室的机构
+  // 照收 201）。科室清单与规则只给机构编号，机构名从机构清单取，映射不到回显编号；科室成本行后端本来就给 org_name
+  const orgName = Object.fromEntries(orgs.map((o) => [o.id, o.name]));
+  const orgOf = (id) => orgName[id] || id;
+  const deptLabel = (d) => `${orgOf(d.org_id)} · ${d.name}`;
   // ADR-0009 第五批：面板外壳改用 `panel()`（定义见 core.js），迁一页、人工过一页。
   // 单位成本面板按有无 unit 条件渲染；"期间"进标题时不再自己 esc()——组件转义标题。
   $("#page-body").innerHTML = `
@@ -613,7 +639,7 @@ async function renderCost() {
       <p class="desc">床日成本分母是实际占用床日，不是床位数×天数——后者是可用床日，混用会把成本算低。</p>`) : ""}
     ${panel("归集科室直接成本", `
       <form class="inline" id="cost-form"><select name="dept_id">${
-        depts.map((d) => `<option value="${d.id}">${esc(d.name)}（${esc(d.category_name)}）</option>`).join("")}</select>
+        depts.map((d) => `<option value="${d.id}">${esc(deptLabel(d))}（${esc(d.category_name)}）</option>`).join("")}</select>
         <input name="period" value="${esc(period)}" placeholder="YYYY-MM" required>
         <select name="cost_type">${Object.entries(COST_TYPES).map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}</select>
         <input name="amount" type="number" step="0.01" placeholder="金额" required><button>归集</button></form>
@@ -621,19 +647,19 @@ async function renderCost() {
       <p class="desc">同科室同期间同成本项重复提交按覆盖处理——月末成本反复调整是常态。</p>`)}
     ${panel("分摊规则", `
       <form class="inline" id="alloc-form">
-        <select name="from_dept_id">${depts.map((d) => `<option value="${d.id}">${esc(d.name)}</option>`).join("")}</select>
-        →<select name="to_dept_id">${depts.map((d) => `<option value="${d.id}">${esc(d.name)}</option>`).join("")}</select>
+        <select name="from_dept_id">${depts.map((d) => `<option value="${d.id}">${esc(deptLabel(d))}</option>`).join("")}</select>
+        →<select name="to_dept_id">${depts.map((d) => `<option value="${d.id}">${esc(deptLabel(d))}</option>`).join("")}</select>
         <input name="ratio_pct" type="number" step="0.01" placeholder="比例%" required><button>新增规则</button></form>
-      ${table(["来源科室", "目标科室", "比例", "操作"], rules, (r) =>
-        `<tr><td>${esc(deptName[r.from_dept_id] || r.from_dept_id)}</td>
+      ${table(["机构", "来源科室", "目标科室", "比例", "操作"], rules, (r) =>
+        `<tr><td>${esc(orgOf(r.org_id))}</td><td>${esc(deptName[r.from_dept_id] || r.from_dept_id)}</td>
          <td>${esc(deptName[r.to_dept_id] || r.to_dept_id)}</td><td>${r.ratio_pct}%</td>
          <td><button class="btn secondary" data-alloc-edit="${r.id}" data-ratio="${esc(r.ratio_pct)}">改比例</button>
              <button class="btn danger" data-alloc-del="${r.id}">删除</button></td></tr>`)}
       <p class="desc">同一来源科室的比例合计不能超过 100%；不足 100% 的部分在科室成本里记为「未分摊」。
         规则不分期间：改比例、删规则后，任一期的科室成本汇总都按现行规则重算。科室填错了就删掉重建。</p>`)}
     ${panel(`${period} 科室成本`, `${
-      table(["科室", "类别", "直接成本", "分摊转入", "分摊转出", "总成本", "未分摊"], costs, (c) =>
-        `<tr><td>${esc(c.dept_name)}</td><td>${esc(c.dept_category)}</td><td>${c.direct_cost.toFixed(2)}</td>
+      table(["机构", "科室", "类别", "直接成本", "分摊转入", "分摊转出", "总成本", "未分摊"], costs, (c) =>
+        `<tr><td>${esc(c.org_name || "—")}</td><td>${esc(c.dept_name)}</td><td>${esc(c.dept_category)}</td><td>${c.direct_cost.toFixed(2)}</td>
          <td>${c.allocated_in.toFixed(2)}</td><td>${c.allocated_out.toFixed(2)}</td>
          <td><b>${c.total_cost.toFixed(2)}</b></td>
          <td>${c.unallocated_ratio_amount ? `<span class="tag orange">${c.unallocated_ratio_amount.toFixed(2)}</span>` : "—"}</td></tr>`)}

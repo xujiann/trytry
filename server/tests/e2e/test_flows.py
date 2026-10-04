@@ -4840,6 +4840,32 @@ def test_会计科目能在界面上增建_凭证分录即可选用(page, base_u
     expect(page.locator(".e-subject").first.locator('option[value="100299"]')).to_have_count(1)
 
 
+def test_会计页凭证行写明机构_按机构筛凭证与试算平衡(page, base_url, seed, admin_call):
+    """P2-1438：会计页给全域账号看的是全县各家的凭证，原先哪里都不写是哪家（两家的同号凭证分不清），试算平衡也只看得到
+    全县合计。修后凭证清单有「机构」列；在「会计期间与机构」里选一家、点切换，凭证清单与试算平衡表只看这一家，重画后
+    下拉仍选着它。"""
+    _login(page, base_url)
+    today = page.evaluate("() => localToday()")   # 会计页默认看本月（本地日历，与页面同一个取法）
+    other = admin_call("POST", "/api/organizations", {"name": "E2E乙卫生院P21438", "org_type": "township",
+                                                      "level": "township"})
+    made = {}
+    for org_id, amount in ((seed["org"]["id"], 1000), (other["id"], 20)):   # 两家同一个凭证号
+        voucher = admin_call("POST", "/api/accounting/vouchers", {
+            "org_id": org_id, "voucher_no": "E2E-P21438", "voucher_date": today, "summary": "E2E 两家同号",
+            "entries": [{"subject_code": "1001", "debit": amount}, {"subject_code": "4004", "credit": amount}]})
+        admin_call("POST", f"/api/accounting/vouchers/{voucher['id']}/post", {})
+        made[org_id] = voucher["id"]
+    _open_page(page, "accounting", "会计核算")
+    for org_id, name in ((seed["org"]["id"], seed["org"]["name"]), (other["id"], "E2E乙卫生院P21438")):
+        expect(page.locator(f'tr:has(button[data-detail="{made[org_id]}"]) td').nth(2)).to_have_text(name)
+    page.locator('#acc-period select[name="org_id"]').select_option(str(other["id"]))
+    _redrawn(page, lambda: page.click("#acc-period button"))
+    expect(page.locator(f'button[data-detail="{made[other["id"]]}"]')).to_be_visible()
+    expect(page.locator(f'button[data-detail="{made[seed["org"]["id"]]}"]')).to_have_count(0)
+    expect(page.locator("#page-body h3", has_text="试算平衡表（E2E乙卫生院P21438，仅统计已过账）")).to_have_count(1)
+    expect(page.locator('#acc-period select[name="org_id"]')).to_have_value(str(other["id"]))
+
+
 def test_成本页存下的期间被拒时回落本月_切换框先验再存(page, base_url):
     """与会计页同一个坑（P1-62 修了会计页，成本页是 P1-61 收 `CostIn.period` 时查出来的）：
     切换框是自由文本、存进 localStorage 不校验，存下 `2026/09` 之后整页那个 Promise.all 422，

@@ -2010,9 +2010,12 @@ const MS_STATUS = { done: ["已完成", "green"], overdue: ["逾期未完成", "
 
 async function renderProjects() {
   $("#page-desc").textContent = "行政协同项目管理：立项、里程碑（完成与撤销完成）、进度与逾期";
-  const [projects, stats] = await Promise.all([
-    api("/api/projects"), api("/api/projects/stats/overview"),
+  const [projects, stats, orgs] = await Promise.all([
+    api("/api/projects"), api("/api/projects/stats/overview"), api("/api/organizations"),
   ]);
+  // 项目清单写明是哪家（P2-1438，同会计、成本两页）：清单是全县各家的项目，原先只有名称——同名的项目分不清是哪家的。
+  // 项目行只给机构编号，机构名从机构清单取，映射不到回显编号
+  const orgName = Object.fromEntries(orgs.map((o) => [o.id, o.name]));
   $("#page-body").innerHTML = `
     <div class="cards">
       ${[["项目总数", stats.total, false], ["在办", stats.active, false],
@@ -2032,8 +2035,9 @@ async function renderProjects() {
       <p class="msg" id="pj-msg"></p>
       <p class="hint">${esc(stats.caliber)}</p>`)}
     ${panel("项目清单", `
-      ${table(["名称", "负责人", "状态", "进度", "计划完成", "里程碑", "操作"], projects, (p) =>
+      ${table(["名称", "机构", "负责人", "状态", "进度", "计划完成", "里程碑", "操作"], projects, (p) =>
         `<tr><td>${esc(p.name)}${p.overdue ? ' <span class="tag danger">逾期</span>' : ""}</td>` +
+        `<td>${esc(orgName[p.org_id] || p.org_id)}</td>` +
         `<td>${esc(p.owner_name || "—")}</td><td>${esc(p.status_name)}</td>` +
         `<td>${p.progress_pct}%</td><td>${esc(p.due_date || "—")}</td>` +
         `<td>${p.milestone_done}/${p.milestone_total}` +
