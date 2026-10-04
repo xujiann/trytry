@@ -108,6 +108,11 @@ def vaccinate(body: RecordCreate, db: Session = Depends(get_db), user: User = De
     # 接种日期留空按今天：查禁忌、查批次效期用的是这个日期，落库的也得是这个日期（P2-196）——原先查按今天、
     # 存的却是空串：AEFI 发生率按期间数接种剂次时这一针不在任何期间里，接种证明的日期印成「—」
     vaccinated_date = body.vaccinated_date or clock.today().isoformat()
+    # 接种日期不得晚于今天（P2-1304，与出生日期 P2-713 / 发病日期 P2-454 同一句）：接种记录记的是已经打下去的那一针，
+    # 下面查禁忌、查效期、落库都用这个日期——原先不设上界，暂缓到 10-10 的暂时禁忌，把日期敲成 11-04 就判成已过期，
+    # 今天照打、照扣批次库存；当天出的反应（AEFI 要求发病日期不早于这一剂的接种日期）关联不上这一剂，当月接种统计也不计它
+    if vaccinated_date > clock.today().isoformat():
+        raise HTTPException(status_code=422, detail=f"接种日期（{vaccinated_date}）不得晚于今天")
     before_birth = before_birth_problem(vaccinated_date, patient.birth_date, "接种日期")   # P2-940
     if before_birth:
         raise HTTPException(status_code=422, detail=before_birth)
