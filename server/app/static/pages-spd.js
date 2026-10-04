@@ -111,16 +111,20 @@ function spdProgramOptions(catalog, blank, activeOnly) {
  * opts.submit：给了就由框自己提交（P2-607）——点确定调 `submit(值对象)`：抛错就留框、把报错写在框里、填的都在，
  * 改了再点确定；成功才关框，resolve(submit 的返回值，没有返回值时 true)。提交在途时确定 / 取消 / Esc / 点遮罩都不响应——
  * 框开着等响应，不能让同一张框交两次，也不能框关了请求还在路上。不给时照旧：点确定就关框、resolve(值对象)，
- * 由调用方发请求——那样请求一失败框已关，多行的记录写了一大段也要从头再填，写请求的框逐页改成给 submit。 */
+ * 由调用方发请求——那样请求一失败框已关，多行的记录写了一大段也要从头再填，写请求的框逐页改成给 submit。
+ * select 给了 placeholder 就是必选（P2-1443，按需开启）：首项是值为空的占位项（文案即 placeholder），没选就点确定——
+ * 把 placeholder 写在框里当报错、框不关、不交值。下拉没有空项时浏览器落在第一项，撤不回的动作（发放给哪家、以哪一批
+ * 响应）不动下拉就悄悄落在机构表、批次表的第一行。不给 placeholder 的下拉照旧（框里也不多一行消息）。 */
 function spdModal(title, fields, opts = {}) {
   return new Promise((resolve) => {
     const overlay = document.createElement("div");
     overlay.style.cssText = "position:fixed;inset:0;background:rgba(15,32,39,.45);"
       + "display:flex;align-items:center;justify-content:center;z-index:1000";
+    const picks = fields.filter((f) => f.type === "select" && f.placeholder);   // 必选的下拉（P2-1443）
     const control = (f) => {
       const val = f.value != null ? String(f.value) : "";
       if (f.type === "select") {
-        return `<select name="${esc(f.name)}">${(f.options || []).map((o) =>
+        return `<select name="${esc(f.name)}">${f.placeholder ? `<option value="">${esc(f.placeholder)}</option>` : ""}${(f.options || []).map((o) =>
           `<option value="${esc(o.value)}"${String(o.value) === val ? " selected" : ""}>${esc(o.label)}</option>`
         ).join("")}</select>`;
       }
@@ -141,7 +145,7 @@ function spdModal(title, fields, opts = {}) {
       ${opts.intro ? `<div class="desc" style="white-space:pre-wrap;font-size:12px">${esc(opts.intro)}</div>` : ""}
       ${fields.map((f) => `<label style="display:block;margin:8px 0;font-size:13px">
         ${esc(f.label)}<br>${control(f)}</label>`).join("")}
-      ${opts.submit ? '<p class="msg" data-modal-msg style="color:#c0392b"></p>' : ""}
+      ${opts.submit || picks.length ? '<p class="msg" data-modal-msg style="color:#c0392b"></p>' : ""}
       <div style="margin-top:12px;text-align:right">
         <button type="button" class="btn secondary" data-cancel>取消</button>
         <button type="submit" class="btn">确定</button></div></form>`;
@@ -161,8 +165,13 @@ function spdModal(title, fields, opts = {}) {
         const raw = (e.target[f.name].value || "").trim();
         out[f.name] = f.type === "number" ? Number(raw || 0) : raw;
       });
-      if (!opts.submit) return done(out);
       const msg = overlay.querySelector("[data-modal-msg]");
+      const unpicked = picks.find((f) => !out[f.name]);
+      if (unpicked) {
+        msg.textContent = unpicked.placeholder;   // 必选的下拉没选：框不关、不交值（P2-1443）
+        return;
+      }
+      if (!opts.submit) return done(out);
       const okButton = overlay.querySelector("button[type=submit]");
       busy = true;
       okButton.disabled = true;

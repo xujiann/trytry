@@ -1047,7 +1047,7 @@ async function renderCssd() {
     }))}
     ${panel("基层物品申领与中心响应", `
       <form class="inline" id="creq-form">
-        <select name="org_id">${orgs.map((o) =>
+        <select name="org_id" required><option value="">请选择申领机构</option>${orgs.map((o) =>
           `<option value="${o.id}">申领机构：${esc(o.name)}</option>`).join("")}</select>
         <input name="item_name" placeholder="物品名称" required>
         <input name="quantity" type="number" value="1" min="1" style="min-width:80px">
@@ -1072,9 +1072,12 @@ async function renderCssd() {
       route();
     } catch (err) { setMsg("#cssd-msg", err.message, false); }
   };
+  // 申领机构首项为空、必选（P2-1443，同 P1-247）：原先缺省第一家（机构表按 id 排，多半是中心自己），非全域经办不改它直接
+  // 403「无权以该机构名义写入数据」。不缺省成本人机构：页面不知道登录者挂哪家（登录回执只给角色、机构表是全县的）
   $("#creq-form").onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
+    if (!f.get("org_id")) return setMsg("#creq-msg", "请选择申领机构", false);
     try {
       // 数量清空不送（P2-865，与号源 capacity 同一写法）：`Number("")` 是 0，后端 `ge=1` 回一句英文 422；不送取缺省 1
       await api("/api/cssd/requests", { method: "POST", body: JSON.stringify({
@@ -1088,8 +1091,9 @@ async function renderCssd() {
     if (creqful) {
       if (!usable.length) return setMsg("#creq-msg", "没有已完成灭菌的批次可响应", false);
       try {
+        // 批次必选（P2-1443）：原先不动下拉就落在最新一个已灭菌批次，不管是什么物品——响应撤不回
         const picked = await spdModal(`响应申领 ${creqful}`, [
-          { name: "batch_id", label: "以哪一批响应（只列已完成灭菌的）", type: "select",
+          { name: "batch_id", label: "以哪一批响应（只列已完成灭菌的）", type: "select", placeholder: "请选择响应批次",
             options: usable.map((b) => ({ value: b.id, label: `${b.batch_no}｜${b.item_name}×${b.quantity}` })) }]);
         if (!picked) return;
         await api(`/api/cssd/requests/${creqful}/fulfill?batch_id=${Number(picked.batch_id)}`, { method: "POST" });
@@ -1100,9 +1104,10 @@ async function renderCssd() {
     try {
       let qs = "";
       if (next === "sterile") {
-        // 原先是输机构ID的弹窗——这一步是"发给谁"，选机构比默写数字靠谱
+        // 原先是输机构ID的弹窗——这一步是"发给谁"，选机构比默写数字靠谱。接收机构必选（P2-1443）：原先不动下拉就发给
+        // 机构表第一家（按 id 排，多半是中心自己），发放之后没有改去向的路
         const picked = await spdModal("发放批次", [
-          { name: "dispatched_to_org_id", label: "接收机构", type: "select",
+          { name: "dispatched_to_org_id", label: "接收机构", type: "select", placeholder: "请选择接收机构",
             options: orgs.map((o) => ({ value: o.id, label: o.name })) }]);
         if (!picked) return;
         qs = `?dispatched_to_org_id=${Number(picked.dispatched_to_org_id)}`;
@@ -1229,8 +1234,9 @@ async function renderMedwaste() {
     if (store) {
       const options = storageOf(Number(store.dataset.org));
       if (!options.length) return setMsg("#waste-msg", "该机构还没有在用的暂存间，请先在下方点位台账里建一个", false);
+      // 暂存间必选（P2-1443）：原先不动下拉就记进第一间，多间暂存间时包放在哪间就对不上了
       const form = await spdModal("入暂存间", [
-        { name: "storage_location_id", label: "暂存间", type: "select",
+        { name: "storage_location_id", label: "暂存间", type: "select", placeholder: "请选择暂存间",
           options: options.map((l) => ({ value: String(l.id), label: l.name })) },
       ]);
       if (!form) return;

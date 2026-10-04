@@ -3431,6 +3431,34 @@ def test_消毒供应成本项按批次看得见(page, base_url, admin_call):
     expect(items.locator("tr", has_text="E2E 两人打包")).to_contain_text("人工")
 
 
+def test_消毒供应发放不选接收机构不发(page, base_url, admin_call, admin_read):
+    """P2-1443（第四十二批扫描 AF4-2）：「发放」弹窗的接收机构原先没有空项，不动下拉点确定就发给机构表第一家（多半是中心
+    自己），发放撤不回。修后首项是「请选择接收机构」：不选就点确定，提示写在框里、框不关、批次不动；选了才发。"""
+    center = admin_call("POST", "/api/organizations", {"name": "E2E供应中心P21443", "org_type": "lead_hospital",
+                                                        "level": "county"})
+    town = admin_call("POST", "/api/organizations", {"name": "E2E接收卫生院P21443", "org_type": "township",
+                                                      "level": "township"})
+    batch = admin_call("POST", "/api/cssd/batches", {"batch_no": "E2E-P21443", "center_org_id": center["id"],
+                                                      "item_name": "E2E缝合包", "quantity": 5})
+    admin_call("POST", f"/api/cssd/batches/{batch['id']}/advance")   # 灭菌中 → 已灭菌，待发放
+
+    _login(page, base_url)
+    _open_page(page, "cssd", "消毒供应")
+    page.click(f'button[data-adv="{batch["id"]}"]')
+    form = page.locator("form.panel:has(button[data-cancel])")
+    picker = form.locator('select[name="dispatched_to_org_id"]')
+    expect(picker).to_have_value("")   # 修前落在机构表第一家
+    expect(picker.locator("option").first).to_have_text("请选择接收机构")
+    form.locator("button[type=submit]").click()
+    expect(form.locator("[data-modal-msg]")).to_have_text("请选择接收机构")
+    expect(form).to_be_visible()
+    (row,) = admin_read("/api/cssd/batches?batch_no=E2E-P21443")
+    assert row["status"] == "sterile"   # 没发出去
+    _redrawn(page, lambda: _spd_modal(page, {"dispatched_to_org_id": str(town["id"])}))
+    (row,) = admin_read("/api/cssd/batches?batch_no=E2E-P21443")
+    assert (row["status"], row["dispatched_to_org_id"]) == ("dispatched", town["id"])
+
+
 def test_计费明细能按住院单查_未结清的看得见(page, base_url, admin_call):
     """P2-493：「计费与结算」原先只能计、不能查——结算前看不到这次住院挂着哪些未结清的明细，计错了也无从发现。"""
     org = admin_call("POST", "/api/organizations", {"name": "E2E计费县医院", "org_type": "lead_hospital", "level": "county"})
