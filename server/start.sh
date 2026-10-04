@@ -71,6 +71,14 @@ while [ $i -lt 30 ]; do
   i=$((i+1))
 done
 
-wait "$UV_PID"
-trap - TERM INT
-wait "$UV_PID" 2>/dev/null
+# 第一次 wait 的退出码要用 `||` 接住（P2-1281）：本脚本开着 `set -e`，wait 被信号打断返回 128+signo 时整个脚本
+# 就地退出——正是上面那句「直接退出等于没等」，PID 1 一退，收尾到一半的 uvicorn 被内核 SIGKILL。被打断时子进程还在
+# 收尾（`kill -0` 探得到），摘掉 trap 再等它一次；脚本以 uvicorn 自己的退出码退出，它自己崩了的照旧原样带出去
+rc=0
+wait "$UV_PID" || rc=$?
+if kill -0 "$UV_PID" 2>/dev/null; then
+  trap - TERM INT
+  rc=0
+  wait "$UV_PID" || rc=$?
+fi
+exit "$rc"
