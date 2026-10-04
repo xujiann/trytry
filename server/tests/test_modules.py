@@ -37,7 +37,9 @@ def test_dictionary_bulk_import(client, headers):
     ]
     resp = client.post("/api/dictionaries/diagnosis/import", json=payload, headers=headers)
     assert resp.status_code == 200
-    assert resp.json() == {"imported": 2, "skipped": 1}
+    # imported / skipped 照旧；P2-1271 只增不改另加三键：跳过的拆成库里已有 / 本批重复，点名本批重复的编码
+    assert resp.json() == {"imported": 2, "skipped": 1,
+                           "skipped_existing": 0, "skipped_duplicate": 1, "duplicate_codes": ["TST-BULK1"]}
 
 
 def test_encounter_and_archive(client, headers, base_data):

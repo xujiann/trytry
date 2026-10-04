@@ -1455,6 +1455,7 @@ async function renderDicts() {
         spec / dosage_form / manufacturer / unit / insurance_code / national_code / extra。
         <b>已存在的编码会被跳过，而不是更新。</b>要改一条已有条目的名称，导入是不管用的——
         这一点与"导入"两个字给人的印象相反，所以写在这里。
+        同一批里同一编码写了几条，只导第一条，其余的编码在回执里点名。
         整批一次提交，撞车的那一条自己跳过，不会把整批带回滚。</p>
       <p class="msg" id="dict-import-msg"></p>`)}`;
   $("#dict-system").onchange = (e) => draw(e.target.value);
@@ -1470,8 +1471,15 @@ async function renderDicts() {
     try {
       const r = await api(`/api/dictionaries/${system}/import`,
         { method: "POST", body: JSON.stringify(entries) });
+      // 「库里已有」与「本批重复」分开说（P2-1271）：原先同一批里同一编码两行，后一行也算进「跳过（编码已存在）」，
+      // 它的名称、规格没导进去，页面上看不出来
+      const dupCodes = r.duplicate_codes || [];
+      const dup = r.skipped_duplicate
+        ? `；同一批里编码重复、只导了第一条，另有 ${r.skipped_duplicate} 条未导：${dupCodes.slice(0, 20).join("、")}`
+          + `${dupCodes.length > 20 ? ` 等 ${dupCodes.length} 个编码` : ""}（请核对哪一条作数）`
+        : "";
       setMsg("#dict-import-msg",
-        `导入完成：新增 ${r.imported} 条，跳过（编码已存在）${r.skipped} 条`, true);
+        `导入完成：新增 ${r.imported} 条，跳过（编码已存在）${r.skipped_existing} 条${dup}`, true);
       await draw(system);
     } catch (err) { setMsg("#dict-import-msg", err.message, false); }
   };

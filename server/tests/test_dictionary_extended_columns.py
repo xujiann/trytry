@@ -112,6 +112,8 @@ def test_api_bulk_import_accepts_new_fields(client, admin):
         headers=admin,
     )
     assert resp.status_code == 200
-    assert resp.json() == {"imported": 1, "skipped": 1}  # 响应契约保持两键
+    # 入参扩列不动 imported / skipped 两键；后三键是 P2-1271 只增不改加的（跳过的拆成库里已有 / 本批重复、点名重复编码）
+    assert resp.json() == {"imported": 1, "skipped": 1,
+                           "skipped_existing": 0, "skipped_duplicate": 1, "duplicate_codes": ["HC1001"]}
     entry = _entry("consumable", "HC1001")
     assert entry is not None and entry.spec == "24G"

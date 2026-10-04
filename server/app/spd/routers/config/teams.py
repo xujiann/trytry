@@ -433,9 +433,13 @@ def batch_village_doctors(
 
     逐条 savepoint 而不是整批一次提交：一条重复就整批回滚，导入方只知道"失败了"，
     还得自己二分查是哪一行。这里返回逐行结果，重复的跳过、其余照常建。
+
+    「已建档」只说库里原有的（P2-1271，与开办导入、存量导入同一口径）：同一批里同一账号写了两条，后一条点名与第几条
+    相同。原先第一条刚建的档也算「已建档」，西村那一条悄悄没了，回执看着像是早就开通过。
     """
     created, skipped = [], []
-    for item in body.items:
+    seen: dict[int, int] = {}   # 本批建了档的账号 → 第几条
+    for index, item in enumerate(body.items, start=1):
         assert_org_writable(db, user, item.org_id)
         if db.get(Organization, item.org_id) is None:   # 与单条开通同一句（P2-169）：原先撞外键记成「并发写入冲突」
             skipped.append({"user_id": item.user_id, "reason": "机构不存在"})
@@ -443,6 +447,11 @@ def batch_village_doctors(
         state = unusable_user(db, item.user_id)  # 与单条开通同一句（P1-106）
         if state:
             skipped.append({"user_id": item.user_id, "reason": f"用户{state}"})
+            continue
+        first = seen.get(item.user_id)
+        if first is not None:   # P2-1271：措辞照存量导入 `_dup_in_batch`
+            skipped.append({"user_id": item.user_id,
+                            "reason": f"同批内重复：账号与第 {first} 条相同（库里原本没有，不计「已建档」；请核对）"})
             continue
         exists = (
             db.query(SpdVillageDoctor.id)
@@ -456,6 +465,7 @@ def batch_village_doctors(
             db, SpdVillageDoctor(**item.model_dump(), bind_token=token_urlsafe(12))
         ):
             created.append(item.user_id)
+            seen[item.user_id] = index
         else:
             skipped.append({"user_id": item.user_id, "reason": "并发写入冲突，已跳过"})
     db.commit()

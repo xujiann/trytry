@@ -19,6 +19,8 @@ CSV 列（首行表头）：code,name
     --progress-every N 每处理 N 行输出一次进度（默认 1000，0=关闭）
 
 幂等：同一字典内已存在编码跳过（不覆盖名称）。
+幂等只认**库里已有的**：同一个文件里编码相同的后一行记错误行、点名与第几行相同，不计「幂等跳过」（P2-1271，
+与存量导入 P2-732 同一口径）——原先后一行的名称、规格悄悄丢了，回执「错误 0」、退出码 0。
 退出码：0=全部行成功（含幂等跳过）；1=存在错误行；2=参数/文件错误。
 数据库连接沿用 MEDPLAT_DATABASE_URL（与应用一致）。
 """
@@ -34,6 +36,7 @@ from app.database import SessionLocal, create_all_for_scripts  # noqa: E402
 from app.models import CodeEntry, CodeSystem  # noqa: E402
 from app.routers.dictionaries import SYSTEM_CODES  # noqa: E402
 from app.texttypes import excel_sci_notation  # noqa: E402
+from import_legacy import _dup_in_batch  # noqa: E402  同批内重复与存量导入同一句（P2-1271）
 
 # D1 扩列：可选属性列 → 列长上限（超长截断，与 name[:256] 同一策略）
 #: 标识列：经 Excel 一开一存会被改成科学计数法的（14 位本位码 → `8.69E+13`），这几列是就记错误行（P2-1125）
@@ -58,7 +61,8 @@ class ImportReport:
     skipped: int = 0
     errors: list[tuple[int, str]] = field(default_factory=list)  # (行号, 原因)
 
-    def error(self, line_no: int, reason: str) -> None:
+    def error(self, line_no: int, reason: str, row: dict | None = None) -> None:
+        """`row` 与存量导入的报告同形，只为复用 `import_legacy._dup_in_batch`（P2-1271）；本工具不落 errors.csv，不用它。"""
         self.errors.append((line_no, reason))
 
     def summary(self) -> str:
@@ -96,12 +100,13 @@ def run_import(
             system = CodeSystem(code=system_code, name=SYSTEM_CODES[system_code])
             db.add(system)
             db.flush()
-        existing = {
+        existing = {   # 只放库里原有的（P2-1271）
             code
             for (code,) in db.query(CodeEntry.code)
             .filter(CodeEntry.system_id == system.id)
             .all()
         }
+        seen_batch: dict[str, int] = {}   # 本文件里导入了的编码 → 第几行
         with csv_path.open(encoding="utf-8-sig", newline="") as fh:
             reader = csv.DictReader(fh)
             if reader.fieldnames is None or not {"code", "name"} <= set(reader.fieldnames):
@@ -121,6 +126,10 @@ def run_import(
                     # 原先原样收下：字典是给外部系统「下载对照」用的，库里存着 8.69E+13 这种本位码（P2-1125）
                     report.error(line_no, "疑似被表格软件改成科学计数法：" + "；".join(
                         f"{col} {(row.get(col) or '').strip()}" for col in sci) + "（把这一列设成文本格式、改回原值后重导）")
+                elif _dup_in_batch(seen_batch, code, line_no, report, row, "编码"):
+                    # 同一文件里撞编码的后一行记错误行、点名第几行（P2-1271）：原先本批刚导的编码也塞进「已存在」集合，
+                    # 后一行的名称、规格被计成「幂等跳过」悄悄丢掉
+                    pass
                 elif code in existing:
                     report.skipped += 1
                 else:
@@ -133,7 +142,7 @@ def run_import(
                     db.add(
                         CodeEntry(system_id=system.id, code=code, name=name[:256], **optional)
                     )
-                    existing.add(code)
+                    seen_batch[code] = line_no
                     report.imported += 1
                 if progress_every and processed % progress_every == 0:
                     out(

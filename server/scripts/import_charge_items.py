@@ -16,6 +16,9 @@ CSV 列（首行表头）：
     python scripts/import_charge_items.py scripts/samples/charge_items.csv [--dry-run]
 
 幂等：code 已存在跳过（不覆盖名称与价格——调价走调价接口留痕，不走导入）。
+幂等只认**库里已有的**：同一个文件里 code 相同的后一行记错误行、点名与第几行相同，不计「幂等跳过」（P2-1271，
+与存量导入 P2-732 同一口径）——同一编码一行 12.00、一行 25.00，原先只导了前一行，回执「错误 0」、退出码 0，
+哪个价才对没人看见。
 退出码：0=全部行成功（含幂等跳过）；1=存在错误行；2=参数/文件错误。
 数据库连接沿用 MEDPLAT_DATABASE_URL（与应用一致）。
 """
@@ -30,6 +33,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.database import SessionLocal, create_all_for_scripts  # noqa: E402
 from app.models import ChargeItem, CodeEntry, CodeSystem  # noqa: E402
+from import_legacy import _dup_in_batch  # noqa: E402  同批内重复与存量导入同一句（P2-1271）
 
 CATEGORIES = {"drug", "exam", "treatment", "bed", "other"}
 
@@ -41,7 +45,8 @@ class ImportReport:
     skipped: int = 0
     errors: list[tuple[int, str]] = field(default_factory=list)  # (行号, 原因)
 
-    def error(self, line_no: int, reason: str) -> None:
+    def error(self, line_no: int, reason: str, row: dict | None = None) -> None:
+        """`row` 与存量导入的报告同形，只为复用 `import_legacy._dup_in_batch`（P2-1271）；本工具不落 errors.csv，不用它。"""
         self.errors.append((line_no, reason))
 
     def summary(self) -> str:
@@ -81,7 +86,8 @@ def run_import(csv_path: str | Path, dry_run: bool = False) -> ImportReport:
     db = SessionLocal()
     try:
         # 集合预载：已有目录编码 + charge 字典编码（行内零 SELECT）
-        existing = {code for (code,) in db.query(ChargeItem.code).all()}
+        existing = {code for (code,) in db.query(ChargeItem.code).all()}   # 只放库里原有的（P2-1271）
+        seen_batch: dict[str, int] = {}   # 本文件里导入了的 code → 第几行
         charge_system = db.query(CodeSystem).filter(CodeSystem.code == "charge").first()
         dict_codes: set[str] | None = None  # None=字典未配置，不管控
         if charge_system is not None:
@@ -125,6 +131,10 @@ def run_import(csv_path: str | Path, dry_run: bool = False) -> ImportReport:
                 if dict_codes is not None and code not in dict_codes:
                     report.error(line_no, f"编码不在收费字典中: {code}（先维护 charge 字典）")
                     continue
+                # 同一文件里撞编码的后一行记错误行、点名第几行（P2-1271）：原先本批刚导的编码也塞进上面那个「已存在」
+                # 集合，后一行的名称、价格被计成「幂等跳过」悄悄丢掉
+                if _dup_in_batch(seen_batch, code, line_no, report, row, "编码"):
+                    continue
                 if code in existing:
                     report.skipped += 1
                     continue
@@ -137,7 +147,7 @@ def run_import(csv_path: str | Path, dry_run: bool = False) -> ImportReport:
                         active=(active_raw == "true"),
                     )
                 )
-                existing.add(code)
+                seen_batch[code] = line_no
                 report.imported += 1
         if dry_run:
             db.rollback()

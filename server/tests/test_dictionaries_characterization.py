@@ -9,7 +9,8 @@ from __future__ import annotations
 from conftest import login
 
 
-IMPORT_KEYS = {"imported", "skipped"}
+#: 后三键是 P2-1271 只增不改加的（跳过的拆成「库里已有」与「本批重复」、点名本批重复的编码）；前两键的计数语义不变
+IMPORT_KEYS = {"imported", "skipped", "skipped_existing", "skipped_duplicate", "duplicate_codes"}
 
 
 def _admin(client):
@@ -24,10 +25,12 @@ def test_import_keys_and_counts(client):
     first = client.post("/api/dictionaries/diagnosis/import", json=body, headers=admin)
     assert first.status_code == 200, first.text
     assert set(first.json().keys()) == IMPORT_KEYS
-    assert first.json() == {"imported": 2, "skipped": 0}
+    assert first.json() == {"imported": 2, "skipped": 0,
+                            "skipped_existing": 0, "skipped_duplicate": 0, "duplicate_codes": []}
 
     # 再导：已存在的跳过，新增的计入
     body2 = body + [{"code": "ZZTEST03", "name": "特征化诊断三"}]
     again = client.post("/api/dictionaries/diagnosis/import", json=body2, headers=admin).json()
     assert set(again.keys()) == IMPORT_KEYS
-    assert again == {"imported": 1, "skipped": 2}
+    assert again == {"imported": 1, "skipped": 2,
+                     "skipped_existing": 2, "skipped_duplicate": 0, "duplicate_codes": []}

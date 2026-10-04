@@ -1378,7 +1378,8 @@ async function renderSpdTeam() {
     if (!items.length) { setMsg("#spd-vd-msg", "没有可导入的行", false); return; }
     try {
       const r = await api("/api/spd/village-doctors/batch", { method: "POST", body: JSON.stringify({ items }) });
-      // 后端按 user_id 报跳过原因（用户不存在 / 已建档 / 并发冲突），不是按行号
+      // 后端按 user_id 报跳过原因（用户不存在 / 已建档 / 并发冲突），不是按行号；同一账号写了两条的，后一条点名与第几条
+      // 相同（P2-1271，第几条按上面滤掉空行后的顺序数）
       const skipped = (r.skipped || []).map((k) => `用户 ${k.user_id ?? "?"}：${k.reason || ""}`).join("；");
       await route();   // 先重画再写回执（P2-1013）：原先写完即被重画冲掉，跳过的是谁、为什么，页面上哪儿都看不到
       setMsg("#spd-vd-msg", `导入 ${r.created} 条${skipped ? `，跳过 ${r.skipped.length} 条：${skipped}` : ""}`);

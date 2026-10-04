@@ -321,7 +321,10 @@ def _dup_in_batch(seen: dict, key, line_no: int, report: ImportReport, row: dict
 
     原先各实体把本批刚导的键也塞进「库内已存在」那个集合：同日门诊与住院、同日两笔 12 元挂号、同机构两位王芳，后一条
     库里原本没有，却被计成「幂等跳过(已存在)」悄悄丢掉。库里真有的照旧幂等跳过；同一文件里撞键的点名是哪一行，清洗
-    源文件时核对——确属两条不同记录的，要等原系统流水号作幂等键（待定）才导得进。"""
+    源文件时核对——确属两条不同记录的，要等原系统流水号作幂等键（待定）才导得进。
+
+    开办三件工具（建号 `import_users`、收费目录 `import_charge_items`、字典 `import_dictionary`）同形，也拿它判（P2-1271）：
+    它们的报告类 `error` 收同样的三个参数。改签名、改措辞时一并看那三处。"""
     first = seen.get(key)
     if first is None:
         return False

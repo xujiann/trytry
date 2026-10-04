@@ -16,7 +16,12 @@ router = APIRouter(prefix="/api/dictionaries", tags=["统一编码字典"])
 # 响应契约：字段与原手拼 dict 一一对应，保持向后兼容。
 class BulkImportOut(BaseModel):
     imported: int
+    # 总条数 − 导入条数（含下面两类），口径不变
     skipped: int
+    # 以下三项是 P2-1271 新增（只增不改）：跳过的拆成「库里已有」与「本批重复」，后者点名编码（去重、按首次出现排）
+    skipped_existing: int
+    skipped_duplicate: int
+    duplicate_codes: list[str]
 
 
 # D1 扩列：入参在 CodeEntryCreate 上**新增可选列**（缺列/为 None 不填不报错），
@@ -100,25 +105,39 @@ def create_entry(system_code: str, body: CodeEntryUpsert, db: Session = Depends(
     dependencies=[Depends(require_admin)],
 )
 def bulk_import(system_code: str, entries: list[CodeEntryUpsert], db: Session = Depends(get_db)):
-    """标准字典全量/增量导入：已存在的编码跳过，返回导入统计。"""
+    """标准字典全量/增量导入：已存在的编码跳过，返回导入统计。
+
+    同一批里同一编码出现多次，先到为准：只导第一条（P2-733 当既有口径提过，不改）。回执把跳过的拆成「库里已有」与
+    「本批重复」两项、点名本批重复的编码（P2-1271，只增不改：`skipped` 照旧是总条数减导入条数）——原先本批刚导的编码
+    也塞进「库里已有」那个集合，同编码后一行的名称、规格悄悄丢了，页面却写「跳过（编码已存在）」。
+    """
     system = _get_system(db, system_code)
-    existing = {
+    existing = {   # 只放库里原有的（P2-1271）
         code for (code,) in db.query(CodeEntry.code).filter(CodeEntry.system_id == system.id).all()
     }
-    imported = 0
+    seen: set[str] = set()   # 本批导入了的编码
+    duplicates: dict[str, None] = {}   # 本批重复的编码（有序去重）
+    imported = skipped_existing = skipped_duplicate = 0
     for entry in entries:
+        if entry.code in seen:
+            duplicates[entry.code] = None
+            skipped_duplicate += 1
+            continue
         if entry.code in existing:
+            skipped_existing += 1
             continue
         # 预读的 existing 只是省一次 SAVEPOINT 的快路径，不是判据：
         # 两个导入并发跑会读到同一份 existing，都判定"不存在"就都去插。
         # 而这里是一次 commit 提交整批，一条撞车会让**整批回滚**——
         # 500 加上一条都没导进去。落库成不成以 insert_if_absent 为准。
         if not insert_if_absent(db, CodeEntry(system_id=system.id, **entry.model_dump())):
+            skipped_existing += 1   # 别的导入抢先写进了库：也是「库里已有」
             continue
-        existing.add(entry.code)
+        seen.add(entry.code)
         imported += 1
     db.commit()
-    return {"imported": imported, "skipped": len(entries) - imported}
+    return {"imported": imported, "skipped": len(entries) - imported, "skipped_existing": skipped_existing,
+            "skipped_duplicate": skipped_duplicate, "duplicate_codes": list(duplicates)}
 
 
 @router.get(

@@ -17,6 +17,9 @@ CSV 列（首行表头）：
         [--credentials-csv 生成口令输出路径]
 
 幂等：username 已存在跳过（不改角色不重置口令——开办工具只建号不改号）。
+幂等只认**库里已有的**：同一个文件里 username 相同的后一行记错误行、点名与第几行相同，不计「幂等跳过」（P2-1271，
+与存量导入 P2-732 同一口径）——两位同名「张伟」用同一个登录名，原先后一位没建号、口令清单里也没有他，回执却是
+「幂等跳过 1、错误 0」、退出码 0。
 退出码：0=全部行成功（含幂等跳过）；1=存在错误行；2=参数/文件错误。
 数据库连接沿用 MEDPLAT_DATABASE_URL（与应用一致）。
 """
@@ -34,6 +37,7 @@ from app.database import SessionLocal, create_all_for_scripts  # noqa: E402
 from app.deps import ROLE_NAMES  # noqa: E402  内置六角色（key→名称）
 from app.models import Organization, Role, User  # noqa: E402
 from app.security import hash_password, validate_password_strength  # noqa: E402
+from import_legacy import _dup_in_batch  # noqa: E402  同批内重复与存量导入同一句（P2-1271）
 
 
 @dataclass
@@ -44,7 +48,8 @@ class ImportReport:
     errors: list[tuple[int, str]] = field(default_factory=list)  # (行号, 原因)
     generated: list[tuple[str, str]] = field(default_factory=list)  # (username, 生成口令)
 
-    def error(self, line_no: int, reason: str) -> None:
+    def error(self, line_no: int, reason: str, row: dict | None = None) -> None:
+        """`row` 与存量导入的报告同形，只为复用 `import_legacy._dup_in_batch`（P2-1271）；本工具不落 errors.csv，不用它。"""
         self.errors.append((line_no, reason))
 
     def summary(self) -> str:
@@ -82,7 +87,8 @@ def run_import(
     try:
         # 集合预载：机构名→id、已存在用户名、合法角色（一次查询各一趟，行内零 SELECT）
         orgs = {name: oid for oid, name in db.query(Organization.id, Organization.name).all()}
-        existing = {name for (name,) in db.query(User.username).all()}
+        existing = {name for (name,) in db.query(User.username).all()}   # 只放库里原有的（P2-1271）
+        seen_batch: dict[str, int] = {}   # 本文件里建了号的 username → 第几行
         valid_roles = set(ROLE_NAMES) | {
             key for (key,) in db.query(Role.key).filter(Role.active.is_(True)).all()
         }
@@ -112,6 +118,10 @@ def run_import(
                     if org_id is None:
                         report.error(line_no, f"机构不存在: {org_name}（请先导入机构）")
                         continue
+                # 同一文件里撞号的后一行记错误行、点名第几行（P2-1271）：原先本批刚建的号也塞进上面那个「已存在」集合，
+                # 后一行被计成「幂等跳过」悄悄丢掉
+                if _dup_in_batch(seen_batch, username, line_no, report, row, "用户名"):
+                    continue
                 if username in existing:
                     report.skipped += 1
                     continue
@@ -133,7 +143,7 @@ def run_import(
                         org_id=org_id,
                     )
                 )
-                existing.add(username)
+                seen_batch[username] = line_no
                 report.imported += 1
         if dry_run:
             db.rollback()
