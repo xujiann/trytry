@@ -381,6 +381,9 @@ async function renderCerts() {
            ${canDeathCard && c.cert_type === "death"
              ? `<button class="btn" data-deathcard="${c.id}">死因报告卡</button>` : ""}</td></tr>`);
   };
+  // 公卫登记时录的 summary 叫「汇总小结」（P2-1405，登记框占位与清单列名），清单说明里的结论一律写「总检结论」：原先占位写
+  // 「体检结论」、列名「结论」显示的却是汇总小结，说明又说「结论全文不在清单里」——同一行读作「结论：各项正常｜已总检」，
+  // 医师写的总检结论却是「空腹血糖偏高…」。与打印件（`printing.print_checkup_report`）同一个叫法
   $("#page-body").innerHTML = `
     <div class="cards">
       <div class="card"><div class="label">出生证明</div><div class="value">${stats.birth || 0}</div></div>
@@ -418,7 +421,7 @@ async function renderCerts() {
         <input name="org_id" type="number" placeholder="体检机构ID" required>
         <input name="package_name" placeholder="套餐（默认常规体检）">
         <input name="exam_date" placeholder="体检日期 YYYY-MM-DD" required pattern="\\d{4}-\\d{2}-\\d{2}">
-        <input name="summary" placeholder="体检结论" style="min-width:160px">
+        <input name="summary" placeholder="汇总小结" style="min-width:160px">
         <input name="abnormal_items" placeholder="异常项（有则填）" style="min-width:160px">
         <div id="chk-items" style="flex-basis:100%"></div>
         <button type="button" class="btn secondary" id="chk-add-item">添加分项</button>
@@ -429,7 +432,7 @@ async function renderCerts() {
     ${abnormal.length ? panel(`⚠ 体检异常清单（${abnormal.length}，供慢病筛查建档衔接）`,
       table(["体检ID", "患者", "日期", "异常项"], abnormal, (a) =>
         `<tr><td>${a.id}</td><td>${a.patient_id}</td><td>${esc(a.exam_date)}</td><td><span class="tag red">${esc(a.abnormal_text)}</span></td></tr>`)) : ""}
-    ${panel("体检记录", table(["ID", "患者", "套餐", "日期", "结论", "异常", "总检", "操作"], checkups, (c) =>
+    ${panel("体检记录", table(["ID", "患者", "套餐", "日期", "汇总小结", "异常", "总检", "操作"], checkups, (c) =>
       `<tr><td>${c.id}</td><td>${c.patient_id}</td><td>${esc(c.package_name)}</td><td>${esc(c.exam_date)}</td>
        <td>${esc(c.summary) || "—"}</td><td>${c.has_abnormal ? `<span class="tag red">${esc(c.abnormal_text)}</span>`
          : statusTag(CHK_RESULT, c.has_results ? "ok" : "none")}</td>
@@ -437,8 +440,8 @@ async function renderCerts() {
        <td><button class="btn" data-chkitems="${c.id}">分项结果</button>
            ${canReview && c.has_results ? `<button class="btn secondary" data-chkreview="${c.id}">总检</button>` : ""}
            <button class="btn secondary" data-printchk="${c.id}">打印报告</button></td></tr>`)
-      + `<p class="desc">总检限医师（公卫岗只录入），重复总检按覆盖处理（复核改结论）；没总检的排在最前。
-        「总检」列只标总检了没有，结论全文不在清单里：写完在下方回显一次，之后要看结论走同一行的<b>「打印报告」</b>
+      + `<p class="desc">总检限医师（公卫岗只录入），重复总检按覆盖处理（复核改总检结论）；没总检的排在最前。
+        「总检」列只标总检了没有，总检结论全文不在清单里：写完在下方回显一次，之后要看总检结论走同一行的<b>「打印报告」</b>
         （打印件里有「总检结论」与总检医师署名）。</p>`)}
     <div class="panel hidden" id="chk-detail"><h3>体检分项结果</h3><div id="chk-detail-body"></div></div>`;
   $("#cert-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/certs", formJson(e.target, ["org_id", "patient_id"]), "#cert-msg"); };
