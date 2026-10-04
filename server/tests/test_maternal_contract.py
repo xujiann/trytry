@@ -105,7 +105,7 @@ def record_flow(client, admin, base):
     ).json()
     delivery = client.post(
         f"/api/maternal/records/{rid}/delivery",
-        json={"org_id": base["org"]["id"], "delivery_date": "2026-10-10",
+        json={"org_id": base["org"]["id"], "delivery_date": "2026-10-01",
               "delivery_mode": "cesarean", "outcome": "母子平安"},
         headers=admin,
     )
@@ -147,7 +147,7 @@ def test_分娩回执与查询精确(client, admin, base, record_flow):
         "id": body["id"],
         "record_id": rid,
         "org_id": base["org"]["id"],
-        "delivery_date": "2026-10-10",
+        "delivery_date": "2026-10-01",
         "delivery_mode": "cesarean",
         "newborn_count": 1,
         "outcome": "母子平安",
@@ -272,7 +272,8 @@ def prenatal(client, admin, base, record_flow):
     """
     current = client.post(
         "/api/maternal/records",
-        json={"patient_id": base["patient"]["id"], "lmp": "2027-01-10", "edc": "2027-10-17"},
+        # 末次月经不得晚于今天（P2-1305）：这本只为挂筛查，原先写的将来的末次月经不填，预产期照旧
+        json={"patient_id": base["patient"]["id"], "edc": "2027-10-17"},
         headers=admin,
     )
     assert current.status_code == 201, current.text

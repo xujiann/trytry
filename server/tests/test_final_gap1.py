@@ -38,7 +38,7 @@ def test_delivery_record_flow(client, setup):
     assert (
         client.post(
             f"/api/maternal/records/{record['id']}/delivery",
-            json={"org_id": setup["org"]["id"], "delivery_date": "2026-10-05"},
+            json={"org_id": setup["org"]["id"], "delivery_date": "2026-10-01"},
             headers=setup["public_health"],
         ).status_code
         == 403
@@ -47,7 +47,7 @@ def test_delivery_record_flow(client, setup):
         f"/api/maternal/records/{record['id']}/delivery",
         json={
             "org_id": setup["org"]["id"],
-            "delivery_date": "2026-10-05",
+            "delivery_date": "2026-10-01",
             "delivery_mode": "cesarean",
             "outcome": "母子平安",
         },
@@ -59,7 +59,7 @@ def test_delivery_record_flow(client, setup):
     assert (
         client.post(
             f"/api/maternal/records/{record['id']}/delivery",
-            json={"org_id": setup["org"]["id"], "delivery_date": "2026-10-06"},
+            json={"org_id": setup["org"]["id"], "delivery_date": "2026-10-02"},
             headers=doc,
         ).status_code
         == 409

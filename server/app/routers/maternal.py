@@ -71,20 +71,38 @@ class MaternalOut(MaternalCreate):
     model_config = {"from_attributes": True}
 
 
+class MaternalRegisterOut(MaternalOut):
+    """建册回执：档案九键之后多一个 `created`（P2-1305），其余与 `MaternalOut` 逐字节相同。"""
+
+    #: 本次新建为 true；这位妇女已有在册（未结案）档案为 false——一孕一册，回的是那本档案，本次所填一概没写进去。
+    #: 与患者建档回执的 `created` 同一口径（P2-1244）
+    created: bool
+
+
+def _register_out(record: MaternalRecord, created: bool) -> MaternalRegisterOut:
+    return MaternalRegisterOut(**MaternalOut.model_validate(record).model_dump(), created=created)
+
+
 @router.post(
     "/records",
-    response_model=MaternalOut,
+    response_model=MaternalRegisterOut,
     status_code=201,
     dependencies=[Depends(require_roles("doctor", "public_health"))],  # H2/L5: 妇幼建档
 )
 def register(body: MaternalCreate, db: Session = Depends(get_db)):
     if db.get(Patient, body.patient_id) is None:
         raise HTTPException(status_code=404, detail="患者不存在")
+    # 末次月经不得晚于今天（P2-1305，与出生日期 P2-713 / 发病日期 P2-454 同一句）：记的是已经过去的那一天，原先只查格式
+    # （P2-231），敲成将来照收，档案又没有更正入口。预产期本就在将来，不拦
+    if body.lmp and body.lmp > clock.today().isoformat():
+        raise HTTPException(status_code=422, detail=f"末次月经（{body.lmp}）不得晚于今天")
     # 一孕一册（P1-140）：只认在册（未结案）的那本。原先查到这位妇女的任何一本就原样返回——
     # 上一胎结案后再孕，拿回的是那本已结案的旧档案，这一胎建不了册。
+    # 命中与否要告诉调用方（P2-1305，与患者建档 P2-1244 同一做法）：原先回执与新建一模一样，按 B 超校正预产期重提建册
+    # 201、回的还是旧值，页面照样整页重画、像是改好了。状态码不改（向后兼容），只加 `created`；本次值不替人写进档案
     existing = _registering_record(db, body.patient_id)
     if existing is not None:
-        return existing
+        return _register_out(existing, created=False)
     # 建册幂等：并发下两个请求都查不到就都去插，撞「在册唯一」时
     # 返回既有那本，不是 500——一个孕产妇两本册子，产检记录会分叉。
     record = MaternalRecord(**body.model_dump())
@@ -96,10 +114,10 @@ def register(body: MaternalCreate, db: Session = Depends(get_db)):
         winner = _registering_record(db, body.patient_id)
         if winner is None:   # 撞上的那本转眼已结案：极窄，按冲突报，重提一次即建新册
             raise HTTPException(status_code=409, detail="建册冲突，请重试")
-        return winner
+        return _register_out(winner, created=False)
     db.commit()
     db.refresh(record)
-    return record
+    return _register_out(record, created=True)
 
 
 def _registering_record(db: Session, patient_id: int) -> MaternalRecord | None:
@@ -366,6 +384,10 @@ def add_delivery(record_id: int, body: DeliveryCreate, db: Session = Depends(get
         raise HTTPException(status_code=404, detail="孕产妇档案不存在")
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="机构不存在")
+    # 分娩日期不得晚于今天（P2-1305，与出生日期 P2-713 / 发病日期 P2-454 同一句）：记的是已经发生的分娩，产后访视（不得早于
+    # 分娩日，P2-1020）与结案都按它判——原先不设上界，10-04 敲成 11-04 照收，产后访视、结案都被挡到那天以后，分娩记录又改不了
+    if body.delivery_date > clock.today().isoformat():
+        raise HTTPException(status_code=422, detail=f"分娩日期（{body.delivery_date}）不得晚于今天")
     # 与 `add_visit` 同一个临界区（P2-1020 跟进）：分娩日按已记的访视判、访视按分娩日判，两边读的都是别的行；
     # 与 `create_screening` 同理（P2-1115）
     with serialized_on(db, MaternalRecord, record_id):

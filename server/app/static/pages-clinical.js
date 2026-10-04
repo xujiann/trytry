@@ -1336,11 +1336,22 @@ async function renderMaternal() {
          <td>${esc(w.exam_date) || "—"}</td><td>${esc(w.result) || "—"}</td><td>${esc(w.advice) || "—"}</td></tr>`)}`)}`;
   // 一孕一册（P1-140）：上一胎结案后再孕建的是新册，孕次 / 产次要录得进去（原先表单没有这两格，每本都是 G1P0）
   // 建册时就能判出的高危（高龄、瘢痕子宫……）录得进去（P2-857）：原先表单没有这两项，只能等产检血压 ≥140 或产筛高风险自动标
-  $("#mat-form").onsubmit = (e) => {
+  $("#mat-form").onsubmit = async (e) => {
     e.preventDefault();
     const body = formJson(e.target, ["patient_id", "gravidity", "parity"]);
     body.high_risk = e.target.high_risk.checked;
-    postAction("/api/maternal/records", body, "#mat-msg");
+    try {
+      const r = await api("/api/maternal/records", { method: "POST", body: JSON.stringify(body) });
+      // 这位妇女已有在册档案（P2-1305，与患者建档 P2-1244 同一口径）：一孕一册，后端原样返回那本、本次所填一概没写进去
+      // （回执 created=false，状态码照旧 201）。原先照样整页重画、表单清空——按 B 超校正的预产期像是改好了，档案里还是旧值。
+      // 什么都没改，不重画：填的留在表单里
+      if (r.created === false) {
+        setMsg("#mat-msg", `该孕产妇已有在册档案（档案ID：${r.id}），本次填写未写入：档案上仍是末次月经 ${r.lmp || "未填"}、`
+          + `预产期 ${r.edc || "未填"}、G${r.gravidity}P${r.parity}`, false);
+        return;
+      }
+      route();
+    } catch (err) { setMsg("#mat-msg", err.message, false); }
   };
   $("#child-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/maternal/children", formJson(e.target, ["guardian_patient_id"]), "#mat-msg"); };
   $("#wh-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/maternal/women-health", formJson(e.target, ["patient_id"]), "#mat-msg"); };

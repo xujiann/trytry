@@ -69,7 +69,7 @@ def _record(client, headers, name, id_card):
 def test_同一档案第二次分娩登记409且库里仍只有一条(client, setup):
     doc = setup["doctor"]
     record = _record(client, doc, "分娩唯一甲", "330281199502020017")
-    body = {"org_id": setup["org"]["id"], "delivery_date": "2026-10-05",
+    body = {"org_id": setup["org"]["id"], "delivery_date": "2026-10-01",
             "delivery_mode": "cesarean", "outcome": "母子平安"}
 
     first = client.post(f"/api/maternal/records/{record['id']}/delivery", json=body, headers=doc)
@@ -81,7 +81,7 @@ def test_同一档案第二次分娩登记409且库里仍只有一条(client, se
 
     again = client.post(
         f"/api/maternal/records/{record['id']}/delivery",
-        json=dict(body, delivery_date="2026-10-06", delivery_mode="natural"),
+        json=dict(body, delivery_date="2026-10-02", delivery_mode="natural"),
         headers=doc,
     )
     assert again.status_code == 409
@@ -91,13 +91,13 @@ def test_同一档案第二次分娩登记409且库里仍只有一条(client, se
     detail = client.get(f"/api/maternal/records/{record['id']}/delivery", headers=doc)
     assert detail.status_code == 200, detail.text
     assert detail.json()["delivery_mode"] == "cesarean"
-    assert detail.json()["delivery_date"] == "2026-10-05"
+    assert detail.json()["delivery_date"] == "2026-10-01"
 
 
 def test_不同档案各自登记一次互不冲突(client, setup):
     """唯一性只按"一本册子"划界：键写宽了（按机构/按日期）这条会红。"""
     doc = setup["doctor"]
-    body = {"org_id": setup["org"]["id"], "delivery_date": "2026-10-05"}
+    body = {"org_id": setup["org"]["id"], "delivery_date": "2026-10-01"}
     for name, id_card in (("分娩唯一乙", "330281199502020033"), ("分娩唯一丙", "330281199502020050")):
         record = _record(client, doc, name, id_card)
         resp = client.post(
@@ -120,7 +120,7 @@ def test_结案档案登记分娩仍是原来那句409(client, setup):
 
     resp = client.post(
         f"/api/maternal/records/{record['id']}/delivery",
-        json={"org_id": setup["org"]["id"], "delivery_date": "2026-10-05"},
+        json={"org_id": setup["org"]["id"], "delivery_date": "2026-10-01"},
         headers=doc,
     )
     assert resp.status_code == 409
@@ -173,7 +173,7 @@ def test_绕开接口层直插时库里真的拦得住(client, setup):
     record = _record(client, doc, "直插验证戊", "330281199502020092")
     created = client.post(
         f"/api/maternal/records/{record['id']}/delivery",
-        json={"org_id": setup["org"]["id"], "delivery_date": "2026-10-05"},
+        json={"org_id": setup["org"]["id"], "delivery_date": "2026-10-01"},
         headers=doc,
     )
     assert created.status_code == 201, created.text
