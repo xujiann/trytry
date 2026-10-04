@@ -189,13 +189,18 @@ def add_visit(record_id: int, body: VisitCreate, db: Session = Depends(get_db)):
         # 访视日期与这一胎登记了的分娩日期对得上（P2-1020，与 P2-233「晚于这一胎分娩的不可能是这一胎的产前筛查」同一条规矩）：
         # 原先不看——分娩 09-20 之后记一条 08-20 的「产后访视」照收、随即就能结案；分娩之后记「产前检查 40 周 150/95」照收，
         # 已分娩的档案被标成高危「妊娠期高血压可能」。没填访视日期的按今天算：补录孕期的检查要填当时的日期
-        delivered = _delivered_on(db, record_id)
-        if delivered is not None:
-            day = body.visit_date or clock.today().isoformat()
-            if body.visit_type == "postpartum" and day < delivered:
+        day = body.visit_date or clock.today().isoformat()
+        if body.visit_type == "postpartum":
+            delivered = _delivered_on(db, record_id)
+            if delivered is not None and day < delivered:
                 raise HTTPException(status_code=409, detail=f"产后访视日期 {day} 早于这一胎的分娩日期 {delivered}")
-            if body.visit_type == "prenatal" and day > delivered:
-                raise HTTPException(status_code=409, detail=f"产前检查日期 {day} 晚于这一胎的分娩日期 {delivered}，"
+        if body.visit_type == "prenatal":
+            # 产前检查的上界与产前筛查用同一个帮手（P2-1303）：没登记分娩（外院分娩、本院只记了产后访视）的按最早一次
+            # 产后访视算。原先只认登记了的分娩：产后访视 09-20 之后记「产前检查 40 周 150/95」照收、已分娩的档案被标成高危，
+            # 同一天的产前筛查却 409；这条错档的产检随后还把补登 09-19 的分娩挡住（「早于已记的产前检查」）
+            ended = _pregnancy_ended_on(db, record_id)
+            if ended is not None and day > ended[0]:
+                raise HTTPException(status_code=409, detail=f"产前检查日期 {day} 晚于这一胎的{ended[1]} {ended[0]}，"
                                                             "不是这一胎的产前检查：补录孕期的检查请填当时的检查日期")
         if body.visit_type == "postpartum" and record.status == "registered":
             record.status = "delivered"
