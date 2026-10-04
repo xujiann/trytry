@@ -73,6 +73,8 @@ router = APIRouter(prefix="/api/pharmacy", tags=["中心药房"])
 UNSPECIFIED_BATCH_NO = "未标批号"
 #: 兜底批次的效期哨兵：含义是"未登记效期"，不是"永不过期"。取远期是因为
 #: 空串在 `expire_date >= today` 的字符串比较里永远为假，会让这批药一片发不出去。
+#: 兜底批次的效期只能是它（P2-1341）：按批次入库不收保留批号，`_receive_unspecified` 与调拨碰上效期不是哨兵的
+#: 「未标批号」行（修前落下的存量）一律 409、不累加不搬运，留给人工处置。
 UNSPECIFIED_EXPIRE_DATE = "9999-12-31"
 
 
@@ -111,6 +113,15 @@ def _receive_unspecified(db: Session, org_id: int, drug_code: str, quantity: int
     batch = ensure_present(
         _batch_of(db, org_id, drug_code, UNSPECIFIED_BATCH_NO), "药品批次"
     )
+    if batch.expire_date != UNSPECIFIED_EXPIRE_DATE:
+        # 兜底批次的效期必须是哨兵（P2-1341）。修前按批次入库收保留批号，落下「未标批号 / 真效期」一行，此后三条无批号
+        # 入库全累加进去、继承那个效期——到期当天整行发不出（发药 409、采购建议报缺口）。效期建行后不再改，不必压进 UPDATE
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail=f"该药的「{UNSPECIFIED_BATCH_NO}」兜底批次登记的效期是 {batch.expire_date}（兜底批次应为未登记效期），"
+            f"无批号入库不得再累加进去：这一行的存量请人工核对处置；本次请按批次入库，报批号与效期",
+        )
     if batch.status != "normal" or not _add_to_normal_batch(db, batch.id, quantity):
         # 「召回后不得再入库」（`recall_batch`），按批次入库与调入早就这样拦（P1-147）。兜底批次召回了还照旧累加，
         # 汇总长出来的量一片也发不出（发药只取正常批次），缺药预警与采购建议却把它当有货——又一处幽灵库存
@@ -292,6 +303,15 @@ def transfer_stock(
     # 批次落到调入机构：同批号同效期累加，批号与效期跟着药走，
     # 否则调入方发出去的药回头查不到是哪一批（召回时唯一有用的那个查询）
     for batch, take in moved:
+        if batch.batch_no == UNSPECIFIED_BATCH_NO and batch.expire_date != UNSPECIFIED_EXPIRE_DATE:
+            # 同 `_receive_unspecified`（P2-1341）：调出方修前落下的「未标批号 / 真效期」行照搬过去，调入机构就多出一行
+            # 效期不是哨兵的兜底批次，那边的无批号入库从此全被 409 拦下。调出方的兜底行是哨兵、调入方的不是，下面的效期比对拦
+            db.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail=f"调出机构的「{UNSPECIFIED_BATCH_NO}」兜底批次登记的效期是 {batch.expire_date}"
+                f"（兜底批次应为未登记效期），不得调出：这一行的存量请人工核对处置",
+            )
         insert_if_absent(
             db,
             DrugBatch(
@@ -592,7 +612,15 @@ def receive_batch(
 
     同批号再次到货按累加处理（与 /stocks 的入库累加语义一致），
     但效期必须与首登一致——同一批号两个效期说明录错了，宁可拦下。
+
+    不收保留批号 `未标批号`（P2-1341）：它只给没有批号可报的入库兜底，效期是哨兵「未登记效期」。批次台账上印着它，
+    修前药师照抄再写上包装效期照样 201，落成「未标批号 / 真效期」一行，此后无批号入库全累加进去、继承那个效期。
     """
+    if body.batch_no == UNSPECIFIED_BATCH_NO:
+        raise HTTPException(
+            status_code=422,
+            detail=f"「{UNSPECIFIED_BATCH_NO}」是无批号入库所落兜底批次的保留批号，按批次入库请报包装上的真实批号",
+        )
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="机构不存在")
     assert_org_writable(db, user, body.org_id)
