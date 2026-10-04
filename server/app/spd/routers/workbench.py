@@ -50,9 +50,9 @@ from ..models import (
 )
 from ..reporting import latest_plan_period_scores, score_in_orgs
 from ..service import (FOLLOWUP_OPEN_STATUSES, MIGRATION_VOID_STATUSES, REFERRAL_REVIEW_STATUSES, REVISIT_OPEN_STATUSES,
-                       TASK_OPEN_STATUSES, _age_of, candidate_undistributed,
-                       followup_abnormal, followup_overdue, referral_last_moved_at, sweep_overdue_on_read,
-                       task_overdue, task_unclaimed)
+                       TASK_OPEN_STATUSES, _age_of, candidate_undistributed, enrollment_pathless, enrollment_unassessed,
+                       enrollment_unstaged, followup_abnormal, followup_overdue, my_team_ids, referral_last_moved_at,
+                       sweep_overdue_on_read, task_overdue, task_unclaimed, team_view_scope)
 
 # 团队层级文案（措辞照抄 SpdTeam.level 列注释；工作台「所属团队」显示它——P2-74）
 TEAM_LEVEL_NAMES = {"county": "县级团队", "township": "乡镇团队", "village": "村级团队", "center": "专病中心团队"}
@@ -1180,15 +1180,6 @@ def center_workbench(
 # ============================================================ 服务团队端（专家 / 成员 / 个案管理师）
 
 
-def _my_team_ids(db: Session, user: User) -> list[int]:
-    return [
-        m.team_id
-        for m in db.query(SpdTeamMember)
-        .filter(SpdTeamMember.user_id == user.id, SpdTeamMember.active.is_(True))
-        .all()
-    ]
-
-
 @router.get("/workbench/team", response_model=TeamWorkbenchOut,
             response_model_exclude_unset=True)
 def team_workbench(
@@ -1206,16 +1197,13 @@ def team_workbench(
     """
     business_day = resolve_business_date(today)
     orgs = _scope(db, user, None, stats=False)
-    team_ids = _my_team_ids(db, user)
+    team_ids = my_team_ids(db, user.id)
 
     # 「我的」档案范围（按角色 + 病种），不带状态；在管的是其中 active 的那部分。「召回中」原先写成在管查询上再加
-    # `status == 'recalled'`（P2-130）——active 且 recalled，恒 0；召回的患者又不在「在管」里，页面上哪儿都看不见
+    # `status == 'recalled'`（P2-130）——active 且 recalled，恒 0；召回的患者又不在「在管」里，页面上哪儿都看不见。
+    # 视角那一句与档案清单的 `team_role=` 共用（P2-1316）
     def scope_of(entity) -> list:
-        conditions = [
-            entity.manager_user_id == user.id if role == "case_manager"
-            else entity.doctor_user_id == user.id if role == "member"
-            else entity.team_id.in_(team_ids or [0])
-        ]
+        conditions = [team_view_scope(entity, role, user.id, team_ids)]
         if program_code:
             conditions.append(entity.program_code == program_code)
         return conditions
@@ -1243,18 +1231,11 @@ def team_workbench(
     # 直接嵌会被自动关联掉内层的 FROM
     my_patients = select(mine_query.with_entities(SpdEnrollment.patient_id).subquery().c.patient_id)
     # 待评估：带了病种的按（患者, 病种）判（P2-851，与考核按病种跑分同一句，P2-690）——原先按患者名下有没有任何评估，
-    # 做了高血压评估，糖尿病档案带 `program_code=diabetes` 也不算待评估；不带病种照旧按人（P2-139 的按人口径）
-    assessed = (SpdAssessment.patient_id == SpdEnrollment.patient_id,
-                *((SpdAssessment.program_code == SpdEnrollment.program_code,) if program_code else ()))
-    pending_assess = mine_query.filter(~exists().where(*assessed)).count()
-    # 待建路径按这份档案自己有没有进行中 / 已完成的路径（P2-851）：路径实例本就挂在单份档案上，原先看的是患者名下任何
-    # 档案有没有任何状态的路径——高血压启动了路径，糖尿病档案就不算待建；已取消的也算「有路径」
-    pending_path = mine_query.filter(
-        ~exists().where(
-            SpdPathInstance.enrollment_id == SpdEnrollment.id,
-            SpdPathInstance.status != "cancelled",   # 进行中 / 暂停 / 已完成都算有路径（不手写状态清单，P1-128 闸门）
-        )
-    ).count()
+    # 做了高血压评估，糖尿病档案带 `program_code=diabetes` 也不算待评估；不带病种照旧按人（P2-139 的按人口径）。
+    # 待建路径按这份档案自己有没有进行中 / 已完成的路径（P2-851）：原先看的是患者名下任何档案有没有任何状态的路径。
+    # 这两格与「待定目标」的判据抽进了 service，与档案清单的 `pending=assess|path|target` 共用（P2-1316）
+    pending_assess = mine_query.filter(enrollment_unassessed(by_program=bool(program_code))).count()
+    pending_path = mine_query.filter(enrollment_pathless()).count()
 
     out: dict[str, Any] = {
         "role": role,
@@ -1282,7 +1263,7 @@ def team_workbench(
                              today=business_day),
         "plans": {
             "pending_assess": pending_assess,
-            "pending_target": mine_query.filter(SpdEnrollment.stage == "").count(),
+            "pending_target": mine_query.filter(enrollment_unstaged()).count(),
             "pending_path": pending_path,
             # 到期 = 没做完且日期不晚于今天——过了日期的已被扫描置为超期，只认 planned 就只剩今天的（P1-128）
             "due_followups": db.query(SpdFollowupRecord).filter(
@@ -1373,7 +1354,7 @@ def doctor_mobile_workbench(
     """
     business_day = resolve_business_date(today)
     orgs = _scope(db, user, None, stats=False)
-    team_ids = _my_team_ids(db, user)
+    team_ids = my_team_ids(db, user.id)
     memberships = (
         db.query(SpdTeamMember)
         .filter(SpdTeamMember.user_id == user.id, SpdTeamMember.active.is_(True))

@@ -134,7 +134,9 @@ ROOT_FIXED_RENDERERS = [
      ['$("#spd-screen-form").onsubmit', '$("#spd-autoscreen-form").onsubmit',
       '$("#spd-enroll-form").onsubmit', '$("#spd-enroll-filter").onsubmit',
       '$("#spd-life-form").onsubmit', '$("#page-body").onclick'],
-     "await Promise.all([drawScreenings(), drawEnrollments(), drawLifecycle()]);"),
+     # P2-1316：档案清单首屏按团队工作台卡片带来的条件查（没带就是 undefined，与原先不传参一样）
+     'await Promise.all([drawScreenings(), drawEnrollments(jump ? formJson($("#spd-enroll-filter")) : undefined), '
+     "drawLifecycle()]);"),
     ("pages-spd.js", "renderSpdFollowup",
      ['$("#spd-furule-form").onsubmit',   # P2-92：新建随访方案
       '$("#spd-fuplan-form").onsubmit', '$("#spd-fumatch-form").onsubmit',

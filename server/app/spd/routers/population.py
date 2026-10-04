@@ -59,9 +59,10 @@ from ..rules import RuleError, as_validated, evaluate, is_suspect_risk, score_sc
 from ..service import (ENROLL_STATUS_LABELS, PACKAGE_ITEM_NAME_MAX, paused_enrollment, SCALE_ADVICE_MAX, MEASUREMENT_SOURCE_NAMES, TASK_OPEN_STATUSES, actively_enrolled, award_points, build_facts,
                        MIGRATION_SAME_ORG, MIGRATION_VOID_STATUSES,
                        candidate_reason, candidate_undistributed, close_open_work, enrollment_still_active, exclusion_problem,
-                       match_program, migration_void_reason,
+                       enrollment_pathless, enrollment_unassessed, enrollment_unstaged,
+                       match_program, migration_void_reason, my_team_ids,
                        package_items_ok,
-                       scale_program_mismatch, scale_unusable, scale_version_problem, unknown_program)
+                       scale_program_mismatch, scale_unusable, scale_version_problem, team_view_scope, unknown_program)
 
 # 筛查来源、分组范围文案（措辞照抄 SpdScreening.source / SpdGroup.scope 列注释——P2-74）
 SCREENING_SOURCE_NAMES = {"opportunistic": "机会性", "active": "主动筛查", "self": "居民自查", "import": "数据比对"}
@@ -1243,12 +1244,19 @@ def list_enrollments(
     archived: bool | None = None,
     keyword: str = "",
     due_before: str = "",
+    team_role: str | None = Query(default=None, pattern="^(expert|member|case_manager)$"),
+    pending: str | None = Query(default=None, pattern="^(assess|target|path)$"),
     offset: int = 0,
     limit: int = 100,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """在管患者多条件查询——全程管理中心端 #9 列的九个筛选维度都在这里。"""
+    """在管患者多条件查询——全程管理中心端 #9 列的九个筛选维度都在这里。
+
+    `team_role=` + `pending=assess|target|path` 列出团队工作台「待评估 / 待定目标 / 待建路径」那几份（P2-1316）：视角
+    （成员端 / 个案管理师端 / 专家端各自的「我的」）与三类判据都与工作台同一句（`service.team_view_scope`、
+    `enrollment_unassessed` / `enrollment_unstaged` / `enrollment_pathless`）。原先工作台报着数，清单没有对应的筛选，
+    `stage=` 空串又等于不筛（与 `status=` 同一个约定，不改）——没有一处能列出是哪几份档案。"""
     query = db.query(SpdEnrollment)
     orgs = visible_org_ids(db, user)
     if orgs is not None:
@@ -1267,6 +1275,15 @@ def list_enrollments(
     ):
         if value is not None and value != "":
             query = query.filter(column == value)
+    if team_role:
+        query = query.filter(team_view_scope(SpdEnrollment, team_role, user.id,
+                                             my_team_ids(db, user.id) if team_role == "expert" else []))
+    if pending == "assess":   # 带病种按（患者, 病种）判、不带按人，与工作台同一个开关（P2-851 / P2-139）
+        query = query.filter(enrollment_unassessed(by_program=bool(program_code)))
+    elif pending == "target":
+        query = query.filter(enrollment_unstaged())
+    elif pending == "path":
+        query = query.filter(enrollment_pathless())
     if archived is not None:
         query = query.filter(SpdEnrollment.archived.is_(archived))
     if due_before:

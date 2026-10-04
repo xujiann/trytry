@@ -53,9 +53,11 @@ function spdTag(map, key) {
   return statusTag(map, key || "—");
 }
 
+// 第 4 项是这一格点进去的去处（P2-1316）：给了就整格可点、标签后带「▸」（与驾驶舱指标卡同一个记号），点击由所在页面按
+// `data-spd-jump` 接；不给的卡片输出与原先逐字节相同
 function spdCards(items) {
-  return `<div class="cards">${items.map(([label, value, warn]) =>
-    `<div class="card"><div class="label">${esc(label)}</div>
+  return `<div class="cards">${items.map(([label, value, warn, jump]) =>
+    `<div class="card"${jump ? ` data-spd-jump="${esc(jump)}" style="cursor:pointer" title="点击查看是哪几份"` : ""}><div class="label">${esc(label)}${jump ? " ▸" : ""}</div>
      <div class="value${warn ? " warn" : ""}">${esc(value ?? 0)}</div></div>`).join("")}</div>`;
 }
 
@@ -1238,6 +1240,10 @@ async function renderSpdCenter() {
  * 5. 服务团队端（专家 / 成员 / 个案管理师）
  * ==========================================================*/
 
+/* 团队工作台卡片点进档案清单时带过去的条件（P2-1316）：{ team_role, pending }，「筛查建档与纳管」页取用一次即清。
+ * 只放内存、不进 localStorage——它是「这一次点击」的上下文，不是要跨会话记住的选择；刷新页面就该回到缺省的清单。 */
+let spdEnrollJump = null;
+
 async function renderSpdTeam() {
   $("#page-desc").textContent =
     "基层执行：团队专家、团队成员、个案管理师三个视角共用同一批数据，切换角色查看";
@@ -1260,8 +1266,9 @@ async function renderSpdTeam() {
       ["高危患者", wb.patients.high_risk, wb.patients.high_risk > 0],
       ["我的待办", wb.tasks.open], ["今日到期", wb.tasks.due_today],
       ["超期", wb.tasks.overdue, wb.tasks.overdue > 0],
-      ["待评估", wb.plans.pending_assess], ["待定目标", wb.plans.pending_target],
-      ["待建路径", wb.plans.pending_path], ["到期随访", wb.plans.due_followups],
+      // 这三格点得进档案清单（P2-1316）：原先只是数字，清单也没有对应的筛选，是哪几份档案无处可查
+      ["待评估", wb.plans.pending_assess, false, "assess"], ["待定目标", wb.plans.pending_target, false, "target"],
+      ["待建路径", wb.plans.pending_path, false, "path"], ["到期随访", wb.plans.due_followups],
       ["到期复诊", wb.plans.due_revisits],
     ])}
     ${(wb.alerts.abnormal_measure || wb.alerts.referrals || wb.alerts.recall || wb.alerts.dead)
@@ -1389,6 +1396,14 @@ async function renderSpdTeam() {
     const el = (attr) => e.target.closest(`[${attr}]`);
     const roleBtn = el("data-role"), teamMembers = el("data-team-members"), teamEdit = el("data-team-edit");
     const tmEdit = el("data-tm-edit"), tmDel = el("data-tm-del"), vdEdit = el("data-vd-edit"), vdQr = el("data-vd-qr");
+    const jump = el("data-spd-jump");
+    if (jump) {
+      // 卡片点进档案清单（P2-1316）：带上当前视角与这一格的判据——清单的 `team_role` + `pending` 与工作台同一句，
+      // 列出来的就是数出来的那几份
+      spdEnrollJump = { team_role: role, pending: jump.dataset.spdJump };
+      nav("spdpatients");
+      return;
+    }
     if (roleBtn) {
       localStorage.setItem("spd_team_role", roleBtn.dataset.role);
       route();
@@ -1530,6 +1545,12 @@ async function renderSpdPatients() {
         <select name="status"><option value="active">在管</option><option value="all">全部状态</option>
           ${Object.entries(SPD_ENROLL_STATUS).filter(([v]) => v !== "active")
             .map(([v, t]) => `<option value="${esc(v)}">${esc(t)}</option>`).join("")}</select>
+        <select name="team_role"><option value="">全部负责人</option>
+          <option value="member">我主管的（成员端）</option><option value="case_manager">我做个案管理的</option>
+          <option value="expert">我所在团队的（专家端）</option></select>
+        <select name="pending"><option value="">全部进度</option>
+          <option value="assess">待评估</option><option value="target">待定目标</option>
+          <option value="path">待建路径</option></select>
         <input name="keyword" placeholder="姓名/证件号">
         <button class="secondary">查询</button>
       </form>
@@ -1848,7 +1869,17 @@ async function renderSpdPatients() {
     }
   };
   // 取数放最后：以上监听已与 innerHTML 同一同步块挂好，窗口为零（P2-31 根修，样板见 renderSpdPath）
-  await Promise.all([drawScreenings(), drawEnrollments(), drawLifecycle()]);
+  // 从团队工作台卡片点进来的（P2-1316）：视角与判据预选进筛选栏、首屏就按它查，列出的与卡片上的数同一句；再点「查询」
+  // 照筛选栏的来。条件只用一次，下次从导航进来是缺省的清单
+  const jump = spdEnrollJump;
+  spdEnrollJump = null;
+  if (jump) {
+    const filter = $("#spd-enroll-filter");
+    filter.team_role.value = jump.team_role || "";
+    filter.pending.value = jump.pending || "";
+  }
+  await Promise.all([drawScreenings(), drawEnrollments(jump ? formJson($("#spd-enroll-filter")) : undefined), drawLifecycle()]);
+  if (jump) $("#spd-enroll-filter").scrollIntoView();
   const drawGroups = async () => {
     const groups = await api("/api/spd/groups");
     $("#spd-group-list").innerHTML = table(

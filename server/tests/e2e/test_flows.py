@@ -6108,6 +6108,36 @@ def test_任务中心按团队筛选(page, base_url, spd_seed, admin_call):
     expect(page.locator("#spd-task-list")).not_to_contain_text("E2E随访任务")   # 同机构、不在这个团队的
 
 
+def test_团队工作台待办三格点进档案清单_列的就是那几份(page, base_url, admin_call):
+    """P2-1316（第三十八批扫描 AB1-3 之一）：团队工作台「待评估 / 待定目标 / 待建路径」原先只是数字，档案清单也没有对应的
+    筛选——是哪几份档案无处可查。修后三格可点：带着当前视角（成员端 = 主管医生是我）与这一格的判据跳到「筛查建档与纳管」，
+    筛选栏预选好、首屏就按它查，列出的与卡片上的数同一句。"""
+    org = admin_call("POST", "/api/organizations", {
+        "name": "E2E P21316 卫生院", "org_type": "township", "level": "township"})
+    doctor = admin_call("POST", "/api/users", {"username": "e2e_p21316_doc", "password": "passw0rd1", "role": "doctor",
+                                               "full_name": "E2E P21316 医生", "org_id": org["id"]})
+    admin_call("POST", "/api/spd/programs", {"code": "e2e_p21316", "name": "E2E P21316 未配阶段", "category": "chronic"})
+    for n, program in enumerate(("e2e_p21316", "hypertension")):   # 没配阶段的病种建档落空串阶段：只有第一份待定目标
+        patient = admin_call("POST", "/api/patients", {
+            "name": f"E2E待定目标患者{n}", "id_card": f"32098119800101{1316 + n:04d}"})
+        admin_call("POST", "/api/spd/enrollments", {
+            "patient_id": patient["id"], "program_code": program, "org_id": org["id"], "doctor_user_id": doctor["id"]})
+    _login(page, base_url, "e2e_p21316_doc", "passw0rd1")
+    _open_page(page, "spdteam", "服务团队端·基层执行")
+    card = page.locator('.card[data-spd-jump="target"]')   # 修前这一格没有去处
+    expect(card).to_contain_text("待定目标")
+    expect(card.locator(".value")).to_have_text("1")
+    card.click()
+    expect(page.locator("#main h2")).to_have_text("筛查建档与纳管")
+    filter_form = page.locator("#spd-enroll-filter")
+    expect(filter_form.locator('[name="team_role"]')).to_have_value("member")
+    expect(filter_form.locator('[name="pending"]')).to_have_value("target")
+    listed = page.locator("#spd-enroll-list")
+    expect(listed).to_contain_text("E2E待定目标患者0")
+    expect(listed).not_to_contain_text("E2E待定目标患者1")   # 已有阶段的那份不在
+    expect(listed.locator("tbody tr")).to_have_count(1)
+
+
 @pytest.fixture(scope="module")
 def batch_seed(base_url, seed):
     """同一个药两个批号入库：台账按批号查只剩那一批（P1-148）。"""

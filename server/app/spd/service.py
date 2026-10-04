@@ -14,7 +14,7 @@ import math
 from datetime import date, timedelta
 from typing import Any, cast
 
-from sqlalchemy import String, and_, func, or_, select, update
+from sqlalchemy import String, and_, exists, func, or_, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
@@ -25,6 +25,7 @@ from ..numtypes import non_finite_path
 from .platform import (User, diagnosis_codes, diagnosis_names, notify_user, patient_of, unusable_user,
                        usable_or_none)
 from .models import (
+    SpdAssessment,
     SpdCallTask,
     SpdCandidate,
     SpdDevice,
@@ -48,6 +49,7 @@ from .models import (
     SpdScreening,
     SpdTarget,
     SpdTask,
+    SpdTeamMember,
     SpdVillageDoctor,
 )
 from .rules import FIELD_SOURCES, evaluate, judge_level, scale_problem
@@ -498,6 +500,53 @@ def candidate_undistributed():
     「为空」表达不出来（传空串 422），早入池、还没分出去的人挤出最新一页就查不到编号、分发不了。"""
     return and_(SpdCandidate.status == "target", SpdCandidate.team_id.is_(None),
                 SpdCandidate.assigned_user_id.is_(None))
+
+
+def my_team_ids(db: Session, user_id: int) -> list[int]:
+    """这个人以在岗成员身份所在的团队（团队工作台专家端的「我的团队」，P2-1316 从工作台挪来、档案清单同用）。"""
+    return [team_id for (team_id,) in db.query(SpdTeamMember.team_id).filter(
+        SpdTeamMember.user_id == user_id, SpdTeamMember.active.is_(True))]
+
+
+def team_view_scope(entity: Any, role: str, user_id: int, team_ids: list[int]):
+    """团队工作台三个视角各自的「我的」档案：成员端是主管医生是我的、个案管理师端是个案管理师是我的、专家端是我所在团队的。
+
+    团队工作台的各项计数与档案清单的 `team_role=` 共用这一句（P2-1316）：管理端页面拿不到本人的账号编号，工作台卡片点进
+    档案清单，只能让服务端按同一个视角认「我」。`entity` 是 `SpdEnrollment` 或它的别名（工作台「挂在我在管的档案上」
+    那几项用别名关联）。"""
+    if role == "case_manager":
+        return entity.manager_user_id == user_id
+    if role == "member":
+        return entity.doctor_user_id == user_id
+    return entity.team_id.in_(team_ids or [0])
+
+
+def enrollment_unassessed(by_program: bool):
+    """「待评估」的判定：这位患者还没有评估记录。
+
+    `by_program` 为真按（患者, 病种）判（P2-851，与考核按病种跑分同一句，P2-690）——做了高血压评估，糖尿病档案照样算待评估；
+    为假照旧按人（P2-139 的按人口径）。团队工作台带不带病种、档案清单带不带 `program_code` 各自决定它。
+    工作台的计数与档案清单的 `pending=assess` 共用这一句（P2-1316，与 P2-825 同一做法）：原先工作台报「待评估 N」，清单
+    没有对应的筛选，是哪几份档案查不出来。"""
+    return ~exists().where(
+        SpdAssessment.patient_id == SpdEnrollment.patient_id,
+        *((SpdAssessment.program_code == SpdEnrollment.program_code,) if by_program else ()),
+    )
+
+
+def enrollment_unstaged():
+    """「待定目标」的判定：档案还没定管理阶段（`stage` 落库是空串）。团队工作台的计数与档案清单的 `pending=target` 共用
+    （P2-1316）：清单的 `stage=` 空串照旧是不筛（与 `status=` 同一个约定），原先取不出这几份。"""
+    return SpdEnrollment.stage == ""
+
+
+def enrollment_pathless():
+    """「待建路径」的判定：这份档案自己没有进行中 / 暂停 / 已完成的路径，已取消的不算有路径（P2-851：路径实例本就挂在单份
+    档案上）。团队工作台的计数与档案清单的 `pending=path` 共用（P2-1316）。"""
+    return ~exists().where(
+        SpdPathInstance.enrollment_id == SpdEnrollment.id,
+        SpdPathInstance.status != "cancelled",   # 进行中 / 暂停 / 已完成都算有路径（不手写状态清单，P1-128 闸门）
+    )
 
 
 #: 「异常随访」的两档：答卷判出中度 / 重度——也就是会派处置任务的那两档（轻度只记不派）
