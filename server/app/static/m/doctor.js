@@ -699,9 +699,12 @@ async function loadCritical() {
         ? `<button data-ack="${r.id}">确认接收</button>`
         : r.critical_status === "acknowledged"
           ? `<button data-resolve="${r.id}">处置反馈</button>` : "";
+      // 所见照原样换行显示（P2-1363，与病程正文同一个样式）：LIS 回传的逐项结果只在所见里，卡片原先只列结论——
+      // 村医在手机上确认接收时看不到是哪一项、多少
       return card(
         kv("报告编号", esc(r.id)) + kv("申请单", esc(r.request_id)) +
-        kv("结论", esc(r.conclusion)) + kv("状态", statusTag(CRITICAL_TAGS, r.critical_status)),
+        kv("结论", esc(r.conclusion)) + kv("状态", statusTag(CRITICAL_TAGS, r.critical_status)) +
+        (r.finding ? `<p class="note-body">${esc(r.finding)}</p>` : ""),
         ops + `<button class="ghost" data-trace="${r.id}">处置轨迹</button>`
       );
     }).join("");

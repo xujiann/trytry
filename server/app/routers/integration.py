@@ -32,7 +32,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.routing import APIRoute
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
-from sqlalchemy import case, func
+from sqlalchemy import String, case, func
 from sqlalchemy.orm import Session
 
 from .. import clock, events
@@ -1160,12 +1160,22 @@ def _oru_request(db: Session, obr: str, pid: str | None) -> ExamRequest:
     return request
 
 
+#: `exam_reports.conclusion` 的列宽。结论逐项点名危急项（P2-1363）之后，危急项多的一组能拼到超宽：按列宽截断、末尾标「…」
+#: （写法同 `exams._critical_action_text`）；原先这里硬切 `[:1024]`，截掉了也看不出
+ORU_CONCLUSION_MAX = cast(String, ExamReport.__table__.c.conclusion.type).length or 1024
+
+
+def _oru_conclusion_text(text: str) -> str:
+    return text if len(text) <= ORU_CONCLUSION_MAX else text[:ORU_CONCLUSION_MAX - 1] + "…"
+
+
 def _oru_report(obr: str, obx_segments: list[str], request: ExamRequest,
                 reported_by: str) -> tuple[ExamReportCreate, int, int]:
     """一组 OBX 拼成一份报告，返回 (报告, 结果项数, 异常项数)。"""
     lines: list[str] = []
     abnormal = 0
     critical = False
+    critical_items: list[str] = []   # 判成危急的结果项「项目 值 单位 [标志]」，结论里逐项点名（P2-1363）
     unrecognized: list[str] = []   # 没有一个认得的标志、又带着认不得的标志的结果项——判不了，不当正常
     for seg in obx_segments:
         code_parts = _hl7_field(seg, 3).split("^")
@@ -1180,6 +1190,7 @@ def _oru_report(obr: str, obx_segments: list[str], request: ExamRequest,
             abnormal += 1
         if flags & _CRITICAL_FLAGS:
             critical = True
+            critical_items.append(" ".join(part for part in (label, value, unit, f"[{flag}]") if part))
         if flags and not flags & (_ABNORMAL_FLAGS | _NORMAL_FLAGS):
             unrecognized.append(flag)
         line = f"{label}：{value}"
@@ -1194,12 +1205,14 @@ def _oru_report(obr: str, obx_segments: list[str], request: ExamRequest,
     item_name = _hl7_unescape((item_parts[1].strip() if len(item_parts) > 1 else "")) or request.item_name
     conclusion = f"{item_name}：共 {len(lines)} 项，异常 {abnormal} 项"
     if critical:
-        conclusion += "，含危急值"
+        # 点名是哪一项、多少（P2-1363）：危急值的站内信正文、定向广播、待办、超时催办、两端危急值清单给的都是这句结论——
+        # 原先只写「含危急值」，村医在手机上确认接收时不知道是哪一项、多少，逐项结果只在所见里
+        conclusion += f"，含危急值（{'、'.join(critical_items)}）"
     if unrecognized:
         conclusion += f"，另 {len(unrecognized)} 项的异常标志平台不认得（{'、'.join(dict.fromkeys(unrecognized))}），以原文为准"
     report = ExamReportCreate(
         finding="\n".join(lines)[:2048],
-        conclusion=conclusion[:1024],
+        conclusion=_oru_conclusion_text(conclusion),
         critical=critical,
         reported_by=reported_by,
     )

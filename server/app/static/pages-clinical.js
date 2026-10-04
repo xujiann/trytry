@@ -2825,12 +2825,14 @@ async function renderCritical() {
          <td>${esc(r.reported_by)}</td><td>${esc(r.reported_at.slice(0, 16).replace("T", " "))}</td>
          <td>${esc(r.notified_at.slice(0, 16).replace("T", " "))}</td></tr>`)}`, { accent: "#c62828" }) : ""}
     ${panel("危急值清单", `<p class="msg" id="crit-msg"></p>${
-      table(["报告ID", "申请单", "结论", "闭环状态", "操作"], critical, (r) => {
+      // 所见照原样换行显示（P2-1363）：LIS 回传的逐项结果（哪一项、多少、参考范围、标志）只在所见里，清单原先只列结论
+      table(["报告ID", "申请单", "结论", "所见", "闭环状态", "操作"], critical, (r) => {
         const actions = (r.critical_status === "notified" || r.critical_status === "")
           ? `<button class="btn secondary" data-ack="${r.id}">确认接收</button>`
           : r.critical_status === "acknowledged"
           ? `<button class="btn secondary" data-resolve="${r.id}">处置反馈</button>` : "—";
         return `<tr><td>${r.id}</td><td>${r.request_id}</td><td><span class="tag red">${esc(r.conclusion)}</span></td>
+          <td style="white-space:pre-wrap">${esc(r.finding) || "—"}</td>
           <td>${statusTag(CRIT_STATUS, r.critical_status)}</td>
           <td>${actions} <button class="btn" data-trail="${r.id}">留痕</button></td></tr>`;
       })}`)}
