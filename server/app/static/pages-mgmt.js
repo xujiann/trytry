@@ -662,8 +662,12 @@ async function renderCost() {
 
 async function renderMaterials() {
   $("#page-desc").textContent = "非药品物资：申请 → 审批 → 合同 → 验收（自动入库流水）；高值耗材一物一码正反向追溯";
-  const [purchases, consumables] = await Promise.all([
-    api("/api/materials/purchases"), api("/api/materials/consumables")]);
+  // 在库耗材按状态续页取全、排在台账最前（P2-1358，同 P2-456 的 actionableFirst）：台账只取最新一页（100 件、按登记倒序），
+  // 「使用登记」只挂在这一页上——更早入库、先到效期的在库耗材被后登记的挤出窗口，页面上就登记不了
+  const [purchases, recentConsumables, inStock] = await Promise.all([
+    api("/api/materials/purchases"), api("/api/materials/consumables"),
+    fetchAllPages(api, "/api/materials/consumables?status=in_stock")]);
+  const consumables = actionableFirst(recentConsumables, inStock);
   // 审批（批准 / 驳回）限管理层（后端 require_roles("director")，管理员放行）：别的角色摆出按钮只会点出一次 403
   const canApprove = ["director", "admin"].includes(currentRole());
   // ADR-0009 第三批：面板外壳改用 `panel()`（定义见 core.js），迁一页、人工过一页。

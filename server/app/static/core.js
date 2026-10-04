@@ -1015,9 +1015,14 @@ async function renderPerformance() {
 async function renderCssd() {
   $("#page-desc").textContent =
     "器械批次：灭菌中 → 已灭菌 → 已发放 → 已回收，全程追溯；基层物品申领与中心响应";
-  const [batches, requests, orgs] = await Promise.all([
-    api("/api/cssd/batches"), api("/api/cssd/requests?limit=200"), api("/api/organizations"),
+  // 已灭菌（待发放）、已发放（待回收）的批次按状态单独取、排在最前（P2-1358，同 P2-456）：批次清单只回最新 200 个，更早
+  // 灭菌好的批次被后建的挤出窗口，就点不到「发放」「回收」，「以批次响应」的下拉也只在这 200 个里筛。每种状态仍受接口
+  // 200 个的上限：这个清单不按机构收口，切分页会把可枚举面放大成整表，要等「谁算中心」裁定（P1-71 / P1-75）
+  const [recentBatches, sterile, dispatched, requests, orgs] = await Promise.all([
+    api("/api/cssd/batches"), api("/api/cssd/batches?status=sterile"), api("/api/cssd/batches?status=dispatched"),
+    api("/api/cssd/requests?limit=200"), api("/api/organizations"),
   ]);
+  const batches = actionableFirst(recentBatches, sterile, dispatched);
   const BS = { sterilizing: ["灭菌中", "orange"], sterile: ["已灭菌", ""], dispatched: ["已发放", "green"], recycled: ["已回收", "green"] };
   // 取值真源是 models/assets.py:CssdRequest.status 的列注释
   const RS = { requested: ["已申领", "orange"], fulfilled: ["已发放", "green"] };
