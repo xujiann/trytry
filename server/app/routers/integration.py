@@ -1277,8 +1277,9 @@ def fhir_diagnostic_report(
     - basedOn[0].reference = `ServiceRequest/{申请单id}`（映射表：ExamRequest→ServiceRequest）；
     - conclusion→conclusion；presentedForm[0].data（base64 文本）→finding；
     - 危急值：extension `[{"url": "urn:medplat:critical", "valueBoolean": true}]`——
-      映射表 critical→flag 的入站承载（FHIR R4 DiagnosticReport 无标准危急值字段，
-      以命名扩展承载，出站导出用同一 URL 对称回写）；
+      映射表 critical 的入站承载（FHIR R4 DiagnosticReport 无标准危急值字段，
+      以命名扩展承载，出站导出用同一 URL 对称回写）；对接规范§二原先写成「critical→flag」，
+      按规范送 `flag` 的照收却不判危急值，现已改写成这个扩展（P2-1267）；
     - 申请单不存在 404 拒收（口径同 ORU：规范§四"引用的资源不存在→先行创建"）；
       已出报告 409；
     - subject（可选）= `Patient/{ehc_no}`（与 Observation / Encounter 入站、DiagnosticReport 出站同口径）：
