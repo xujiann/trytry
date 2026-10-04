@@ -39,6 +39,7 @@ from ..models import (
     QcRule,
 )
 from ..texttypes import NON_BLANK, is_blank_text
+from .exams import CRITICAL_STATUS_NAMES
 
 router = APIRouter(
     prefix="/api/dataquality", tags=["数据质控"], dependencies=[Depends(get_current_user)]
@@ -155,14 +156,19 @@ def _check_id_card(db: Session, rule: QcRule, model) -> list[tuple[int, str]]:
 
 
 def _check_critical_closed_loop(db: Session, rule: QcRule, model) -> list[tuple[int, str]]:
-    """危急值报告未走到处置反馈（critical_status != resolved）。"""
+    """危急值报告未走到处置反馈（critical_status != resolved）。
+
+    违规说明印状态文案（P2-1366）：取 `exams.CRITICAL_STATUS_NAMES`，存量空串等同已通知，与危急值页、指标导出同一张表
+    （P2-1026 的写法）；表外的值原样回显。原先把状态码原样印给质控人员看，存量空串另编了个「未回填」，像是要补录数据。
+    """
     rows = _scan(
         db.query(ExamReport.id, ExamReport.critical_status)
         .filter(ExamReport.critical == true(), ExamReport.critical_status != "resolved"),   # 用得上危急值部分索引（P2-1156）
         ExamReport,
     )
     return [
-        (r.id, f"危急值闭环状态为 {r.critical_status or '未回填'}，未达处置反馈（resolved）")
+        (r.id, f"危急值闭环状态为{CRITICAL_STATUS_NAMES.get(r.critical_status or 'notified', r.critical_status)}，"
+               f"未达处置反馈（{CRITICAL_STATUS_NAMES['resolved']}）")
         for r in rows
     ]
 
