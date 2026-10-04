@@ -55,10 +55,11 @@ def test_号源列表翻页不重不漏(client, admin):
     org = client.post("/api/organizations", headers=admin,
                       json={"name": "5b 号源院", "org_type": "lead_hospital",
                             "level": "county"}).json()
+    # 号源日期写在远期：放号不收早于业务日的日期（P2-1301），原先写死的 2026-11-11 一过就一条也放不出来
     for i in range(7):
         client.post("/api/appointments/slots", headers=admin,
                     json={"org_id": org["id"], "resource_type": "outpatient",
-                          "resource_name": f"并列科室{i}", "slot_date": "2026-11-11",
+                          "resource_name": f"并列科室{i}", "slot_date": "2099-11-11",
                           "slot_time": "09:00", "capacity": 5})
     total = int(client.get("/api/appointments/slots", headers=admin,
                            params={"org_id": org["id"]}).headers["X-Total-Count"])

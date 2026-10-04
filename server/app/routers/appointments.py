@@ -88,7 +88,9 @@ def find_doctors(
     号源与医师靠 `employee_id` 关联，不靠姓名字符串匹配：同名与写法不一
     都会漏，而漏掉的表现是"这位医师查不到号"，几乎无法自查。
     """
-    today = resolve_business_date(from_date, field="from_date").isoformat()
+    # 下界不早于业务日（P2-1301）：原先直接用 `from_date`——起始日期填过去，过去的号也算「可约」、`bookable` 为真，
+    # 照着 `next_slots` 给的第一个号去约只得 409「该号源日期已过」（P2-64）。与管理端号源清单（P2-882）同一口径
+    today = max(resolve_business_date(from_date, field="from_date"), clock.today()).isoformat()
     query = db.query(Employee).outerjoin(Department, Department.id == Employee.dept_id)
     if org_id is not None:
         query = query.filter(Employee.org_id == org_id)
@@ -177,6 +179,10 @@ def create_slot(body: SlotCreate, db: Session = Depends(get_db)):
             raise HTTPException(status_code=422, detail="医师不属于该机构")
         if employee.status == "left":  # 离职的医师不再放号（挂上了也没人坐诊），同批量生成、预约同一句
             raise HTTPException(status_code=409, detail="该医师已离职，不能放号")
+    # 日期早于业务日不放号（P2-1301）：原先只校验形状，年份敲成去年也 201——建出来的号清单不列（P2-882）、谁也约不上
+    # （P2-64），等于白放。与约号那句同一个口径、同一个比法；批量生成跳过已过的日期，见下
+    if body.slot_date < clock.today().isoformat():
+        raise HTTPException(status_code=422, detail="该号源日期已过，不能放号")
     slot = AppointmentSlot(**body.model_dump())
     # 同机构+医师+资源+日期+时段唯一（uq_slot_with_employee /
     # uq_slot_without_employee 两条部分索引，NULL != NULL 故拆两条）：
@@ -216,6 +222,8 @@ class SlotBatchCreate(BaseModel):
 class SlotBatchOut(BaseModel):
     created: int
     skipped: int
+    # 区间里早于业务日、没有生成的日期数（P2-1301）。加在末尾，前两个键语义不变：`skipped` 仍只数「已有号源」的跳过
+    skipped_past_dates: int
 
 
 @router.post(
@@ -229,6 +237,7 @@ def batch_create_slots(body: SlotBatchCreate, db: Session = Depends(get_db)):
 
     幂等：机构+医师+资源+日期+时段 已有号源的日期跳过（skipped 计数），
     重复调用不产生重复号源——开办期常常要"补生成"某几天，重跑安全比报错友好。
+    早于业务日的日期不生成，回执 `skipped_past_dates` 报有几天（P2-1301）。
     """
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="机构不存在")
@@ -250,11 +259,18 @@ def batch_create_slots(body: SlotBatchCreate, db: Session = Depends(get_db)):
         raise HTTPException(status_code=422, detail="date_from 不得晚于 date_to")
     skip = set(body.skip_dates)
     days: list[str] = []
+    # 早于业务日的日期不生成、只计数回执（P2-1301）：原先照生成、照计进 created——这样的号清单不列（P2-882）、谁也约不上
+    # （P2-64）。区间起点填早了，今天及以后的照常生成；上限只按真要生成的日期算
+    today = clock.today()
+    skipped_past_dates = 0
     cursor = start
     while True:
         day = cursor.isoformat()
         if day not in skip and not (body.skip_weekends and cursor.weekday() >= 5):
-            days.append(day)
+            if cursor < today:
+                skipped_past_dates += 1
+            else:
+                days.append(day)
         if cursor == end:   # 先判再加（P2-410）：区间止于 9999-12-31 时再加一天就越界，原先整个请求 500
             break
         cursor += timedelta(days=1)
@@ -295,7 +311,7 @@ def batch_create_slots(body: SlotBatchCreate, db: Session = Depends(get_db)):
         # 并发重复生成应得 409 而非 500
         db.rollback()
         raise HTTPException(status_code=409, detail="号源生成冲突，请重试")
-    return {"created": created, "skipped": skipped}
+    return {"created": created, "skipped": skipped, "skipped_past_dates": skipped_past_dates}
 
 
 @router.get("/slots", response_model=list[SlotOut])

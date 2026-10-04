@@ -99,4 +99,5 @@ def test_号源批量生成区间止于9999年末_照常生成而不是500(clien
     got = client.post("/api/appointments/slots/batch", headers=admin, json={
         "org_id": org, "date_from": "9999-12-30", "date_to": "9999-12-31",
         "templates": [{"resource_type": "outpatient", "resource_name": "P2410 内科"}]})
-    assert (got.status_code, got.json()) == (201, {"created": 2, "skipped": 0}), got.text   # 修前 500
+    assert (got.status_code, got.json()) == (
+        201, {"created": 2, "skipped": 0, "skipped_past_dates": 0}), got.text   # 修前 500

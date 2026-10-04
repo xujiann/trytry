@@ -125,7 +125,7 @@ def test_出院后可再次入院(client, admin, ward, doctor):
 def test_同时段号源重复创建409(client, admin, ward):
     slot = {
         "org_id": ward["org"]["id"], "resource_type": "exam",
-        "resource_name": "CT 室", "slot_date": "2026-09-10",
+        "resource_name": "CT 室", "slot_date": "2099-09-10",
         "slot_time": "09:00", "capacity": 5,
     }
     assert client.post("/api/appointments/slots", json=slot, headers=admin).status_code == 201
@@ -136,7 +136,7 @@ def test_同时段号源重复创建409(client, admin, ward):
     # 单一复合唯一索引对这类号源等于不设防，故拆了两条部分索引。
     listed = client.get(
         "/api/appointments/slots",
-        params={"org_id": ward["org"]["id"], "slot_date": "2026-09-10"},   # 清单只认 slot_date（P2-882 起不带日期只列今天及以后）
+        params={"org_id": ward["org"]["id"], "slot_date": "2099-09-10"},   # 清单只认 slot_date（P2-882 起不带日期只列今天及以后）
         headers=admin,
     ).json()
     assert len([s for s in listed if s["resource_name"] == "CT 室"]) == 1
@@ -145,11 +145,11 @@ def test_同时段号源重复创建409(client, admin, ward):
 def test_不同时段与不同资源互不冲突(client, admin, ward):
     base = {
         "org_id": ward["org"]["id"], "resource_type": "exam",
-        "resource_name": "CT 室", "slot_date": "2026-09-11", "slot_time": "09:00",
+        "resource_name": "CT 室", "slot_date": "2099-09-11", "slot_time": "09:00",
     }
     assert client.post("/api/appointments/slots", json=base, headers=admin).status_code == 201
     for changed in ({"slot_time": "10:00"}, {"resource_name": "MR 室"},
-                    {"slot_date": "2026-09-12"}):
+                    {"slot_date": "2099-09-12"}):
         resp = client.post("/api/appointments/slots", json=dict(base, **changed), headers=admin)
         assert resp.status_code == 201, f"{changed} 不该冲突：{resp.text}"
 

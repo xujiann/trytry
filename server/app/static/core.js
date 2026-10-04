@@ -808,7 +808,9 @@ async function renderAppointments() {
         skip_weekends: f.get("skip_weekends") === "true" }) });
       // 跳过数要说出来：幂等跳过与"什么都没生成"看起来一样，不报出来没人知道是补生成生效了
       await route();   // 先重画再写回执（P2-1013）：原先写完即被重画冲掉，跳过数从来没人看得到
-      setMsg("#apt-msg", `批量生成 ${r.created} 个号源，跳过已有 ${r.skipped} 个`);
+      // 已过的日期后端不生成（P2-1301），同样要说出来：区间起点填早了，生成数比区间天数少，不报就看不出少在哪
+      setMsg("#apt-msg", `批量生成 ${r.created} 个号源，跳过已有 ${r.skipped} 个`
+        + (r.skipped_past_dates ? `，已过的日期 ${r.skipped_past_dates} 天未生成` : ""));
     } catch (err) { setMsg("#apt-msg", err.message, false); }
   };
   $("#doctor-form").onsubmit = async (e) => {
