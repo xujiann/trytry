@@ -2,7 +2,8 @@
 """存量数据迁移工具：从 HIS/基卫等旧系统导出的 CSV 批量导入平台。
 
 支持实体（CSV 列见 server/scripts/samples/ 样例）：
-- organizations：机构（name 幂等）
+- organizations：机构（name 幂等；库里已有的同名机构与文件的类型 / 层级 / 上级不一致记错误行——平台不支持改上级，
+    见 P2-441；新建机构给了上级的按层级阶梯校验，与建机构接口同一句。P2-1342）
     列：name, org_type(lead_hospital|township|village|public_health),
         level(city|county|township|village), parent_name(可空), address(可空)
 - patients：患者（EMPI 按身份证号幂等，自动生成电子健康卡号）
@@ -97,6 +98,7 @@ from app.models import (  # noqa: E402
     Ward,
 )
 from app.routers.chronic import _suggest_next_due  # noqa: E402
+from app.routers.organizations import parent_level_problem  # noqa: E402
 from app.routers.patients import id_card_variants  # noqa: E402
 from app.schemas import OrganizationCreate  # noqa: E402
 from app.texttypes import excel_sci_notation, normalize_gender  # noqa: E402
@@ -370,6 +372,12 @@ def _orgs_by_name(db) -> dict[str, int]:
     return {name: oid for oid, name in db.query(Organization.id, Organization.name).all()}
 
 
+def _org_profiles(db) -> dict[str, tuple[int, str, str, int | None]]:
+    """机构名 → (id, 类型, 层级, 上级 id)：机构导入核对同名机构与文件是否一致、校验新建机构的上级层级用（P2-1342）。"""
+    rows = db.query(Organization.id, Organization.name, Organization.org_type, Organization.level, Organization.parent_id)
+    return {name: (oid, org_type, level, parent_id) for oid, name, org_type, level, parent_id in rows.all()}
+
+
 def _patients_by_id_card(db) -> dict[str, int]:
     return {ic: pid for pid, ic in db.query(Patient.id, Patient.id_card).all()}
 
@@ -431,7 +439,8 @@ def _date_key(value) -> str:
 
 
 def import_organizations(db, rows, report: ImportReport, ctx: ImportContext) -> None:
-    orgs = _orgs_by_name(db)
+    orgs = _org_profiles(db)
+    names = {oid: name for name, (oid, *_rest) in orgs.items()}   # id → 机构名：点名库内的上级用
     seen_batch: dict[str, int] = {}
     for line_no, row in rows:
         if not _require(row, line_no, report, "name", "org_type", "level"):
@@ -453,16 +462,34 @@ def import_organizations(db, rows, report: ImportReport, ctx: ImportContext) -> 
             continue
         if _dup_in_batch(seen_batch, name, line_no, report, row, "机构名称"):
             continue
+        parent_name = (row.get("parent_name") or "").strip()
         if name in orgs:
+            # 库里已有的同名机构，与文件一致才算幂等跳过（P2-1342）。原先一律跳过、退出码 0：改好上级 / 层级重导是运维补
+            # 机构树最自然的办法，结果是空操作——孤儿照旧孤儿、错位照旧错位，报告还说「错误 0 行」。平台不支持改上级
+            # （P2-441），导入也不替人改，但不一致要点名报出来
+            _, have_type, have_level, have_parent = orgs[name]
+            have_parent_name = "" if have_parent is None else names.get(have_parent, "")
+            diffs = [f"{col} 库内为「{have}」、文件为「{want}」" for col, have, want in (
+                ("org_type", have_type, org_type), ("level", have_level, level),
+                ("parent_name", have_parent_name, parent_name)) if have != want]
+            if diffs:
+                report.error(line_no, f"机构已存在、与文件不一致: {'；'.join(diffs)}"
+                                      "（库里这家没按文件改：平台不支持改上级，见 P2-441；层级、类型同样改不了）", row)
+                continue
             report.skipped += 1
             continue
         parent_id = None
-        parent_name = (row.get("parent_name") or "").strip()
         if parent_name:
-            parent_id = orgs.get(parent_name)
-            if parent_id is None:
+            parent = orgs.get(parent_name)
+            if parent is None:
                 report.error(line_no, f"上级机构不存在: {parent_name}（请先导入上级机构行）", row)
                 continue
+            # 给了上级就按层级阶梯校验，与建机构接口同一句（P1-247）：村挂县、乡挂乡原先照导（P2-1342）
+            problem = parent_level_problem(level, parent_name, parent[2])
+            if problem:
+                report.error(line_no, problem, row)
+                continue
+            parent_id = parent[0]
         org = Organization(
             name=name,
             org_type=org_type,
@@ -472,7 +499,8 @@ def import_organizations(db, rows, report: ImportReport, ctx: ImportContext) -> 
         )
         db.add(org)
         db.flush()  # 取 id，供同批后续行解析上级（flush 非查询，不破坏"行内零 SELECT"）
-        orgs[name] = org.id
+        orgs[name] = (org.id, org_type, level, parent_id)
+        names[org.id] = name
         seen_batch[name] = line_no
         report.imported += 1
         ctx.checkpoint()

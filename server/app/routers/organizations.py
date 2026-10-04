@@ -27,8 +27,8 @@ _ROOT_LEVELS = {"county", "city"}
 #: 县院之下，都是真实的医共体形态，不该因此判故障——收窄到这两条，既堵住错位，
 #: 也不对不参与转诊的机构指手画脚。
 #:
-#: 建机构给了上级时按它拦（`parent_level_problem`，P1-247）；「新增机构」表单的上级下拉
-#: 按它筛（core.js 的 `ORG_PARENT_LEVELS` 是它的前端副本，改这里要一起改）。
+#: 建机构给了上级时按它拦（`parent_level_problem`，P1-247；存量导入新建机构用同一句，P2-1342）；
+#: 「新增机构」表单的上级下拉按它筛（core.js 的 `ORG_PARENT_LEVELS` 是它的前端副本，改这里要一起改）。
 _PARENT_LEVELS: dict[str, set[str]] = {
     "village": {"township"},
     "township": {"county", "city"},
@@ -44,6 +44,7 @@ def parent_level_problem(level: str, parent_name: str, parent_level: str) -> str
     只管 village / township 两级，county / city 是链路终点，其上怎么挂与转诊无关，照收。
 
     不给上级的孤儿不在这里拦：全仓造数大量用「不挂上级的乡镇卫生院」，建时要不要拦另登待裁定。
+    存量导入（`scripts/import_legacy.py` 的机构导入）新建机构时用同一句（P2-1342）。
     """
     allowed = _PARENT_LEVELS.get(level)
     if allowed is None or parent_level in allowed:
