@@ -434,8 +434,9 @@ async def lifespan(_: FastAPI):
             with contextlib.suppress(Exception):
                 seed_lock_conn.close()
 
-    # 后台调度循环随应用启停；测试用 TestClient 也会走到这里，
-    # 但首个 tick 在 30 秒后，单测早已结束，不会产生干扰。
+    # 后台调度循环随应用启停；测试用 TestClient 也会走到这里。首个 tick 是**立即**跑的（`scheduler_loop` 先 tick
+    # 再睡 TICK_SECONDS），不产生干扰靠的是另一件事：`sync_registry` 给新登记的任务把 next_run_at 排在一个周期之后，
+    # 空库起来那一拍没有到期任务、什么也不跑（P2-1282；原注释写「首个 tick 在 30 秒后」，不对）。
     scheduler_task = asyncio.create_task(scheduler_loop())
     # 实例心跳按周期续（P2-256）：原先只在有人打开监控页时续，节点页里只剩接了那个请求的实例。
     # 没配 Redis 时每拍直接返回，不连任何东西
