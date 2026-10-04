@@ -660,6 +660,18 @@ async function renderCost() {
 
 /* ---------------- 物资采购与高值耗材 ---------------- */
 
+/* 采购流程的三列金额（P2-1362）：审批人点「审批」时得看得到这笔要花多少——清单行本来就带预估单价与合同金额，原先表里一个
+   都不画。预估单价没填（0）的，单价与总额显示 —；合同还没签的，合同金额显示 —（签了 0 元的照写 0.00）。预估总额 = 数量 ×
+   预估单价。金额照本页会计、成本两页的两位小数写法，调用处一律 esc()。 */
+function materialPurchaseAmounts(p) {
+  const yuan = (v) => Number(v).toFixed(2);
+  return {
+    price: p.estimated_price ? yuan(p.estimated_price) : "—",
+    total: p.estimated_price ? yuan(p.quantity * p.estimated_price) : "—",
+    contract: p.contract_no ? yuan(p.contract_amount) : "—",
+  };
+}
+
 async function renderMaterials() {
   $("#page-desc").textContent = "非药品物资：申请 → 审批 → 合同 → 验收（自动入库流水）；高值耗材一物一码正反向追溯";
   // 在库耗材按状态续页取全、排在台账最前（P2-1358，同 P2-456 的 actionableFirst）：台账只取最新一页（100 件、按登记倒序），
@@ -681,7 +693,7 @@ async function renderMaterials() {
         <input name="reason" placeholder="事由"><button>提交申请</button></form>
       <p class="msg" id="mat-msg"></p>`)}
     ${panel(`采购流程（${purchases.length}）`,
-      table(["ID", "物资", "规格", "数量", "状态", "合同", "已验收", "操作"], purchases, (p) => {
+      table(["ID", "物资", "规格", "数量", "预估单价", "预估总额", "状态", "合同", "合同金额", "已验收", "操作"], purchases, (p) => {
         let ops = "—";
         // 驳回原先没有入口（P2-425）：接口收 approved=false 早就置「已取消」，页面只给「审批」，不该买的申请只能一直挂着
         if (p.status === "requested") ops = canApprove
@@ -689,8 +701,10 @@ async function renderMaterials() {
              <button class="btn danger" data-reject="${p.id}">驳回</button>` : "待管理层审批";
         else if (p.status === "approved") ops = `<button class="btn secondary" data-contract="${p.id}">签合同</button>`;
         else if (p.status === "contracted") ops = `<button class="btn secondary" data-receive="${p.id}">验收</button>`;
+        const amt = materialPurchaseAmounts(p);
         return `<tr><td>${p.id}</td><td>${esc(p.item_name)}</td><td>${esc(p.spec)}</td><td>${p.quantity}${esc(p.unit)}</td>
-          <td>${statusTag(PURCHASE_STATUS, p.status)}</td><td>${esc(p.contract_no || "—")}</td>
+          <td>${esc(amt.price)}</td><td>${esc(amt.total)}</td>
+          <td>${statusTag(PURCHASE_STATUS, p.status)}</td><td>${esc(p.contract_no || "—")}</td><td>${esc(amt.contract)}</td>
           <td>${p.received_quantity || "—"}</td><td>${ops}</td></tr>`;
       }))}
     ${panel("高值耗材登记（一物一码）", `
