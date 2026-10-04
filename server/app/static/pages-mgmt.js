@@ -391,9 +391,15 @@ const ACC_CATEGORIES = { asset: "资产", liability: "负债", net_asset: "净�
 async function renderAccounting() {
   $("#page-desc").textContent = "会计科目 + 记账凭证（借贷必平强校验）→ 过账锁定 → 试算平衡表；作废而不删除";
   const thisMonth = localToday().slice(0, 7);
+  // 本期草稿续页取全、排在最前（P1-250，同 P2-456 / P2-1310 的 actionableFirst）：凭证清单一页只回最新 50 张（按 id 倒序），
+  // 「过账」「明细」只挂在清单行上——一个月过了 50 张，最早录的那批草稿就被挤出窗口，过不了账、看不了明细，月末集中过账时
+  // 它们一直进不了试算平衡与合并报表，页面也不提示。草稿是等着过账的待办，过一张少一张，取全有数；整期不封顶（全域账号看的
+  // 是全县各家的凭证），已过账 / 已作废的照旧只取最新一页。页长写明而不靠后端缺省：标题按「这一页取没取满」判截断
+  const RECENT = 50;
   const load = (p) => Promise.all([
     api("/api/accounting/subjects"),
-    api(`/api/accounting/vouchers?period=${encodeURIComponent(p)}`),
+    api(`/api/accounting/vouchers?period=${encodeURIComponent(p)}&limit=${RECENT}`),
+    fetchAllPages(api, `/api/accounting/vouchers?period=${encodeURIComponent(p)}&status=draft`),
     api(`/api/accounting/trial-balance?period=${encodeURIComponent(p)}`),
     api(`/api/accounting/consolidated-statements?period=${encodeURIComponent(p)}`)]);
   let period = localStorage.getItem("medplat_acc_period") || thisMonth;
@@ -409,7 +415,12 @@ async function renderAccounting() {
     period = thisMonth;
     loaded = await load(period);
   }
-  const [subjects, vouchers, balance, consolidated] = loaded;
+  const [subjects, recentVouchers, drafts, balance, consolidated] = loaded;
+  const vouchers = actionableFirst(recentVouchers, drafts);
+  // 标题写实数（P1-250）：原先写的是这一页的行数「凭证（50）」——截断后的数，看着像这个月只录了 50 张。最新一页没取满，
+  // 整期就都在这里；取满了，草稿是全的，其余只是最新的那几张
+  const voucherTitle = recentVouchers.length < RECENT ? `${period} 凭证（${vouchers.length}）`
+    : `${period} 凭证：本期草稿 ${drafts.length} 张（全列）、其余显示最新 ${vouchers.length - drafts.length} 张`;
   const canSubject = currentRole() === "admin";   // 建科目仅管理员（后端 require_admin）
   const VS = { draft: ["草稿", "orange"], posted: ["已过账", "green"], void: ["已作废", "red"] };
   const options = subjects.map((s) => `<option value="${esc(s.code)}">${esc(s.code)} ${esc(s.name)}</option>`).join("");
@@ -428,7 +439,7 @@ async function renderAccounting() {
           <span id="entry-total" class="desc"></span></div>
         <button>保存凭证（草稿）</button></form>
       <p class="msg" id="acc-msg"></p>`)}
-    ${panel(`${period} 凭证（${vouchers.length}）`,
+    ${panel(voucherTitle,
       table(["ID", "凭证号", "日期", "摘要", "借方", "贷方", "状态", "操作"], vouchers, (v) => {
         const ops = v.status === "draft"
           ? `<button class="btn secondary" data-post="${v.id}">过账</button>`
