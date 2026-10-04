@@ -39,6 +39,7 @@ from datetime import datetime, timedelta
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
+from app.config import settings  # noqa: E402
 from app.database import SessionLocal  # noqa: E402
 from app.models import (  # noqa: E402
     Admission,
@@ -321,6 +322,14 @@ class BulkSeeder:
 
 
 def main() -> int:
+    # 生产档拒跑（P2-1280）：头注写「禁止对生产库执行」，原先 main 里却没有任何环境判断——生产容器里
+    # MEDPLAT_DATABASE_URL 就是生产库，漏掉上面那句 export，仿真机构、启用的 SIM 审方规则、铺满 36 个月的患者 / 就诊 /
+    # 住院 / 处方 / 费用就进了生产库、全部进统计。同类的演示种子在生产档拒启（config.py 生产守卫），理由一样：灌入后无法
+    # 与真实数据剥离。连库之前就拦，一行不落
+    if settings.is_production:
+        print("拒绝执行：当前是生产档（MEDPLAT_ENV / MEDPLAT_ENVIRONMENT 为 prod）。seed_bulk 是造数工具，仿真数据写进去"
+              "就无法与真实数据剥离、全部进统计；请在非生产档下、把 MEDPLAT_DATABASE_URL 指向压测库再跑", file=sys.stderr)
+        return 2
     parser = argparse.ArgumentParser(description="仿真规模数据生成（幂等可续跑，禁止对生产库执行）")
     parser.add_argument("--orgs", type=int, default=25, help="仿真机构数（默认25，医共体典型规模）")
     parser.add_argument("--patients", type=int, default=0)
