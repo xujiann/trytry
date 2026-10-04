@@ -9,6 +9,10 @@
 - renal_hepatic_note        肝肾功能提示（不拦截，供医师/药师参考与剂量调整）
 - note                      规则说明
 - review_points             处方点评要点（事后点评的规则化依据）
+- antibiotic                抗菌药物标记，标了才进抗菌药物使用强度（analytics drug-use）。ATC J01 抗细菌、J02 抗真菌
+                            按《抗菌药物临床应用管理办法》都属抗菌药物，一律标 True；抗结核、抗病毒药不在其列（P1-244）
+- ddd                       限定日剂量（单位同 dose_unit）。不写即 0 =「未维护」：强度统计跳过它并计入未覆盖数。
+                            WHO DDD 随给药途径不同（口服、注射各一值），种子不代填，由药事管理委员会核定后补
 
 剂量为成人常规最大日剂量参考值，落地时应由医共体药事管理委员会依据说明书与
 《处方管理办法》《医疗机构处方审核规范》核定后经 /api/prescriptions/rules 调整。
@@ -373,10 +377,14 @@ SEED_DRUG_RULES: list[dict] = [
         "review_points": "服药时间是否空腹；起始剂量对老年冠心病是否过大；是否定期复查 TSH",
     },
     # ---------- 抗感染 ----------
+    # 这 7 味（J01 抗细菌、J02 抗真菌）都标 antibiotic（P1-244）：原先一条都没标，取模型缺省 False，抗菌药物使用强度
+    # ——写进考核的那个数——对它们既不算、也不计「未维护 DDD」，恒为 0；开方时又按规则快照（P2-577），之后再补也不回溯。
+    # ddd 不写（=0，未维护）：核定前让强度页明说「DDD 未维护」并计入未覆盖，比代填一个不分给药途径的值更不误导人。
     {
         "drug_code": "J01CA04",
         "max_daily_dose": 4000,
         "dose_unit": "mg",
+        "antibiotic": True,
         "note": "青霉素类，用药前须询问过敏史",
         "contraindicated_diagnoses": "青霉素过敏",
         "renal_hepatic_note": "eGFR<30 需延长给药间隔；严重肾功能不全减量",
@@ -386,6 +394,7 @@ SEED_DRUG_RULES: list[dict] = [
         "drug_code": "J01CR02",
         "max_daily_dose": 3600,
         "dose_unit": "mg",
+        "antibiotic": True,
         "note": "含酶抑制剂复方制剂，克拉维酸每日不超过600mg",
         "contraindicated_diagnoses": "青霉素过敏,既往阿莫西林克拉维酸相关黄疸",
         "renal_hepatic_note": "肝损害病史者禁用；eGFR<30 不推荐使用12:1 剂型",
@@ -395,6 +404,7 @@ SEED_DRUG_RULES: list[dict] = [
         "drug_code": "J01DC02",
         "max_daily_dose": 1000,
         "dose_unit": "mg",
+        "antibiotic": True,
         "note": "二代头孢，餐后服用提高吸收",
         "contraindicated_diagnoses": "头孢菌素过敏",
         "renal_hepatic_note": "肌酐清除率<30ml/min 给药间隔延长至12-24小时",
@@ -404,6 +414,7 @@ SEED_DRUG_RULES: list[dict] = [
         "drug_code": "J01DD04",
         "max_daily_dose": 4000,
         "dose_unit": "mg",
+        "antibiotic": True,
         "note": "三代头孢，不可与含钙输液同管输注",
         "interactions": _WARFARIN,
         "contraindicated_diagnoses": "头孢菌素过敏",
@@ -415,6 +426,7 @@ SEED_DRUG_RULES: list[dict] = [
         "drug_code": _AZITHROMYCIN,
         "max_daily_dose": 500,
         "dose_unit": "mg",
+        "antibiotic": True,
         "note": "大环内酯类，疗程一般3-5天",
         "interactions": f"{_WARFARIN},{_SIMVASTATIN},{_ATORVASTATIN}",
         "contraindicated_diagnoses": "QT间期延长",
@@ -425,6 +437,7 @@ SEED_DRUG_RULES: list[dict] = [
         "drug_code": _LEVOFLOXACIN,
         "max_daily_dose": 750,
         "dose_unit": "mg",
+        "antibiotic": True,
         "note": "喹诺酮类，18岁以下禁用（影响软骨发育）",
         "interactions": f"{_WARFARIN},{_GLICLAZIDE},{_GLIMEPIRIDE}",
         "contraindicated_diagnoses": "肌腱病变,重症肌无力,癫痫,QT间期延长",
@@ -436,6 +449,7 @@ SEED_DRUG_RULES: list[dict] = [
         "drug_code": _FLUCONAZOLE,
         "max_daily_dose": 400,
         "dose_unit": "mg",
+        "antibiotic": True,
         "note": "三唑类抗真菌药，强效 CYP 抑制剂",
         "interactions": f"{_WARFARIN},{_SIMVASTATIN},{_ATORVASTATIN},{_GLICLAZIDE},{_GLIMEPIRIDE},{_RIVAROXABAN}",
         "contraindicated_diagnoses": "QT间期延长",
