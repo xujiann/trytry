@@ -742,6 +742,10 @@ def create_employee_change(
             raise HTTPException(status_code=422, detail="调动须指定调入机构")
         if db.get(Organization, body.to_org_id) is None:
             raise HTTPException(status_code=404, detail="调入机构不存在")
+        # 调往本机构不收（P2-1272，与派驻「派出与接收机构不能相同」同一类）：调入机构下拉列着本机构，原先选了照收——下一句
+        # 清空科室，按科室寻医查不到这位医师，变动史多一条「调往本院」。本机构内换科室走「挂科室」
+        if body.to_org_id == employee.org_id:
+            raise HTTPException(status_code=422, detail="调入机构与现属机构不能相同；本机构内换科室请用「挂科室」")
         employee.org_id = body.to_org_id
         employee.dept_id = None  # 跨机构调动后科室待重新挂接
     elif body.change_type == "leave":
