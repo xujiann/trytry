@@ -1376,6 +1376,10 @@ $("#todo-bell").onclick = (e) => {
 $("#logout").onclick = logout;
 const NOTE_TYPES = { first: "首次病程", daily: "日常病程", ward_round: "上级查房",
   rescue: "抢救记录", consultation: "会诊记录", discharge: "出院记录" };
+// 桌面病程表单的缺省类型（P2-1306）：下拉原先按键序、没有预选，医生不动下拉就送首项「首次病程」——新入院先写的抢救记录
+// 落成首次病程，真正的首次病程随后 409、且改不回来（住院文书没有更正入口）。预选日常病程，与医生移动端查房的首项一致：
+// 首次病程漏写由文书完整性自查报出、还能补，误写成首次病程不可逆。键序不动（清单按类型取名也用这张表）
+const PROGRESS_NOTE_DEFAULT = "daily";
 const NURSING_LEVELS = { special: "特级护理", level1: "一级护理", level2: "二级护理", level3: "三级护理" };
 // 住院护理记录的缺省级别与接口（`clinical_docs.NursingIn`）、表列缺省同一个（P2-988）：下拉原先按键序、没有预选，护士不动
 // 就送首项「特级护理」，二级、三级护理的患者在护理记录上一律成了特级；门急诊那张表单本就预选了它自己接口的缺省

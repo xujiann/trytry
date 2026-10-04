@@ -3731,6 +3731,27 @@ def test_住院文书下拉改成乙_不点切换_病程写进乙(page, base_url
     assert _note_contents(admin_read, a["id"]) == []
 
 
+def test_病程不动类型下拉_存日常病程不落成首次病程(page, base_url, admin_read, admin_call):
+    """P2-1306（第三十八批扫描 AB3-8）：桌面病程表单的类型下拉原先没有预选、首项是「首次病程」——新入院先写的一条不动
+    下拉就落成首次病程，真正的首次病程随后 409、且改不回来。修后预选日常病程，与医生移动端一致。"""
+    org = admin_call("POST", "/api/organizations",
+                     {"name": "E2E病程类型县医院", "org_type": "lead_hospital", "level": "county"})
+    ward = admin_call("POST", "/api/inpatient/wards", {"org_id": org["id"], "name": "E2E病程类型病区"})
+    bed = admin_call("POST", "/api/inpatient/beds", {"ward_id": ward["id"], "bed_no": "E2E-NT1"})
+    patient = admin_call("POST", "/api/patients", {"name": "E2E病程类型患者", "id_card": "320981199203061413", "gender": "男"})
+    adm = admin_call("POST", "/api/inpatient/admissions", {
+        "patient_id": patient["id"], "ward_id": ward["id"], "bed_id": bed["id"], "diagnosis_name": "肺炎"})
+    _login(page, base_url)
+    page.evaluate(f"localStorage.setItem('medplat_doc_adm', '{adm['id']}')")
+    _open_page(page, "clinicaldocs", "住院临床文书")
+    expect(page.locator("#doc-pick select[name=admission_id]")).to_have_value(str(adm["id"]))
+    expect(page.locator("#note-form select[name=note_type]")).to_have_value("daily")   # 修前 first
+    page.locator("#note-form input[name=content]").fill("E2E 入院当日病情平稳")
+    _submit(page, "#note-form button")
+    notes = admin_read(f"/api/inpatient/admissions/{adm['id']}/progress-notes")
+    assert [(n["note_type"], n["content"]) for n in notes] == [("daily", "E2E 入院当日病情平稳")]
+
+
 def test_查房下拉改成乙_不点切换患者_病程写进乙(page, base_url, admin_read, admin_call):
     """P1-231：医生移动端查房同形——下拉显示乙、没点「切换患者」，病程原先写进甲。"""
     a, b = _two_admissions(admin_call, "查房", ("320981198808081412", "320981198909091513"))

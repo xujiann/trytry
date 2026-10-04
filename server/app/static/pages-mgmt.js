@@ -73,7 +73,8 @@ async function renderClinicalDocs() {
     ${current ? `
     ${panel(`病程记录（${notes.length}）`, `
       <form class="inline" id="note-form">
-        <select name="note_type">${Object.entries(NOTE_TYPES).map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}</select>
+        <select name="note_type">${Object.entries(NOTE_TYPES).map(([k, v]) =>
+          `<option value="${k}"${k === PROGRESS_NOTE_DEFAULT ? " selected" : ""}>${v}</option>`).join("")}</select>
         <input name="doctor_name" placeholder="记录医师">
         <input name="content" placeholder="病程内容" required style="min-width:320px">
         <button>书写</button></form>
