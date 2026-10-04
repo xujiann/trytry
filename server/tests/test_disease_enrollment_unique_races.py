@@ -55,6 +55,10 @@ INDEX_NAME = "uq_disease_enrollment_program_patient_enrolled"
 # 接口层预检与并发兜底必须是同一句话（app/routers/disease_programs.py::enroll）
 ALREADY_ENROLLED = "该患者已在本专病在管中"
 RACERS = 8
+#: 窗口没打开（七路全被预检拦下、一路也没撞到索引）时换一组新键重抢的次数上限（P2-1319）。机器满载时八条线程会被
+#: 排成先后、赢家提交完别人才读——这一轮什么也证明不了；不变量每一轮都照核，「至少一路撞在索引上」要求三轮里出现一次，
+#: 索引真被拆掉时第一轮就是七路建组成功、照样红
+WINDOW_ATTEMPTS = 3
 
 
 def _index_present(engine) -> bool:
@@ -109,7 +113,12 @@ def pg_engine():
 
 @pytest.fixture(scope="module")
 def fixture_key(pg_engine):
-    """一组只属于本次运行的机构 / 专病目录 / 患者（随机后缀，避免与并行任务撞唯一列）。
+    """一组只属于本次运行的机构 / 专病目录 / 患者（随机后缀，避免与并行任务撞唯一列）。"""
+    return _new_key(pg_engine)
+
+
+def _new_key(pg_engine):
+    """建一组新的机构 / 专病目录 / 患者，返回键。窗口没打开要重抢时也从这里换新键（P2-1319）。
 
     共享库上别的任务可能正好在重建表，撞上就等一会儿重来——**不跳过**：
     跳过的并发用例等于没有并发用例。
@@ -246,59 +255,73 @@ def _counts(pg_engine, key):
 
 
 def test_八路并发入组恰一路成功其余拿到同一句409(pg_engine, fixture_key):
-    """静默双写的洞被堵上，且堵法对调用方无感：输家看到的与"本来就重复"一模一样。"""
-    results, errors = _enroll_race(pg_engine, fixture_key)
+    """静默双写的洞被堵上，且堵法对调用方无感：输家看到的与"本来就重复"一模一样。
 
-    assert errors == [], f"有并发路径漏出了异常（裸 IntegrityError 就是 500）：{errors}"
-    assert len(results) == RACERS, f"{RACERS} 路只回来了 {len(results)} 路"
-    created, losers, by_index = _split(results)
-    assert len(created) == 1, f"应恰有一路建组成功，实际 {len(created)} 路：{results}"
-    assert {(r[1], r[2]) for r in losers} == {(409, ALREADY_ENROLLED)}, (
-        f"抢输者拿到的状态码/文案与顺序请求不一致：{losers}"
-    )
+    窗口没打开的那一轮（七个 409 全由预检给出）换一组新键重抢，至多 `WINDOW_ATTEMPTS` 轮（P2-1319）；
+    每一轮的不变量都照核，第一轮用的是模块级的 `fixture_key`（下一条用例接着用它）。
+    """
+    key, by_index = fixture_key, []
+    for _ in range(WINDOW_ATTEMPTS):
+        results, errors = _enroll_race(pg_engine, key)
+
+        assert errors == [], f"有并发路径漏出了异常（裸 IntegrityError 就是 500）：{errors}"
+        assert len(results) == RACERS, f"{RACERS} 路只回来了 {len(results)} 路"
+        created, losers, by_index = _split(results)
+        assert len(created) == 1, f"应恰有一路建组成功，实际 {len(created)} 路：{results}"
+        assert {(r[1], r[2]) for r in losers} == {(409, ALREADY_ENROLLED)}, (
+            f"抢输者拿到的状态码/文案与顺序请求不一致：{losers}"
+        )
+        total, enrolled = _counts(pg_engine, key)
+        assert len(enrolled) == 1, f"该患者在本专病下应只有一条在管记录，实际 {len(enrolled)} 条"
+        assert total == 1, f"该键上应只落库一行，实际 {total} 行"
+        if by_index:
+            break
+        key = _new_key(pg_engine)   # 窗口没打开：这一轮的不变量已核过，换新键再抢
     assert by_index, (
-        "没有任何一路是撞在索引上回来的——七个 409 全由预检给出，"
-        "说明窗口没打开，这一轮证明不了兜底还在"
+        f"连抢 {WINDOW_ATTEMPTS} 轮都没有任何一路是撞在索引上回来的——七个 409 全由预检给出，"
+        "说明窗口没打开，证明不了兜底还在"
     )
-
-    total, enrolled = _counts(pg_engine, fixture_key)
-    assert len(enrolled) == 1, f"该患者在本专病下应只有一条在管记录，实际 {len(enrolled)} 条"
-    assert total == 1, f"该键上应只落库一行，实际 {total} 行"
 
 
 def test_出组后再并发入组仍是恰一路成功(pg_engine, fixture_key):
     """部分索引锁的是 `status = 'enrolled'`，不是整张表。
 
     把上一轮的赢家改成出组，同样八路再抢一次：复发再入组必须仍然放得进去
-    （全量唯一在这里会八路全拒），而在管记录依旧恰一条。
+    （全量唯一在这里会八路全拒），而在管记录依旧恰一条。窗口没打开的那一轮同样换新键重来（P2-1319）。
     """
     from sqlalchemy.orm import sessionmaker
 
     from app.models import DiseaseEnrollment
 
-    _, enrolled = _counts(pg_engine, fixture_key)
-    if not enrolled:
-        # 单跑本条（`-k 出组后`）时自己把第一轮补上，不靠用例执行顺序
-        _enroll_race(pg_engine, fixture_key)
-        _, enrolled = _counts(pg_engine, fixture_key)
-    assert len(enrolled) == 1, f"前置：该键上应恰有一条在管记录，实际 {len(enrolled)} 条"
-
     Session = sessionmaker(bind=pg_engine)
-    with Session() as db:
-        row = db.get(DiseaseEnrollment, enrolled[0].id)
-        row.status = "exited"
-        row.exit_reason = "转上级医院继续治疗"
-        row.exited_at = "2026-09-05"
-        db.commit()
+    key, by_index = fixture_key, []
+    for _ in range(WINDOW_ATTEMPTS):
+        _, enrolled = _counts(pg_engine, key)
+        if not enrolled:
+            # 单跑本条（`-k 出组后`）或换了新键时自己把第一轮补上，不靠用例执行顺序
+            _enroll_race(pg_engine, key)
+            _, enrolled = _counts(pg_engine, key)
+        assert len(enrolled) == 1, f"前置：该键上应恰有一条在管记录，实际 {len(enrolled)} 条"
 
-    results, errors = _enroll_race(pg_engine, fixture_key)
+        with Session() as db:
+            row = db.get(DiseaseEnrollment, enrolled[0].id)
+            row.status = "exited"
+            row.exit_reason = "转上级医院继续治疗"
+            row.exited_at = "2026-09-05"
+            db.commit()
 
-    assert errors == [], f"有并发路径漏出了异常：{errors}"
-    created, losers, by_index = _split(results)
-    assert len(created) == 1, f"出组后应恰有一路复发再入组成功，实际 {len(created)} 路：{results}"
-    assert {(r[1], r[2]) for r in losers} == {(409, ALREADY_ENROLLED)}, losers
-    assert by_index, "第二轮同样要有撞在索引上的一路，否则证明不了它在出组之后仍然生效"
+        results, errors = _enroll_race(pg_engine, key)
 
-    total, enrolled = _counts(pg_engine, fixture_key)
-    assert len(enrolled) == 1, f"在管记录应仍恰一条，实际 {len(enrolled)} 条"
-    assert total == 2, f"该键上应是一条已出组 + 一条在管，共两行，实际 {total} 行"
+        assert errors == [], f"有并发路径漏出了异常：{errors}"
+        created, losers, by_index = _split(results)
+        assert len(created) == 1, f"出组后应恰有一路复发再入组成功，实际 {len(created)} 路：{results}"
+        assert {(r[1], r[2]) for r in losers} == {(409, ALREADY_ENROLLED)}, losers
+        total, enrolled = _counts(pg_engine, key)
+        assert len(enrolled) == 1, f"在管记录应仍恰一条，实际 {len(enrolled)} 条"
+        assert total == 2, f"该键上应是一条已出组 + 一条在管，共两行，实际 {total} 行"
+        if by_index:
+            break
+        key = _new_key(pg_engine)
+    assert by_index, (
+        f"连抢 {WINDOW_ATTEMPTS} 轮，第二轮都没有撞在索引上的一路，证明不了它在出组之后仍然生效"
+    )
