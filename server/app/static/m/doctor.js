@@ -1062,6 +1062,7 @@ async function loadSurgery() {
             `${kv("术式", esc(r.surgery_name))}${kv("住院号", String(r.admission_id))}
              ${kv("状态", statusTag(SURGERY_STATUS_NAMES, r.status))}`,
             `<button class="op" data-record="${r.id}" data-name="${esc(r.surgery_name)}"
+              data-surgeon="${esc(r.surgeon_name)}"
               data-anesthesia="${esc(r.anesthesia_type)}" data-incision="${esc(r.incision_level)}"
               data-start="${esc(start)}" data-end="${esc(end)}">填写术中记录</button>`);
         }).join("")
@@ -1076,6 +1077,8 @@ $("#tab-surgery").addEventListener("click", (e) => {
   // 走 cardForm（P2-1093）：出血量写错这类报错写在这张卡的表单里，不再写到两张列表下方的整页消息行
   cardForm(e.target.closest(".m-card"), "surg-record-form", `<input name="actual_surgery_name" placeholder="实际术式" required
       value="${esc(e.target.dataset.name || "")}">
+    <input name="surgeon_name" placeholder="术者（留空取申请单上的拟施术者）" value="${esc(e.target.dataset.surgeon || "")}">
+    <input name="assistants" placeholder="助手（可空）">
     <p class="hint">手术起止：缺省带出排班日期与时段，按实际改；留空按排班日</p>
     <input name="start_at" placeholder="开始时刻 YYYY-MM-DD HH:MM" value="${esc(e.target.dataset.start || "")}">
     <input name="end_at" placeholder="结束时刻 YYYY-MM-DD HH:MM" value="${esc(e.target.dataset.end || "")}">
@@ -1097,6 +1100,10 @@ $("#tab-surgery").addEventListener("click", (e) => {
       method: "POST",
       body: JSON.stringify({
         actual_surgery_name: f.actual_surgery_name.value.trim(),
+        // 术者 / 助手原先不送（P2-1307）：术者恒取申请单上的拟施术者（缺省即申请人）——住院医提申请、外科医生主刀并录入，
+        // 手术记录署的是住院医。缺省带出申请单上的、按实际改；留空照旧由后端取申请单上的
+        surgeon_name: f.surgeon_name.value.trim(),
+        assistants: f.assistants.value.trim(),
         // 手术起止时刻原先不送（P2-1116）：做手术那天（术后随访起算、手术质量指标归月）恒取排班日，顺延、提前的手术都
         // 跟着原排班日走。缺省带出排班的，按实际改；格式不对由后端报人话
         start_at: f.start_at.value.trim(),

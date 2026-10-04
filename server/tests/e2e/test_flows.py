@@ -3860,6 +3860,8 @@ def test_surgery_full_flow(page, base_url, seed, admin_read):
     P2-1116：术中记录原先不录手术起止时刻，做手术那天（术后随访起算、手术质量指标归月）恒取排班日。现在起止时刻缺省带出
     这台的排班日期与时段、按实际改——这台顺延一天做，术后随访按实际那天起算。缺省取自「今天及以后」的排班表，所以排班日
     写远期：写死的过去日子不在表里，带不出来。
+
+    P2-1307：术中记录原先不录术者 / 助手，术者恒取申请单上的拟施术者（缺省即申请人）。现在缺省带出、按实际改。
     """
     _login(page, base_url)
     _open_page(page, "surgery", "手术麻醉")
@@ -3885,8 +3887,11 @@ def test_surgery_full_flow(page, base_url, seed, admin_read):
     modal = _modal(page)
     expect(modal.locator('[name="start_at"]')).to_have_value("2099-09-01 09:00")
     expect(modal.locator('[name="end_at"]')).to_have_value("2099-09-01 11:00")
+    # 术者缺省带出申请单上的拟施术者（P2-1307）：seed 那张由 e2e_doctor 提出、没填拟施术者，即申请人；实际换人主刀
+    expect(modal.locator('[name="surgeon_name"]')).to_have_value("E2E外科医生")
     # 术中所见写超了（后端 2048 字）：框自己提交，报错写在框里、框不关、填了一整张的记录都在（P2-607 第八批）
     form = _spd_modal_rejected(page, {"actual_surgery_name": "腹腔镜阑尾切除术", "anesthetist_name": "麻醉科周医生",
+                                      "surgeon_name": "E2E主刀医生", "assistants": "E2E一助医生",
                                       "start_at": "2099-09-02 09:30", "end_at": "2099-09-02 10:40",
                                       "findings": "所" * 2049, "blood_loss_ml": "20", "outcome": "治愈",
                                       "preop_diagnosis": "急性阑尾炎", "postop_diagnosis": "急性化脓性阑尾炎"})
@@ -3897,8 +3902,13 @@ def test_surgery_full_flow(page, base_url, seed, admin_read):
     page.click("button[data-view]")
     expect(page.locator("#surg-detail-body")).to_contain_text("治愈")
     expect(page.locator("#surg-detail-body")).to_contain_text("2099-09-02 09:30 ~ 2099-09-02 10:40")   # 修前「起止」恒空
-    # 术后随访按实际开始那天起算（修前按排班日 9-01 起算，到期 9-15）
     rid = seed["surgery_request"]["id"]
+    # 修前术者恒为申请人「E2E外科医生」、助手恒空
+    expect(page.locator("#surg-detail-body tr", has_text="术者")).to_contain_text("E2E主刀医生")
+    expect(page.locator("#surg-detail-body tr", has_text="助手")).to_contain_text("E2E一助医生")
+    record = admin_read(f"/api/surgery/requests/{rid}/record")
+    assert (record["surgeon_name"], record["assistants"]) == ("E2E主刀医生", "E2E一助医生"), record
+    # 术后随访按实际开始那天起算（修前按排班日 9-01 起算，到期 9-15）
     (task,) = [t for t in admin_read("/api/followups?category=surgery&limit=500") if t["source_id"] == rid]
     assert task["due_date"] == "2099-09-16", task
 
@@ -3925,6 +3935,29 @@ def test_提手术申请时勾得上非计划重返手术室(page, base_url, adm
 
     rows = admin_read(f"/api/surgery/requests?admission_id={adm['id']}")
     assert [(r["surgery_name"], r["unplanned_return"]) for r in rows] == [("E2E胆漏再探查术", True)]   # 修前无处可勾
+
+
+def test_提手术申请时填得上拟施术者(page, base_url, admin_call, admin_read):
+    """P2-1307（第三十八批扫描 AB3-3）：申请表单原先没有拟施术者，申请单的术者恒为申请人——住院医提的申请，术中记录缺省
+    带出的就是住院医。现在选填，空着照旧由后端取申请人。排在 `test_surgery_full_flow` 之后：它点的是页面上第一个「审批通过」。"""
+    org = admin_call("POST", "/api/organizations",
+                     {"name": "E2E拟施术者县医院", "org_type": "lead_hospital", "level": "county"})
+    ward = admin_call("POST", "/api/inpatient/wards", {"org_id": org["id"], "name": "E2E拟施术者外科"})
+    bed = admin_call("POST", "/api/inpatient/beds", {"ward_id": ward["id"], "bed_no": "S1"})
+    patient = admin_call("POST", "/api/patients", {"name": "E2E拟施术者患者", "id_card": "320981199304071514"})
+    adm = admin_call("POST", "/api/inpatient/admissions", {
+        "patient_id": patient["id"], "ward_id": ward["id"], "bed_id": bed["id"], "diagnosis_name": "腹股沟疝"})
+
+    _login(page, base_url)
+    _open_page(page, "surgery", "手术麻醉")
+    form = page.locator("#surg-form")
+    form.locator("input[name=admission_id]").fill(str(adm["id"]))
+    form.locator("input[name=surgery_name]").fill("E2E疝修补术")
+    form.locator("input[name=surgeon_name]").fill("E2E拟施术者")
+    _submit(page, "#surg-form button")
+
+    rows = admin_read(f"/api/surgery/requests?admission_id={adm['id']}")
+    assert [(r["surgery_name"], r["surgeon_name"]) for r in rows] == [("E2E疝修补术", "E2E拟施术者")]   # 修前无处可填
 
 
 @pytest.fixture(scope="session")
@@ -4137,7 +4170,8 @@ def surgery_mobile_seed(base_url, seed):
 def test_医生移动端术中记录在卡片内表单里填_转归可选(page, base_url, surgery_mobile_seed):
     """P2-38 / P1-66：移动端"填写术中记录"原先四连问、**转归写死"好转"**。换成卡片内表单后
     转归可选、术式预填；出血量写错由后端报人话。最后经接口读回，证明选的转归真的落了库。
-    P2-1116：手术起止时刻原先不送（做手术那天恒取排班日），现在缺省带出这台的排班日期与时段、照送。"""
+    P2-1116：手术起止时刻原先不送（做手术那天恒取排班日），现在缺省带出这台的排班日期与时段、照送。
+    P2-1307：术者 / 助手原先不送（术者恒取申请单上的），现在术者缺省带出申请单上的、按实际改。"""
     page.set_viewport_size({"width": 390, "height": 844})
     page.goto(f"{base_url}/m/doctor")
     page.fill("#lg-user", "admin")
@@ -4153,6 +4187,10 @@ def test_医生移动端术中记录在卡片内表单里填_转归可选(page, 
     # 起止时刻缺省带出这台的排班日期与时段（P2-1116）；这台按排班做完，不改
     expect(form.locator("input[name=start_at]")).to_have_value("2099-09-02 13:00")
     expect(form.locator("input[name=end_at]")).to_have_value("2099-09-02 14:00")
+    # 术者缺省带出申请单上的拟施术者（P2-1307）：这台由 e2e_doctor 提出、没填拟施术者，即申请人；实际换人主刀
+    expect(form.locator("input[name=surgeon_name]")).to_have_value("E2E外科医生")
+    form.locator("input[name=surgeon_name]").fill("E2E移动端主刀")
+    form.locator("input[name=assistants]").fill("E2E移动端一助")
     form.locator("select[name=outcome]").select_option("未愈")
     form.locator("input[name=postop_diagnosis]").fill("腹股沟斜疝")
     form.locator("input[name=blood_loss_ml]").fill("五十")
@@ -4170,6 +4208,8 @@ def test_医生移动端术中记录在卡片内表单里填_转归可选(page, 
     # P2-179：麻醉方式与切口等级原先不送、恒记成全麻 II 类；现在缺省带出申请时填的（椎管内、I 类）
     assert (record["anesthesia_type"], record["incision_level"]) == ("spinal", "I"), record
     assert (record["start_at"], record["end_at"]) == ("2099-09-02 13:00", "2099-09-02 14:00"), record   # 修前两项都是空串
+    # P2-1307：术者、助手原先不送——术者恒为申请人「E2E外科医生」、助手恒空
+    assert (record["surgeon_name"], record["assistants"]) == ("E2E移动端主刀", "E2E移动端一助"), record
 
 
 @pytest.fixture(scope="session")

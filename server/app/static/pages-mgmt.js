@@ -197,6 +197,7 @@ async function renderSurgery() {
     ${panel("提出手术申请（医师）", `
       <form class="inline" id="surg-form"><input name="admission_id" type="number" placeholder="住院ID" required>
         <input name="surgery_name" placeholder="拟施手术" required>
+        <input name="surgeon_name" placeholder="拟施术者（空着为申请人）">
         <select name="incision_level"><option value="I">I类切口</option><option value="II" selected>II类切口</option>
           <option value="III">III类切口</option><option value="IV">IV类切口</option></select>
         <select name="anesthesia_type">${Object.entries(ANESTHESIA).map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}</select>
@@ -228,6 +229,8 @@ async function renderSurgery() {
   $("#room-form").onsubmit = (e) => { e.preventDefault();
     postAction("/api/surgery/rooms", formJson(e.target, ["org_id"]), "#surg-msg"); };
   $("#surg-form").onsubmit = (e) => { e.preventDefault();
+    // 拟施术者（P2-1307）：原先表单没有这一项，申请单的术者恒为申请人——住院医提的申请，术中记录缺省带出的就是住院医。
+    // 选填：空着 formJson 不送，后端照旧取申请人
     const body = formJson(e.target, ["admission_id"]);
     // 非计划重返手术室由医师显式勾选（P2-172）：原先表单里没有这一项——手册叫人「提手术申请时如实勾选」，
     // 页面上却无处可勾，质量指标「非计划重返手术室率」恒为 0
@@ -264,6 +267,10 @@ async function renderSurgery() {
         // 框自己提交（P2-607）：术中所见写超了、单子状态已变时报错写在框里、框不关，填了一整张的术中记录不用重填
         const ok = await spdModal("术中记录", [
           { name: "actual_surgery_name", label: "实际术式", value: req ? req.surgery_name : "", required: true },
+          // 术者 / 助手（P2-1307）：原先不录，术者恒取申请单上的拟施术者（缺省即申请人）——住院医提申请、外科医生主刀并录入，
+          // 手术记录（居民端、排班表、「查看记录」都当实际术者）署的是住院医。缺省带出申请单上的、按实际改；留空照旧取申请单上的
+          { name: "surgeon_name", label: "术者", value: req ? req.surgeon_name : "" },
+          { name: "assistants", label: "助手（可空）" },
           { name: "start_at", label: "手术开始时刻（留空按排班日）", placeholder: "YYYY-MM-DD HH:MM",
             value: slot ? `${slot.scheduled_date} ${slot.start_time}` : "" },
           { name: "end_at", label: "手术结束时刻", placeholder: "YYYY-MM-DD HH:MM",
@@ -286,8 +293,10 @@ async function renderSurgery() {
       } else if (d.view) {
         const rec = await api(`/api/surgery/requests/${d.view}/record`);
         $("#surg-detail").classList.remove("hidden");
+        // 助手（P2-1307）：术中记录表单起录得进，出参一直带着，这里一并列出
         $("#surg-detail-body").innerHTML = table(["项", "值"],
-          [["实际术式", rec.actual_surgery_name], ["术者", rec.surgeon_name], ["麻醉医师", rec.anesthetist_name],
+          [["实际术式", rec.actual_surgery_name], ["术者", rec.surgeon_name], ["助手", rec.assistants || "—"],
+           ["麻醉医师", rec.anesthetist_name],
            ["麻醉方式", ANESTHESIA[rec.anesthesia_type] || rec.anesthesia_type], ["切口等级", rec.incision_level],
            ["起止", `${rec.start_at} ~ ${rec.end_at}`], ["出血量", `${rec.blood_loss_ml} ml`],
            ["术中所见", rec.findings], ["并发症", rec.complications || "无"], ["转归", rec.outcome]],
