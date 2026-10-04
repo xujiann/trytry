@@ -17,7 +17,7 @@ from .. import clock
 from ..concurrency import move_row
 from ..numtypes import INT4_MAX, INT4_MIN
 from ..texttypes import NON_BLANK
-from ..visibility import assert_obj_org_writable, assert_org_writable, scope_patient_list
+from ..visibility import assert_obj_org_writable, assert_org_writable, can_write_org, scope_patient_list
 from ..database import get_db
 from ..datetypes import DateStr
 from ..deps import get_current_user, paginate, require_roles, resolve_business_date, row_dict
@@ -144,6 +144,14 @@ class FollowupTaskOut(BaseModel):
     completed_at: str
 
 
+class FollowupOverdueOut(FollowupTaskOut):
+    """超期行 = 任务行 + `can_handle`（P2-1313）：超期清单是全县的，行上的「完成随访」要按这一行当前用户能不能办来摆。"""
+
+    #: 当前用户能不能完成 / 取消这条任务：与两个写接口的 `assert_obj_org_writable` 同一判据（以任务机构的名义写，
+    #: 全域角色放行）。新增字段，页面按它摆按钮
+    can_handle: bool
+
+
 class FollowupActionReceiptOut(BaseModel):
     """完成/取消回执只有两键，不与 14 键任务行互相注入。"""
 
@@ -229,9 +237,13 @@ def list_followups(
     return [_out(t, names, orgs) for t in rows]
 
 
-@router.get("/overdue", response_model=list[FollowupTaskOut])
-def overdue_followups(today: str | None = None, db: Session = Depends(get_db)):
-    """超期未随访清单。today 覆盖参数仅供测试/排查（与其他预警接口同一约定）。"""
+@router.get("/overdue", response_model=list[FollowupOverdueOut])
+def overdue_followups(today: str | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """超期未随访清单。today 覆盖参数仅供测试/排查（与其他预警接口同一约定）。
+
+    行上带 `can_handle`（P2-1313）：清单是全县的（该给谁看随 P1-49 / P2-609 待裁定，这里一行不收），完成 / 取消却以任务机构的
+    名义写（`assert_obj_org_writable`）——原先页面每行都摆「完成随访」，东镇医生点西镇的那几行必 403。为按行算这一句补了调用方身份。
+    """
     cutoff = resolve_business_date(today).isoformat()
     rows = (
         db.query(FollowupTask)
@@ -241,7 +253,7 @@ def overdue_followups(today: str | None = None, db: Session = Depends(get_db)):
         .all()
     )
     names, orgs = _name_maps(db, rows)
-    return [_out(t, names, orgs) for t in rows]
+    return [{**_out(t, names, orgs), "can_handle": can_write_org(user, t.org_id)} for t in rows]
 
 
 def _move_pending(db: Session, task: FollowupTask, action: str, **values) -> None:

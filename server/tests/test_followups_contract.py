@@ -10,7 +10,8 @@
   字面量 `0.0` 两条产地都是浮点——已取消类分母为 0 的行单独钉住 0.0）。
 - 任务回执与列表行/超期行**同形**（`_out` 唯一产地，14 键），一个模型；
   `completed_at` 未完成时是**空串**不是 null（`isoformat() if ... else ""`），
-  故声明 str 而非 str | None。
+  故声明 str 而非 str | None。超期行在这 14 键之后多一个 `can_handle`
+  （P2-1313：超期清单全县、完成以任务机构的名义写，页面按它摆按钮），子类模型。
 - 完成/取消回执只有 id+status 两键，另建模型，不与 14 键行互相注入。
 - 统计行 7 键（overdue 在 completion_rate_pct 之前——后者是循环后补进 dict 的，
   键序照 handler 实际出键排）。
@@ -199,12 +200,12 @@ def test_任务列表与回执同形_分页与过滤(client, admin, seed):
 
 
 def test_超期清单与列表行同形(client, admin, seed):
-    # 完成/取消前的快照：三条超期，due_date 升序
+    # 完成/取消前的快照：三条超期，due_date 升序；行尾多一个 can_handle（P2-1313，admin 全域放行）
     rows = seed["overdue_before"]
-    assert [list(r.keys()) for r in rows] == [TASK_KEYS] * 3
-    assert rows == [seed["fu4"], seed["fu1"], seed["fu3"]]
+    assert [list(r.keys()) for r in rows] == [TASK_KEYS + ["can_handle"]] * 3
+    assert rows == [{**seed[k], "can_handle": True} for k in ("fu4", "fu1", "fu3")]
     # 完成/取消后只剩出院随访一条超期
-    assert client.get("/api/followups/overdue", headers=admin).json() == [seed["fu4"]]
+    assert client.get("/api/followups/overdue", headers=admin).json() == [{**seed["fu4"], "can_handle": True}]
     assert client.get(f"/api/followups/overdue?today={d(-30)}", headers=admin).json() == []
 
 

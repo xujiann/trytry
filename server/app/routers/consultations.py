@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from ..numtypes import MONEY_MAX, MoneyFloat
 from ..texttypes import NON_BLANK
-from ..visibility import assert_org_writable, assert_patient_visible
+from ..visibility import assert_org_writable, assert_patient_visible, visible_patients_among
 from ..concurrency import insert_or_conflict, move_row
 from ..database import get_db
 from ..deps import get_current_user, require_admin, require_roles
@@ -22,6 +22,19 @@ router = APIRouter(prefix="/api/consultations", tags=["远程会诊"], dependenc
 
 # 状态文案（措辞照抄模型列注释；报错文案用它，别把英文码直接拼给窗口人员看——P2-74）
 CONSULTATION_STATUS_NAMES = {"applied": "已申请", "accepted": "已受理", "completed": "已完成", "declined": "已拒绝"}
+
+
+def _with_can_handle(db: Session, user: User, rows: list[Consultation]) -> list[Consultation]:
+    """挂上 `can_handle` 供响应模型取用（不入库）：与各流转接口经 `_get` 的那一句同一判据——所属患者该用户看不看得了（P2-1313）。
+
+    清单是全县的（P1-49 待裁定），原先页面只看状态摆「受理 / 拒绝 / 出意见 / 评价 / 计费」，与这张单无关的第三家照样有，
+    点了必 403。一页的患者合起来判一次（`visible_patients_among`，不逐行查三十几张关系表、不留痕）。哪一步该由哪一方做
+    随 P1-71 待裁定、按角色摆不摆随 P2-447——这里只让按钮与写接口一致，定了再一起收紧。
+    """
+    visible = visible_patients_among(db, user, {c.patient_id for c in rows})
+    for consultation in rows:
+        setattr(consultation, "can_handle", consultation.patient_id in visible)
+    return rows
 
 
 @router.post(
@@ -43,7 +56,7 @@ def apply(body: ConsultationCreate, db: Session = Depends(get_db), user: User = 
     db.add(consultation)
     db.commit()
     db.refresh(consultation)
-    return consultation
+    return _with_can_handle(db, user, [consultation])[0]
 
 
 @router.get("", response_model=list[ConsultationOut])
@@ -65,7 +78,7 @@ def list_consultations(
         query = query.filter(Consultation.patient_id == patient_id)
     if status:
         query = query.filter(Consultation.status == status)
-    return query.order_by(Consultation.id.desc()).limit(200).all()
+    return _with_can_handle(db, user, query.order_by(Consultation.id.desc()).limit(200).all())
 
 
 def _get(db: Session, consultation_id: int, user: User) -> Consultation:
@@ -114,7 +127,8 @@ def accept(
     if consultation.status != "applied":
         raise HTTPException(status_code=409, detail=f"当前状态 {CONSULTATION_STATUS_NAMES.get(consultation.status, consultation.status)} 不可受理")
     _check_expert(db, body.expert_name)
-    return _move(db, consultation, "applied", "受理", status="accepted", expert_name=body.expert_name)
+    return _with_can_handle(db, user, [_move(db, consultation, "applied", "受理", status="accepted",
+                                             expert_name=body.expert_name)])[0]
 
 
 def _check_expert(db: Session, name: str) -> None:
@@ -141,7 +155,7 @@ def decline(consultation_id: int, db: Session = Depends(get_db), user: User = De
     consultation = _get(db, consultation_id, user)
     if consultation.status != "applied":
         raise HTTPException(status_code=409, detail=f"当前状态 {CONSULTATION_STATUS_NAMES.get(consultation.status, consultation.status)} 不可拒绝")
-    return _move(db, consultation, "applied", "拒绝", status="declined")
+    return _with_can_handle(db, user, [_move(db, consultation, "applied", "拒绝", status="declined")])[0]
 
 
 @router.post(
@@ -158,7 +172,8 @@ def complete(
     consultation = _get(db, consultation_id, user)
     if consultation.status != "accepted":
         raise HTTPException(status_code=409, detail=f"当前状态 {CONSULTATION_STATUS_NAMES.get(consultation.status, consultation.status)} 不可出具意见")
-    return _move(db, consultation, "accepted", "出具意见", status="completed", opinion=body.opinion)
+    return _with_can_handle(db, user, [_move(db, consultation, "accepted", "出具意见", status="completed",
+                                             opinion=body.opinion)])[0]
 
 
 class ConsultationFee(BaseModel):
@@ -294,7 +309,7 @@ def rate(
     consultation.rating = body.rating
     db.commit()
     db.refresh(consultation)
-    return consultation
+    return _with_can_handle(db, user, [consultation])[0]
 
 # ---------------------------------------------------------------- ADR-0006 搬家
 #

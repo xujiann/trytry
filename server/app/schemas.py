@@ -441,6 +441,9 @@ class ConsultationOut(ConsultationCreate):
     rating: int
     # 出参不带「不能只填空格」（P1-109）：修之前存进去的纯空白行要原样读出来，而不是让整个清单 500
     question: str = Field(min_length=1, max_length=1024)
+    #: 当前用户能不能对这张单走流转（受理 / 拒绝 / 出意见 / 评价 / 计费都经 `_get` 按所属患者判可见性；P2-1313）。
+    #: 新增字段，页面按它摆按钮
+    can_handle: bool = False
 
     model_config = {"from_attributes": True}
 

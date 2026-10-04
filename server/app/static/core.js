@@ -499,7 +499,10 @@ async function renderConsultations() {
         `<tr><td>${statusTag(CS, code)}</td><td>${n}</td></tr>`)}
       <p class="desc">${esc(stats.caliber)}</p>`)}
     ${panel("", table(["ID", "患者", "申请→受邀", "问题", "专家", "意见", "评价", "状态", "操作"], consultations, (c) => {
-      const actions = c.status === "applied"
+      // 清单是全县的，五个流转接口都按所属患者判可见性（P2-1313）：原先只看状态摆，与这张单无关的第三家照样有按钮、
+      // 点了必 403。`can_handle` 由后端按同一判据现算；哪一步该由哪一方做随 P1-71 待裁定
+      const actions = !c.can_handle ? "—"
+        : c.status === "applied"
         ? `<button class="btn secondary" data-act="accept" data-id="${c.id}">受理</button>
            <button class="btn danger" data-act="decline" data-id="${c.id}">拒绝</button>`
         : c.status === "accepted"

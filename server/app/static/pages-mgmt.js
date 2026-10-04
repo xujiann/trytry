@@ -314,6 +314,9 @@ async function renderFollowups() {
   $("#page-desc").textContent = "慢病 / 出院 / 术后 / 妇幼四类随访统一任务；出院与手术结案自动派生";
   const [pending, overdue, stats] = await Promise.all([
     api("/api/followups?status=pending"), api("/api/followups/overdue"), api("/api/followups/stats")]);
+  // 超期清单是全县的，完成却以任务机构的名义写（P2-1313）：原先每行都摆「完成随访」，别家的点了必 403。
+  // `can_handle` 由后端按完成接口的同一判据现算，只给能办的行摆，标题写明其中几条能办
+  const handleable = overdue.filter((t) => t.can_handle).length;
   // ADR-0009 第二步：面板外壳改用 `panel()`（定义见 core.js），迁一页、人工过一页。
   $("#page-body").innerHTML =
     panel("随访完成情况",
@@ -322,11 +325,11 @@ async function renderFollowups() {
          <td>${s.cancelled}</td><td><span class="tag ${s.overdue ? "red" : "green"}">${s.overdue}</span></td>
          <td>${s.completion_rate_pct}%</td></tr>`)
       + '<p class="desc">完成率分母排除已取消项——取消的任务不该拉低随访绩效。</p>')
-    + panel(`超期未随访（${overdue.length}）`,
-      table(["ID", "患者", "类别", "事项", "应随访日", "操作"], overdue, (t) =>
-        `<tr><td>${t.id}</td><td>${esc(t.patient_name)}</td><td>${esc(t.category_name)}</td>
+    + panel(`超期未随访（${overdue.length}，其中本机构可办 ${handleable}）`,
+      table(["ID", "患者", "机构", "类别", "事项", "应随访日", "操作"], overdue, (t) =>
+        `<tr><td>${t.id}</td><td>${esc(t.patient_name)}</td><td>${esc(t.org_name)}</td><td>${esc(t.category_name)}</td>
          <td>${esc(t.title)}</td><td><span class="tag red">${esc(t.due_date)}</span></td>
-         <td><button class="btn secondary" data-done="${t.id}">完成随访</button></td></tr>`))
+         <td>${t.can_handle ? `<button class="btn secondary" data-done="${t.id}">完成随访</button>` : "—"}</td></tr>`))
     + panel(`待随访任务（${pending.length}）`, `
       <form class="inline" id="fu-form"><input name="patient_id" type="number" placeholder="患者ID" required>
         <input name="org_id" type="number" placeholder="机构ID" required>

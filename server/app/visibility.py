@@ -570,6 +570,34 @@ def visible_patient_ids(db: Session, user: User):
     return parts[0].union_all(*parts[1:]) if len(parts) > 1 else parts[0]
 
 
+def visible_patients_among(db: Session, user: User, patient_ids) -> set[int]:
+    """`patient_basis(...) is not None` 的批量布尔版：这几位患者里哪些该用户看得了。只给清单出参算「这一行摆不摆写按钮」用（P2-1313）。
+
+    远程会诊的流转接口经 `_get` 按患者判（`assert_patient_visible`），清单却是全县的（P1-49 待裁定）：原先页面只看状态摆
+    「受理 / 拒绝 / 出意见」，与这张单无关的第三家点了必 403。逐行调 `patient_basis` 判得出，但看不了的结论不进缓存、
+    每位都要把三十几张关系表挨个查一遍，200 行就是几千条查询；这里把同一句判据合成两条：关系表那几支就是
+    `visible_patient_ids` 的 UNION ALL（`_patient_basis_uncached` 先判的就诊、签约两支各是其中一张关系表的子集），
+    授权一支先按（患者，被授权机构）捞出有授权行的，再逐个走 `active_authorization_grants`（全平台唯一一份有效期判定，不另抄）。
+
+    **真正放不放行仍以 `assert_patient_visible` 为准**，这里不参与任何放行、也不留痕（不是调阅）；不读判定缓存——缓存只存
+    「允许」，现算的结论只会比它更新。与 `patient_basis` 是同一判据由 `tests/test_consultation_row_actionable.py` 在各种依据 ×
+    各类账号下逐个组合钉着；`_patient_basis_uncached` 加新依据时这里要一起加，并在那条用例里补上这种依据。
+    """
+    wanted = {pid for pid in patient_ids if pid is not None}
+    if user.role in GLOBAL_ROLES:
+        return wanted
+    if user.org_id is None or not wanted:
+        return set()
+    related = visible_patient_ids(db, user).subquery()
+    hit = {pid for (pid,) in db.query(related.c.patient_id).filter(related.c.patient_id.in_(wanted)).distinct()}
+    rest = wanted - hit
+    if rest:
+        granted = {pid for (pid,) in db.query(ArchiveAuthorization.patient_id).filter(
+            ArchiveAuthorization.grantee_org_id == user.org_id, ArchiveAuthorization.patient_id.in_(rest)).distinct()}
+        hit |= {pid for pid in granted if active_authorization_grants(db, pid, user.org_id)}
+    return hit
+
+
 def scope_patient_list(
     db: Session,
     user: User,
