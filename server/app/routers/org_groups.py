@@ -22,19 +22,28 @@ router = APIRouter(
 )
 
 GROUP_TYPE_NAMES = {"zone": "片区/分片", "alliance": "专科联盟", "grid": "网格", "other": "其他"}
+#: 分组类型的取值范围：建档与改档共用（P2-1511）
+GROUP_TYPE_PATTERN = "^(zone|alliance|grid|other)$"
 
 
 class GroupIn(BaseModel):
     name: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
-    group_type: str = Field(default="zone", pattern="^(zone|alliance|grid|other)$")
+    group_type: str = Field(default="zone", pattern=GROUP_TYPE_PATTERN)
     # 可空：网格化管理常常没有"牵头单位"这一说
     lead_org_id: int | None = None
     note: str = Field(default="", max_length=256)
 
 
 class GroupUpdate(BaseModel):
+    """改分组：各项都可不送，一项都没认上的 422（P2-1511，照 P2-1368）。
+
+    类型原先改不了（P2-1511）：这里没有 `group_type`，送来的被静默忽略、照样 200——新建表单的类型下拉缺省第一项「片区/分片」，
+    想建专科联盟忘了改就落成片区，之后只能停用。取值范围与建档同一个 pattern。认不得的键照旧忽略，忽略完一项都没有的 422。
+    """
+
     # 改档与建档同口径（P1-98）：原先改名为空串照收
     name: str | None = Field(default=None, min_length=1, max_length=64, pattern=NON_BLANK)
+    group_type: str | None = Field(default=None, pattern=GROUP_TYPE_PATTERN)
     lead_org_id: int | None = None
     note: str | None = Field(default=None, max_length=256)
     active: bool | None = None
@@ -117,6 +126,10 @@ def list_groups(
 def update_group(group_id: int, body: GroupUpdate, db: Session = Depends(get_db)):
     group = _get(db, group_id)
     changes = body.model_dump(exclude_unset=True)
+    # 一项都没认上的 422（P2-1511）：可空的牵头机构传 null 是清空、算一项；其余各项传 null 照旧不改、不算。原先认不得的键
+    # 与全是 null 的请求都是什么也没改、照样 200
+    if "lead_org_id" not in changes and all(value is None for value in changes.values()):
+        raise HTTPException(status_code=422, detail="请至少改一项：名称、类型、牵头机构、备注或启停")
     if "lead_org_id" in changes and changes["lead_org_id"] is not None:
         if db.get(Organization, changes["lead_org_id"]) is None:
             raise HTTPException(status_code=404, detail="牵头机构不存在")
