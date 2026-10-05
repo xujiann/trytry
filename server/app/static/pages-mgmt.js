@@ -1057,7 +1057,7 @@ async function renderWorkflows() {
           required style="min-width:420px"><button>新建定义</button></form>
       ${table(["编码", "名称", "节点链", "状态"], definitions, (d) =>
         `<tr><td>${esc(d.key)}</td><td>${esc(d.name)}</td>
-         <td>${d.nodes.map((n) => `${esc(n.name)}${n.role ? `(${esc(n.role)})` : ""}`).join(" → ")}</td>
+         <td>${wfChainHtml(d.nodes)}</td>
          <td>${d.active ? "启用" : "停用"}</td></tr>`)}`)}
     ${panel("发起流程", `
       <form class="inline" id="inst-form">
@@ -2521,7 +2521,38 @@ async function renderDiseasePrograms() {
  * 目的是**在提交前就把话说清楚**——这三种错留到运行期，表现是单据卡死在某个
  * 节点上没人能推，比录入时报错难查得多。但服务端仍然是权威：
  * 客户端校验只管提示，不管放行。
+ *
+ * 保存前沿 next 从链头重排（P2-1473，见 wfChainOrder）：后端从数组第 0 个节点起步，而画布按数组顺序摆、没有「改节点」，
+ * 删了重加的节点排在末尾——存出去就是另一条流程。
  */
+
+/* 节点沿 next 从链头排好的副本（P2-1473）。实例发起时落在 nodes[0]（`start_instance`），画布却没有「改节点」：要改首节点
+ * 只能删了重加，新节点 push 到末尾，存出去的首项成了原先的第二步——实例发起后直接落在那里，申请一步从没发生；终态节点
+ * 先画的，一推就「已完成」。链头 = 唯一一个没有入边的节点；只有链头唯一、且沿 next 走得到全部节点（就是一条直链）时才
+ * 重排，有环、有走不到的、不止一个链头的原样返回、不拦——后端「首节点 / 可达」的口径随待裁定 P2-1033 定，这里只排不拦。 */
+function wfChainOrder(nodes) {
+  const byKey = new Map(nodes.map((n) => [n.key, n]));
+  const pointed = new Set(nodes.map((n) => n.next).filter(Boolean));
+  const heads = nodes.filter((n) => !pointed.has(n.key));
+  if (heads.length !== 1) return nodes;
+  const chain = [];
+  for (let n = heads[0]; n && !chain.includes(n); n = byKey.get(n.next)) chain.push(n);
+  return chain.length === nodes.length ? chain : nodes;
+}
+
+/* 定义表「节点链」一栏（P2-1473）：从实例实际的起点 nodes[0] 沿 next 打印，走回已经过的节点写「回到」并停下；起点走不到
+ * 的节点另起一行标出来。原先按数组顺序拼接——删了重加首节点的定义印成「药学审核 → 院长审批 → 科室申请」，看上去申请是
+ * 最后一步，实际实例从药学审核起步、科室申请永远不经过。 */
+function wfChainHtml(nodes) {
+  const label = (n) => `${esc(n.name)}${n.role ? `(${esc(n.role)})` : ""}`;
+  const byKey = new Map(nodes.map((n) => [n.key, n]));
+  const walked = [];
+  let n = nodes[0];
+  while (n && !walked.includes(n)) { walked.push(n); n = byKey.get(n.next); }
+  const unreached = nodes.filter((x) => !walked.includes(x));
+  return walked.map(label).join(" → ") + (n ? ` → 回到 ${label(n)}` : "")
+    + (unreached.length ? `<br><span class="tag red">起点走不到</span> ${unreached.map(label).join("、")}` : "");
+}
 
 let WF_NODES = [];
 let WF_SELECTED = "";
@@ -2601,6 +2632,9 @@ function wfCanvasInit(definitions) {
     if (!key || !name) { setMsg("#wfc-msg", "请先填流程编码与名称", false); return; }
     const problems = wfValidate();
     if (problems.length) { setMsg("#wfc-msg", problems.join("；"), false); return; }
+    // 先沿 next 从链头重排（P2-1473）：删了重加的首节点排在数组末尾，原样存出去实例就从第二步起步
+    WF_NODES = wfChainOrder(WF_NODES);
+    wfCanvasDraw();
     postAction("/api/workflows/definitions", { key, name, nodes: WF_NODES }, "#wfc-msg");
   };
 }
@@ -2658,7 +2692,8 @@ function wfCanvasDraw() {
     : '<p class="empty">点「加节点」开始画，或从上方载入现有定义改编</p>';
 
   const problems = wfValidate();
-  $("#wfc-json").textContent = JSON.stringify(WF_NODES, null, 2)
+  // 预览按保存时的顺序印（P2-1473）：面板上写着「提交给后端的就是它」
+  $("#wfc-json").textContent = JSON.stringify(wfChainOrder(WF_NODES), null, 2)
     + (WF_NODES.length && problems.length ? `\n\n// 待修正：${problems.join("；")}` : "");
 
   $("#wfc-canvas").querySelectorAll(".wf-node").forEach((g) => {
