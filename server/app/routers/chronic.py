@@ -97,6 +97,21 @@ def level_rules_problem(rules: dict) -> str:
                         "越低越危请写 direction: low")
             if metric.get("direction") == "low" and level3 > level2:
                 return f"指标 {key} 按越低越危（direction: low）算，3 级阈值 {level3:g} 不能高于 2 级阈值 {level2:g}"
+    # 同一指标挂了越高越危、越低越危两条的，两段不得相交（P2-1544）：低侧最大的阈值须小于高侧最小的阈值。原先只逐条查——空腹
+    # 血糖挂「高 10/7」加「低 3.9/7.5」照存，5.5、6.1 两头都够得着、一律定 2 级「需干预」，正常读数永远到不了 1 级，同样是悄悄
+    # 定错级。相等也算相交（中间一个读数都不剩）。预置糖尿病的低血糖一条（P2-119）只有 3 级阈值 3.9，与高侧不相交
+    for key in dict.fromkeys(metric["key"] for metric in metrics):
+        sides = {direction: [(metric[level], level, metric) for metric in metrics
+                             if metric["key"] == key and metric.get("direction", "high") == direction
+                             for level in ("level3", "level2") if metric.get(level) is not None]
+                 for direction in ("low", "high")}
+        if sides["low"] and sides["high"]:
+            low = max(sides["low"], key=lambda side: side[0])
+            high = min(sides["high"], key=lambda side: side[0])
+            if low[0] >= high[0]:
+                return (f"指标 {key} 的越低越危「{low[2].get('name') or key}」{low[1][-1]} 级阈值 {low[0]:g} 须小于"
+                        f"越高越危「{high[2].get('name') or key}」{high[1][-1]} 级阈值 {high[0]:g}："
+                        "两段相交，落在中间的正常读数到不了 1 级")
     if not isinstance(rules.get("require_all", True), bool):
         return "require_all 只能是 true / false"
     bad = non_finite_path(rules, "level_rules")   # 阈值之外原样透传的键同理（P2-466）
