@@ -68,6 +68,7 @@ RESOURCE_NAMES = {
     "appointment": "预约记录",
     "credential": "就诊凭据",
     "consultation": "远程会诊",
+    "online_consult": "在线咨询 / 复诊续方",   # 互联网+诊疗清单按患者筛（P2-1477）
     "medical_record": "就诊病历",
     "consent": "知情同意",
     "correction": "档案更正 / 注销申请",

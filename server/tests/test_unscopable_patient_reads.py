@@ -102,7 +102,6 @@ UNSCOPABLE_PATIENT_READS = {
     "spd/population.py:list_service_applies",
     "surveys.py:list_surveys",
     "tcm.py:list_orders",
-    "telemedicine.py:list_consults",
 }
 
 #: 【欠账，只减不增】**已绑调用方身份、但还没按归属收口**的清单——该给谁看仍随 P1-49 待裁定。
@@ -115,12 +114,15 @@ UNSCOPABLE_PATIENT_READS = {
 #: 最新 200 条，一行也没收。
 #: 2026-10-04：P2-1313 随访中心「超期未随访」为了按行算「这条你能不能完成」（以任务机构的名义写）补了身份，从上面挪来；
 #: 照旧全县最多 500 条，一行也没收（该给谁看随 P1-49 / P2-609 待裁定）。
+#: 2026-10-05：P2-1477 在线咨询清单照 P2-1193 收 `patient_id`（按患者筛先判可见性并留痕）补了身份，从上面挪来；不带患者号
+#: 照旧全县最新 200 条，一行也没收。
 BOUND_PENDING_SCOPE_READS = {
     "consultations.py:list_consultations",
     "followups.py:overdue_followups",
     "medication.py:list_shortages",
     "referrals.py:list_referrals",
     "spd/population.py:list_lifecycle_events",
+    "telemedicine.py:list_consults",
 }
 
 #: 同一形状、但响应只有聚合/计数，没有个体身份。**信息项**，不是欠账。

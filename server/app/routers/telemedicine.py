@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..concurrency import move_row
-from ..visibility import assert_org_writable
+from ..visibility import assert_org_writable, assert_patient_visible
 from ..database import get_db
 from ..deps import get_current_user, require_roles
 from ..models import OnlineConsult, Organization, Patient, Prescription, User
@@ -105,8 +105,23 @@ def create_consult(body: ConsultCreate, db: Session = Depends(get_db), user: Use
 
 
 @router.get("/consults", response_model=list[ConsultOut])
-def list_consults(status: str | None = None, db: Session = Depends(get_db)):
+def list_consults(
+    status: str | None = None,
+    patient_id: int | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """咨询清单。`patient_id` 按患者筛（P2-1477）：原先不收、照回全县最新 200 条——答过用药建议、续方并结束的咨询，全县
+    再来 200 条就再也找不回（在线咨询没有 360 段、没有居民端入口）。照远程会诊清单的修法（P2-1193）：先判这位患者看不看得、
+    并留痕，再过滤；跨机构回复的一方与患者没有关系，按患者筛同样 403（回复方的调阅依据另行待裁定）。
+
+    不带患者号时照旧是全县最新 200 条：该按什么范围给看随 P1-49 待裁定；在那之前不切翻页（理由同 P2-1193：切了就把这份
+    没收口的清单从「最多 200 行」放大成「整表可翻」，再附一个全县总数）。
+    """
     query = db.query(OnlineConsult)
+    if patient_id is not None:
+        assert_patient_visible(db, user, patient_id, resource="online_consult")
+        query = query.filter(OnlineConsult.patient_id == patient_id)
     if status:
         query = query.filter(OnlineConsult.status == status)
     return _with_prescription_state(db, query.order_by(OnlineConsult.id.desc()).limit(200).all())
