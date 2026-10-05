@@ -1667,10 +1667,12 @@ async function renderVaccineSupply() {
   // 从接种史行点「上报 AEFI」带来的这一剂（P2-1499），进门先取走：下面取数失败也不留到下次从导航进来
   const aefiJump = vacAefiJump;
   vacAefiJump = null;
-  const [batches, cold, aefi, stats] = await Promise.all([
+  // 机构清单只用来把临期面板的机构编号映射成名称（P2-1504）：取不到就回显编号，不为它把整页掀掉
+  const [batches, cold, aefi, stats, orgs] = await Promise.all([
     api("/api/vaccine-supply/batches"), api("/api/vaccine-supply/cold-chain"),
-    api("/api/vaccine-supply/aefi"), api("/api/vaccine-supply/stats"),
+    api("/api/vaccine-supply/aefi"), api("/api/vaccine-supply/stats"), api("/api/organizations").catch(() => []),
   ]);
+  const orgNames = Object.fromEntries(orgs.map((o) => [o.id, o.name]));
   const a = stats.aefi, b = stats.batches;
   // 状态列带上封存原因（P2-1502）：封存框写着「封存原因会印在批次状态列上」，原先只印后端的「已封存」——召回与超温待评估
   // 分不清，旁边就是一点即发的「解除封存」。过期优先照旧（后端 unusable_reason 先判过期，过期的不带原因），原因为空照旧只写
@@ -1684,9 +1686,11 @@ async function renderVaccineSupply() {
       r.handled_at ? ` ${esc(r.handled_at.slice(0, 16).replace("T", " "))}` : ""} 处置</div>` : "");
   const drawExpiring = async (days) => {
     const r = await api(`/api/vaccine-supply/expiring?days=${encodeURIComponent(days)}`);
+    // 机构列（P2-1504）：临期清单列的是全县的批次（端点收口属待裁定的 P1-49），原先不印机构——西镇的临期批次出现在东镇的
+    // 页面上，看着像自家的。照 P2-1467 印机构名，映射不到（页面打开之后才建的机构）回显编号
     $("#vx-list").innerHTML =
-      table(["疫苗", "批号", "厂家", "效期", "余量", "状态"], r.batches, (x) =>
-        `<tr><td>${esc(x.vaccine_name)}</td><td>${esc(x.batch_no)}</td>
+      table(["机构", "疫苗", "批号", "厂家", "效期", "余量", "状态"], r.batches, (x) =>
+        `<tr><td>${esc(orgNames[x.org_id] || x.org_id)}</td><td>${esc(x.vaccine_name)}</td><td>${esc(x.batch_no)}</td>
          <td>${esc(x.manufacturer) || "—"}</td>
          <td>${esc(x.expire_date)}${x.expired ? ' <span class="tag danger">已过期</span>' : ""}</td>
          <td>${x.remaining}/${x.quantity}</td>

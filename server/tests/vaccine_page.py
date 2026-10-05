@@ -11,7 +11,8 @@ DOM 只垫最小的一层：
 - `nav(id)` 只记下去哪一页，换页由用例自己 `await goto(renderXxx)`（先作废全部元素、再画那一页）；
 - 表单用 `form({ 字段: 值 })` 垫：`FormData` 读它的字段，`formJson` 原文照常转数字。
 
-`steps` 是 async 函数体，return 一个可 JSON 化的值；`ARGS.params` 是调用方给的参数。
+`steps` 是 async 函数体，return 一个可 JSON 化的值；`ARGS.params` 是调用方给的参数。`overrides` 按路径改写个别 GET 的
+回放（`{路径: (状态码, 响应体)}`，如机构清单缺一家、取失败），其余照转真接口。
 """
 import json
 import subprocess
@@ -80,8 +81,8 @@ def _function_source(source: str, head: str) -> str:
     return source[start:source.index("\n}\n", start) + 3]
 
 
-def run(client, headers: dict, steps: str, params: dict | None = None, modal=None):
-    """在 node 里加载疫苗两页、跑 `steps`；页面的请求以 `headers` 的身份转给 `client`。"""
+def run(client, headers: dict, steps: str, params: dict | None = None, modal=None, overrides: dict | None = None):
+    """在 node 里加载疫苗两页、跑 `steps`；页面的请求以 `headers` 的身份转给 `client`（`overrides` 里的 GET 除外）。"""
     core = (STATIC / "core.js").read_text(encoding="utf-8")
     page = (STATIC / "pages-clinical.js").read_text(encoding="utf-8")
     start = page.index("async function renderVaccination(")
@@ -108,8 +109,12 @@ def run(client, headers: dict, steps: str, params: dict | None = None, modal=Non
             message = json.loads(line)
             if "result" in message:
                 return message["result"]
-            resp = client.request(message["method"], message["path"], headers=headers, json=message["body"])
-            proc.stdin.write(json.dumps({"status": resp.status_code, "body": resp.json()}, ensure_ascii=False) + "\n")
+            if message["method"] == "GET" and message["path"] in (overrides or {}):
+                status, body = overrides[message["path"]]
+            else:
+                resp = client.request(message["method"], message["path"], headers=headers, json=message["body"])
+                status, body = resp.status_code, resp.json()
+            proc.stdin.write(json.dumps({"status": status, "body": body}, ensure_ascii=False) + "\n")
             proc.stdin.flush()
     finally:
         proc.stdin.close()
