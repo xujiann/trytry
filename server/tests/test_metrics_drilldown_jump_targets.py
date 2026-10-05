@@ -82,5 +82,6 @@ def test_面板只给能跳的指标画行跳转_文案随之改():
     assert "const go = DRILL_GO.has(metric);" in body
     assert '<tr${go ? ` data-drillgo="${esc(d.page)}" style="cursor:pointer"` : ""}>' in body   # 修前每行都带
     assert body.count("data-drillgo") == 1
-    assert "点击明细行跳转「${esc(d.page)}」业务页" in body
-    assert "业务页列不出、也筛不出这一类，明细行不跳转" in body
+    # 页名印注册表里的 title、不印 hash（P2-1512，见 test_metrics_drilldown_page_titles）；跳转仍按 hash（上面的 data-drillgo）
+    assert "点击明细行跳转「${esc(pageTitle(d.page))}」业务页" in body
+    assert "「${esc(pageTitle(d.page))}」业务页列不出、也筛不出这一类，明细行不跳转" in body

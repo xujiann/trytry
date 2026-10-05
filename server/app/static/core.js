@@ -379,6 +379,13 @@ function lineChart(labels, series, colors, times = null) {
    依据见 tests/test_metrics_drilldown_jump_targets.py 的对照表；目标页补了取数 / 筛选，先改那张表再加进来 */
 const DRILL_GO = new Set(["critical_values", "stock_alerts", "infectious_recent", "pending_reviews", "medwaste_overdue"]);
 
+/* 下钻目标页的页名取页面注册表 `PAGES` 的 title（P2-1512）：下钻面板与「可下钻指标目录」原先把后端给的页面 hash（critical /
+   archive）原样印给用户。注册表里查不到的原样回显 hash（与 statusTag 查不到映射时同一个口径：显示出来才有人去补） */
+function pageTitle(id) {
+  const page = PAGES.find((p) => p.id === id);
+  return page ? page.title : id;
+}
+
 async function openDrilldown(metric, offset = 0) {
   // 局部变量叫 `drill` 而不是 `panel`：`panel()` 是面板组件（本文件上方），
   // 在会用到它的文件里再声明一个同名局部变量，迟早有人在这儿写下 `panel(...)`
@@ -398,8 +405,8 @@ async function openDrilldown(metric, offset = 0) {
   // docs/adr/0009 第十一批，别当成"漏迁的"。
   drill.innerHTML = `<div class="panel" style="border-left:4px solid #0b6e6e">
     <h3>${esc(d.label)} 明细（${d.total}）　<button class="btn secondary" data-drillclose="1">关闭</button></h3>
-    <p class="desc" style="font-size:12.5px">${go ? `点击明细行跳转「${esc(d.page)}」业务页`
-      : `「${esc(d.page)}」业务页列不出、也筛不出这一类，明细行不跳转，在这里翻页查看`}；口径与驾驶舱指标、预警横幅一致</p>
+    <p class="desc" style="font-size:12.5px">${go ? `点击明细行跳转「${esc(pageTitle(d.page))}」业务页`
+      : `「${esc(pageTitle(d.page))}」业务页列不出、也筛不出这一类，明细行不跳转，在这里翻页查看`}；口径与驾驶舱指标、预警横幅一致</p>
     ${table(d.columns, d.items, (row) =>
       `<tr${go ? ` data-drillgo="${esc(d.page)}" style="cursor:pointer"` : ""}>${
         d.fields.map((f) => `<td>${esc(row[f] ?? "—")}</td>`).join("")}</tr>`)}
@@ -471,9 +478,11 @@ async function renderDashboard() {
            ? `剩下 <b>${unbound.length} 项在卡片与横幅上都没有入口</b>，只能从这里下钻。`
            : "目录里的每一项此刻都能从卡片或横幅点到。"}
          预警横幅那几项<b>只在有预警时才出现</b>，所以"此刻覆盖"不等于"一直覆盖"。</p>
-       ${table(["指标", "名称", "当前计数", "业务页", "卡片入口"], drillables, (x) =>
-         `<tr><td><span class="tag">${esc(x.metric)}</span></td><td>${esc(x.label)}</td>
-          <td>${x.count}</td><td>${esc(x.page)}</td>
+       ${table(["指标", "当前计数", "业务页", "卡片入口"], drillables, (x) =>
+         // 指标列印后端的中文指标名、业务页印菜单上的页名（P2-1512）：原先指标列是 critical_values 这种键、另一列才是名称，
+         // 业务页列是页面 hash
+         `<tr><td>${esc(x.label)}</td>
+          <td>${x.count}</td><td>${esc(pageTitle(x.page))}</td>
           <td>${cardBound.has(x.metric) ? "指标卡"
             : alertBound.has(x.metric) ? "预警横幅（当前有预警）"
             : '<span class="tag orange">无</span>'}
