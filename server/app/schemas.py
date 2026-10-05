@@ -484,8 +484,18 @@ class ContractOut(ContractCreate):
     signed_date: str = ""
     # 出参不带「不能只填空格」（P1-109）：修之前存进去的纯空白行要原样读出来，而不是让整个清单 500
     doctor_name: str = Field(min_length=1, max_length=64)
-
     model_config = {"from_attributes": True}
+
+
+class ContractRowOut(ContractOut):
+    """签约清单行（P2-1547）：`ContractOut` 末尾加患者姓名与机构名，签约页原先只印两个编号。
+
+    只给清单（按可见范围收口）；签约 / 解约的回执照旧是 `ContractOut`——签约接口不判调用方与患者的关系（P1-45，
+    待裁定），回执带姓名就成了按患者号查姓名的口子。由 `contracts._contract_rows` 按一批取好再给。
+    """
+
+    patient_name: str
+    org_name: str
 
 
 class ContractServiceCreate(BaseModel):

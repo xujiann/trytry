@@ -266,7 +266,8 @@ MIGRATED_PAGES = {
     # 模板）+ 3 处标题里嵌了 HTML 的（见下面 KNOWN_UNMIGRATED_SHELLS 与 openDrilldown）。
     "renderConsultations": 4,       # 含一处无标题裸面板
                                     # 功能完善·consultations（2026-09-16）：+运行统计、+会诊专家库两个面板
-    "renderContracts": 2,           # 含一处无标题裸面板；末尾还会 drawHomeVisits() 追加上门服务面板
+    "renderContracts": 2,           # 签约表单 + 签约表（P2-1547 起签约表带标题与筛选栏，原先是无标题裸面板）；
+                                    # 末尾还会 drawHomeVisits() 追加上门服务面板
     "renderDicts": 1,               # 整页就一个无标题裸面板；条目表由末尾的 draw("diagnosis") 写进 #dict-table
     "renderReferrals": 2,           # 含一处无标题裸面板
     "renderPharmacy": 3,            # 第二个面板的标题里嵌着 <span>，迁不了，见下

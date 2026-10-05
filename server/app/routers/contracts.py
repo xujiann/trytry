@@ -1,13 +1,13 @@
 """家庭医生签约：协议管理、服务包、履约记录。"""
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
 from ..concurrency import insert_or_conflict
 from ..visibility import assert_obj_org_writable, assert_patient_visible, scope_patient_list
 from ..database import get_db
-from ..deps import get_current_user, paginate, require_roles
+from ..deps import get_current_user, paginate, require_roles, row_dict
 from ..models import ContractService, FamilyDoctorContract, Organization, Patient, User
-from ..schemas import ContractCreate, ContractOut, ContractServiceCreate, ContractServiceOut
+from ..schemas import ContractCreate, ContractOut, ContractRowOut, ContractServiceCreate, ContractServiceOut
 
 router = APIRouter(prefix="/api/contracts", tags=["家庭医生签约"], dependencies=[Depends(get_current_user)])
 
@@ -49,23 +49,68 @@ def sign(body: ContractCreate, db: Session = Depends(get_db)):
     )
 
 
-@router.get("", response_model=list[ContractOut])
+def _contract_rows(db: Session, contracts: list[FamilyDoctorContract]) -> list[dict]:
+    """清单行配上患者姓名与机构名（P2-1547）：签约页原先只印患者号、机构号，认人还得拿编号回档案里对。
+
+    按这一批的患者号、机构号各取一次，不逐行查库（照 `surveys.list_surveys` 的 P2-1153）；姓名不是加密列，PII 加密
+    开态下照旧直读。只给清单（已按 `scope_patient_list` 收口）：签约与解约的回执照旧不带——签约接口不判调用方与这位
+    患者的关系（P1-45，待裁定），回执要是带姓名，任意一个患者号签一下就能查出是谁。
+    """
+    patient_ids = {c.patient_id for c in contracts}
+    org_ids = {c.org_id for c in contracts}
+    patients = (
+        row_dict(db.query(Patient.id, Patient.name).filter(Patient.id.in_(patient_ids)).all())
+        if patient_ids
+        else {}
+    )
+    orgs = (
+        row_dict(db.query(Organization.id, Organization.name).filter(Organization.id.in_(org_ids)).all())
+        if org_ids
+        else {}
+    )
+    return [
+        {
+            "patient_id": c.patient_id,
+            "org_id": c.org_id,
+            "doctor_name": c.doctor_name,
+            "package": c.package,
+            "signed_date": c.signed_date,
+            "id": c.id,
+            "status": c.status,
+            "patient_name": patients.get(c.patient_id, ""),
+            "org_name": orgs.get(c.org_id, ""),
+        }
+        for c in contracts
+    ]
+
+
+@router.get("", response_model=list[ContractRowOut])
 def list_contracts(
     response: Response,
     org_id: int | None = None,
     patient_id: int | None = None,
+    # 取值照签约状态列注释（active / terminated），写错 422，不静默当成「不筛」（P2-1547）
+    status: str | None = Query(default=None, pattern="^(active|terminated)$"),
     offset: int = 0,
     limit: int = 500,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """签约清单：家医签约页那张表，「记录履约 / 解约 / 履约记录」只摆在这张表的行上。
+
+    按状态筛、行上带患者姓名与机构名（P2-1547）：原先只收 `org_id` / `patient_id`、按编号倒序缺省 500 条，`?status=`
+    被静默忽略，页面不带参数只取这一页、行上只印两个编号——签约过 500 份，越早签的越先挤出这一页，该续约、解约的那批
+    在页面上没有行。页面现在按状态、按患者号查，总数读 X-Total-Count。`status` 叠在可见范围（`scope_patient_list`）
+    之后，只收窄、不绕过它；姓名与机构名按这一页一批取，分页与既有字段不变（新字段只加在末尾）。
+    """
     query = db.query(FamilyDoctorContract)
     if org_id is not None:
         query = query.filter(FamilyDoctorContract.org_id == org_id)
     query = scope_patient_list(db, user, query, FamilyDoctorContract, patient_id, "contract")
-    return paginate(
-        query.order_by(FamilyDoctorContract.id.desc()), response, offset, limit
-    )
+    if status:
+        query = query.filter(FamilyDoctorContract.status == status)
+    rows = paginate(query.order_by(FamilyDoctorContract.id.desc()), response, offset, limit)
+    return _contract_rows(db, rows)
 
 
 @router.post(

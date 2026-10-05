@@ -43,6 +43,12 @@ async function api(path, options = {}) {
     err.status = resp.status;
     throw err;
   }
+  // 要总数的清单带上 `withTotal`（P2-1547）：连同 X-Total-Count 一起回 `{ rows, total }`，接口没发这个头时 total 为 null。
+  // 缺省照旧只回响应体——那是全部调用点共用的返回形状，改它属破坏性变更（见 P2-32），这里不动
+  if (options.withTotal) {
+    const total = resp.headers.get("X-Total-Count");
+    return { rows: data, total: total === null ? null : Number(total) };
+  }
   return data;
 }
 
@@ -657,9 +663,25 @@ async function renderConsultations() {
   };
 }
 
+/* 家医签约页的筛选（P2-1547）：按状态、按患者号查。只留在内存里、不进存储（同 JOB_RUN_FILTER / SR_FILTER）——查哪一户是
+   这一次办事的条件。患者号是手输的，看不到的患者后端 403：取数失败只在筛选那一段报错、表照画（同统一申请单中心），不掀掉整页。 */
+const CONTRACT_FILTER = { status: "", patient_id: "" };
+
 async function renderContracts() {
   $("#page-desc").textContent = "线上签约、服务包管理、履约记录";
-  const contracts = await api("/api/contracts");
+  // 签约清单按编号倒序、一页最多 500 份（P2-1547）：原先不带参数只取这一页，又没有查找入口——签约过 500 份，越早签的越先
+  // 挤出这一页，「记录履约 / 解约 / 履约记录」只摆在这张表的行上，该续约、解约的那批在页面上没有行。现在按状态、按患者号查
+  // （后端都叠在可见范围之后、只收窄），总数读 X-Total-Count，列不全时标题写明「已列 N / 共 total」（同 P2-1501）
+  const query = new URLSearchParams(Object.entries(CONTRACT_FILTER).filter(([, v]) => v));
+  let contracts = [];
+  let total = null;
+  let listError = "";
+  try {
+    ({ rows: contracts, total } = await api(`/api/contracts${query.toString() ? `?${query}` : ""}`, { withTotal: true }));
+  } catch (err) { listError = err.message; }
+  const filtered = Boolean(CONTRACT_FILTER.status || CONTRACT_FILTER.patient_id);
+  const listed = contracts.length;
+  const listTitle = `${filtered ? "筛选结果" : "签约协议"}（${total !== null && listed < total ? `已列 ${listed} / 共 ${total}` : listed}）`;
   const PKG = { basic: "基础包", standard: "标准包", premium: "个性包" };
   const SVC = { visit: "上门服务", consult: "健康咨询", followup: "随访", referral: "转诊协助" };
   $("#page-body").innerHTML = `
@@ -672,13 +694,28 @@ async function renderContracts() {
         <input name="signed_date" placeholder="签约日期 YYYY-MM-DD">
         <button>签约</button>
       </form><p class="msg" id="ct-msg"></p>`)}
-    ${panel("", table(["ID", "患者", "机构", "医生", "服务包", "状态", "操作"], contracts, (c) =>
-      `<tr><td>${c.id}</td><td>${c.patient_id}</td><td>${c.org_id}</td><td>${esc(c.doctor_name)}</td>
+    ${panel(listTitle, `
+      <form class="inline" id="ct-filter">
+        <select name="status"><option value="">全部状态</option>${[["active", "履约中"], ["terminated", "已解约"]].map(([v, t]) =>
+          `<option value="${v}"${v === CONTRACT_FILTER.status ? " selected" : ""}>${t}</option>`).join("")}</select>
+        <input name="patient_id" type="number" value="${esc(CONTRACT_FILTER.patient_id)}" placeholder="患者ID（留空看全部）">
+        <button>查询</button></form>
+      ${listError ? `<p class="msg err">${esc(listError)}</p>` : ""}`
+      + table(["ID", "患者", "机构", "医生", "服务包", "状态", "操作"], contracts, (c) =>
+      `<tr><td>${c.id}</td><td>${esc(c.patient_name) || "—"}（${esc(c.patient_id)}）</td><td>${esc(c.org_name || c.org_id)}</td>
+       <td>${esc(c.doctor_name)}</td>
        <td><span class="tag">${esc(PKG[c.package] || c.package)}</span></td>
        <td><span class="tag ${c.status === "active" ? "green" : "red"}">${c.status === "active" ? "履约中" : "已解约"}</span></td>
        <td><button class="btn secondary" data-svclist="${c.id}">履约记录</button>${c.status === "active"
          ? ` <button class="btn secondary" data-svc="${c.id}">记录履约</button>
             <button class="btn danger" data-term="${c.id}">解约</button>` : ""}</td></tr>`) + '<div id="ct-services"></div>')}`;
+  $("#ct-filter").onsubmit = (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    CONTRACT_FILTER.status = f.get("status") || "";
+    CONTRACT_FILTER.patient_id = String(f.get("patient_id") ?? "").trim();
+    route();
+  };
   $("#ct-form").onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
