@@ -1077,6 +1077,8 @@ async function renderInsurance() {
   // 待审那一页也取满了，最早的待审同样列不出
   const queueNote = (recent, pending, rows) => recent.length < 200 ? ""
     : `（待审${pending.length >= 200 ? "只列最新 " : " "}${pending.length} 条排在最前、其余只列最新 ${rows.length - pending.length} 条）`;
+  // 特病申报表单收「申报理由」、队列加理由列（P2-1481，照同页双通道的表单与队列）：接口早就收 reason、出参也带，页面原先
+  // 表单只有患者号和病种、队列不显示理由——申报的人写不了，审核的人只看得见一个病种名
   $("#page-body").innerHTML = `
     ${fund ? `<div class="cards">
       <div class="card"><div class="label">医保基金支出总额</div><div class="value">${fund.insurance_pay_total}</div></div>
@@ -1091,11 +1093,11 @@ async function renderInsurance() {
       </form>` : ""}
       <h3 style="margin-top:12px">转诊证明 / 特病申报</h3>
       ${canSettle ? `<form class="inline" id="cert-form"><input name="referral_id" type="number" placeholder="平台转诊记录ID" required><input name="patient_id" type="number" placeholder="患者ID" required><button>签发证明</button></form>` : ""}
-      ${canApply ? `<form class="inline" id="spec-form"><input name="patient_id" type="number" placeholder="患者ID" required><input name="disease_name" placeholder="病种" required><button>特病申报</button></form>` : ""}
+      ${canApply ? `<form class="inline" id="spec-form"><input name="patient_id" type="number" placeholder="患者ID" required><input name="disease_name" placeholder="病种" required><input name="reason" placeholder="申报理由" style="min-width:180px"><button>特病申报</button></form>` : ""}
       ${canSettle || canApply ? "" : `<p class="muted">结算登记与转诊证明由经办办理，特病申报由经办或医师提出；管理层在下面的队列里审核。</p>`}
       <p class="msg" id="ins-msg"></p>`)}
-    ${panel("特病申报队列" + queueNote(recentApps, appliedApps, apps), table(["ID", "患者", "病种", "状态", "操作"], apps, (a) =>
-      `<tr><td>${a.id}</td><td>${a.patient_id}</td><td>${esc(a.disease_name)}</td>
+    ${panel("特病申报队列" + queueNote(recentApps, appliedApps, apps), table(["ID", "患者", "病种", "理由", "状态", "操作"], apps, (a) =>
+      `<tr><td>${a.id}</td><td>${a.patient_id}</td><td>${esc(a.disease_name)}</td><td>${esc(a.reason) || "—"}</td>
        <td><span class="tag ${a.status === "approved" ? "green" : a.status === "rejected" ? "red" : "orange"}">${esc(a.status_name)}</span></td>
        <td>${a.status === "applied" && canReview ? `<button class="btn secondary" data-ok="${a.id}">批准</button><button class="btn danger" data-no="${a.id}">驳回</button>` : "—"}</td></tr>`))}
     ${panel("双通道药品申报（医师/经办申报 → 管理层审核）" + queueNote(recentDual, pendingDual, dualApps), `
