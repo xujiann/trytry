@@ -8,7 +8,11 @@
 照同文件口径补上：按档案所属患者判可见性并留痕。管这份档案的机构本身就有服务关系
 （`managed_by_org_id` 是机构外键），照常能记。
 """
+from datetime import timedelta
+
 import pytest
+
+from conftest import business_today
 
 from app.database import SessionLocal
 from app.models import AccessLog, ChronicPatient, FollowUp
@@ -87,10 +91,11 @@ def test_无关机构不能给别家管着的患者记随访(client, chronic_wor
 def test_管这份档案的机构照常能记且留痕(client, chronic_world):
     cid = chronic_world["new_chronic"]("diabetes")
     before = _chronic_logs(chronic_world["patient_id"])
-    r = client.post(f"/api/chronic/{cid}/followups", json={"sbp": 132, "dbp": 84, "next_due": "2026-12-01"},
+    due = (business_today() + timedelta(days=57)).isoformat()   # 手填的不得早于今天（P2-1545），按今天起算
+    r = client.post(f"/api/chronic/{cid}/followups", json={"sbp": 132, "dbp": 84, "next_due": due},
                     headers=chronic_world["doc_a"])
     assert r.status_code == 201, r.text
-    assert _state(cid)[1:] == ("2026-12-01", 1)
+    assert _state(cid)[1:] == (due, 1)
     assert _chronic_logs(chronic_world["patient_id"]) == before + 1
 
 

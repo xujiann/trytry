@@ -4425,8 +4425,15 @@ def chronic_seed(seed, admin_call):
 def test_下次随访日两端都用日期控件填_选的那一天真的落库(page, base_url, chronic_seed, admin_read):
     """P2-55：两端随访表单的「下次随访日」原先是自由文本框，「2026/10/1」「10月1日」照存，按字符串比较的
     超期名单对它失效（「10月1日」没到期就超期、「2026/10/1」超期了却不在名单里）。换成日期控件后送出的
-    一定是 YYYY-MM-DD：桌面端录一次、医生移动端再录一次，每次按接口读回档案的下次随访日。"""
+    一定是 YYYY-MM-DD：桌面端录一次、医生移动端再录一次，每次按接口读回档案的下次随访日。
+
+    P2-1545：手填的下次随访日限在 [今天, 今天 + 3650 天]，桌面端日期框的 min / max 同口径——日子按今天起算，写死的日子
+    过了那天就交不上。"""
+    from datetime import date, timedelta
+
     cid = chronic_seed["id"]
+    desk_due = (date.today() + timedelta(days=57)).isoformat()
+    mobile_due = (date.today() + timedelta(days=102)).isoformat()
 
     def next_due():
         (row,) = [c for c in admin_read("/api/chronic?limit=500") if c["id"] == cid]
@@ -4436,10 +4443,13 @@ def test_下次随访日两端都用日期控件填_选的那一天真的落库(
     _open_page(page, "chronic", "慢病管理")
     form = page.locator("#fu-form")
     expect(form.locator("input[name=next_due]")).to_have_attribute("type", "date")
+    expect(form.locator("input[name=next_due]")).to_have_attribute("min", date.today().isoformat())
+    expect(form.locator("input[name=next_due]")).to_have_attribute(
+        "max", (date.today() + timedelta(days=3650)).isoformat())
     form.locator("input[name=chronic_id]").fill(str(cid))
     form.locator("input[name=sbp]").fill("128")
     form.locator("input[name=dbp]").fill("82")
-    form.locator("input[name=next_due]").fill("2026-12-01")
+    form.locator("input[name=next_due]").fill(desk_due)
     seen = []
 
     def on_dialog(dialog):
@@ -4448,8 +4458,8 @@ def test_下次随访日两端都用日期控件填_选的那一天真的落库(
 
     page.once("dialog", on_dialog)
     _submit(page, "#fu-form button")
-    assert seen and "下次随访：2026-12-01" in seen[0], seen
-    assert next_due() == "2026-12-01"
+    assert seen and f"下次随访：{desk_due}" in seen[0], seen
+    assert next_due() == desk_due
 
     page.set_viewport_size({"width": 390, "height": 844})
     page.goto(f"{base_url}/m/doctor")
@@ -4460,10 +4470,10 @@ def test_下次随访日两端都用日期控件填_选的那一天真的落库(
     page.click('a.tab-btn[data-tab="chronic"]')
     expect(page.locator("#fu-next")).to_have_attribute("type", "date")
     page.locator("#fu-chronic").select_option(str(cid))
-    page.locator("#fu-next").fill("2027-01-15")
+    page.locator("#fu-next").fill(mobile_due)
     page.click("#fu-form button[type=submit]")
-    expect(page.locator("#fu-msg")).to_contain_text("下次随访 2027-01-15")
-    assert next_due() == "2027-01-15"
+    expect(page.locator("#fu-msg")).to_contain_text(f"下次随访 {mobile_due}")
+    assert next_due() == mobile_due
 
 
 @pytest.fixture(scope="session")

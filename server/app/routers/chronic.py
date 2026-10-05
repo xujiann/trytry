@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy.orm import Session
 
+from .. import clock
 from ..concurrency import insert_if_absent, insert_or_conflict
 from ..database import get_db
 from ..deps import (
@@ -44,6 +45,9 @@ GUIDANCE_POINTS = {
 
 # 随访周期兜底值（天）：目录缺失时按季度随访
 DEFAULT_FOLLOWUP_INTERVAL_DAYS = 90
+#: 随访周期的业务上限（天）：10 年，与慢专病管理目标的随访周期同一口径（P1-96）。手填的「下次随访日」不得晚于今天起这么多天
+#: （P2-1545），两处共用这一个数
+FOLLOWUP_INTERVAL_MAX_DAYS = 3650
 
 
 def get_disease_type(db: Session, code: str) -> ChronicDiseaseType | None:
@@ -243,6 +247,24 @@ def _split_by_disease(
     return kept, splits
 
 
+def _next_due_problem(next_due: str, *, allow_past: bool = False) -> str:
+    """手填「下次随访日」的界（P2-1545），没问题（或没填、按病种周期自动建议）返回空串。
+
+    原先只查格式（P2-55）：录随访把 2026 敲成 2062，这位患者从此永不进超期名单；填成去年，刚录完就在超期名单里。上界是今天起
+    `FOLLOWUP_INTERVAL_MAX_DAYS` 天，与病种随访周期的上限同一个数（P1-96）；记随访还不得早于今天。建档 `allow_past`：补录存量
+    档案的到期日可以早于今天，只查上界。
+    """
+    if not next_due:
+        return ""
+    today = clock.today()
+    if not allow_past and next_due < today.isoformat():
+        return f"下次随访日（{next_due}）不得早于今天"
+    latest = (today + timedelta(days=FOLLOWUP_INTERVAL_MAX_DAYS)).isoformat()
+    if next_due > latest:
+        return f"下次随访日（{next_due}）不得晚于 {latest}（今天起 {FOLLOWUP_INTERVAL_MAX_DAYS} 天）"
+    return ""
+
+
 def _suggest_next_due(db: Session, disease: str, today: str | None = None) -> str:
     """按病种随访周期建议下次到期日（业务当天 + 周期天数）。"""
     disease_type = get_disease_type(db, disease)
@@ -264,7 +286,7 @@ class DiseaseTypeCreate(BaseModel):
     guidance: str = Field(default="", max_length=512)
     # 业务上限 10 年，与慢专病管理目标的随访周期同一口径（P1-96）：原先只到列容量 INT4_MAX，写成 99999999
     # 照存，此后该病种建档、随访算「下次到期日」时 date + timedelta 溢出，整个请求 500
-    followup_interval_days: int = Field(default=90, gt=0, le=3650)
+    followup_interval_days: int = Field(default=90, gt=0, le=FOLLOWUP_INTERVAL_MAX_DAYS)
     active: bool = True
 
 
@@ -273,7 +295,7 @@ class DiseaseTypeUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=64, pattern=NON_BLANK)
     level_rules: dict | None = None
     guidance: str | None = Field(default=None, max_length=512)
-    followup_interval_days: int | None = Field(default=None, gt=0, le=3650)  # 同建档（P1-96）
+    followup_interval_days: int | None = Field(default=None, gt=0, le=FOLLOWUP_INTERVAL_MAX_DAYS)  # 同建档（P1-96）
     active: bool | None = None
 
 
@@ -372,6 +394,9 @@ def register_chronic(
     disease_type = get_disease_type(db, body.disease)
     if disease_type is None or not disease_type.active:
         raise HTTPException(status_code=422, detail="病种编码不在慢病病种目录内")
+    problem = _next_due_problem(body.next_due, allow_past=True)   # 补录存量档案可以早于今天，只查上界（P2-1545）
+    if problem:
+        raise HTTPException(status_code=422, detail=problem)
     if db.get(Patient, body.patient_id) is None:
         raise HTTPException(status_code=404, detail="患者不存在")
     if db.get(Organization, body.managed_by_org_id) is None:
@@ -482,8 +507,10 @@ def add_followup(
     # P0-26：原先只看角色——乙院按档案号就能给甲院管着的患者记随访，还顺带改掉分级与
     # 下次随访日。同文件风险评分与随访记录早就按患者可见性守着，写侧照同一口径。
     assert_patient_visible(db, user, chronic.patient_id, resource="chronic")
-    # 收缩压须高于舒张压（P2-1016）：取值与分级同一口径——列为空取 metrics 同名键（`_metric_value`）
-    problem = _metrics_column_problem(body) or bp_order_problem(_metric_value(body, "sbp"), _metric_value(body, "dbp"))
+    # 收缩压须高于舒张压（P2-1016）：取值与分级同一口径——列为空取 metrics 同名键（`_metric_value`）；手填的下次随访日限在
+    # [今天, 今天 + 3650 天]（P2-1545）
+    problem = (_metrics_column_problem(body) or bp_order_problem(_metric_value(body, "sbp"), _metric_value(body, "dbp"))
+               or _next_due_problem(body.next_due))
     if problem:
         raise HTTPException(status_code=422, detail=problem)
     # 另一病种的读数拆进那份档案（P2-1541）：`own` 是留给本档案的那部分

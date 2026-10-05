@@ -133,13 +133,14 @@ def test_next_due_auto_suggested_by_disease_interval(client, h, base):
     assert auto["next_due"] == expected
     assert auto["next_due_suggested"] is True
 
-    # 显式指定则以录入值为准
+    # 显式指定则以录入值为准（手填的限在 [今天, 今天 + 3650 天]，P2-1545：原先写的 2099-01-01 在界外）
+    chosen = (date.today() + timedelta(days=365)).isoformat()
     manual = client.post(
         f"/api/chronic/{chronic['id']}/followups",
-        json={"metrics": {"missed_doses": 0}, "next_due": "2099-01-01"},
+        json={"metrics": {"missed_doses": 0}, "next_due": chosen},
         headers=h,
     ).json()
-    assert manual["next_due"] == "2099-01-01"
+    assert manual["next_due"] == chosen
     assert manual["next_due_suggested"] is False
 
 

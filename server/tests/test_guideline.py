@@ -1,7 +1,9 @@
 """功能指引补齐模块测试：⑦⑨⑬⑭⑮⑯⑲⑳㉑㉓㉔㉕㉖㉗㉘㉚㉛㉜㉞及排班/质控/样本物流。"""
+from datetime import timedelta
+
 import pytest
 
-from conftest import login
+from conftest import business_today, login
 
 
 @pytest.fixture(scope="module")
@@ -147,8 +149,10 @@ def test_26_27_28_publichealth(client, h, base):
 
     # ㉗ 诊间医防提醒：慢病超期 + 疫苗禁忌 + 活动事件
     chronic = client.post("/api/chronic", json={"patient_id": pid, "disease": "hypertension", "managed_by_org_id": base["township"]["id"]}, headers=h).json()
-    client.post(f"/api/chronic/{chronic['id']}/followups", json={"sbp": 150, "dbp": 95, "next_due": "2026-01-01"}, headers=h)
-    reminders = client.get(f"/api/publichealth/reminders/{pid}?today=2026-08-10", headers=h).json()["reminders"]
+    # 手填的下次随访日不得早于今天（P2-1545）：原先写死的 2026-01-01 交上去 422，按今天起算、过了那天再查提醒
+    due = business_today() + timedelta(days=30)
+    client.post(f"/api/chronic/{chronic['id']}/followups", json={"sbp": 150, "dbp": 95, "next_due": due.isoformat()}, headers=h)
+    reminders = client.get(f"/api/publichealth/reminders/{pid}?today={due + timedelta(days=1)}", headers=h).json()["reminders"]
     types = {r["type"] for r in reminders}
     assert {"chronic_followup_overdue", "vaccine_contraindication", "active_ph_event", "lifestyle_guidance"} <= types
 

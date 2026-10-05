@@ -1,6 +1,8 @@
+from datetime import timedelta
+
 import pytest
 
-from conftest import login
+from conftest import business_today, login
 
 
 @pytest.fixture(scope="module")
@@ -206,9 +208,11 @@ def test_chronic_smart_leveling_and_overdue(client, headers, base_data):
     assert chronic["level"] == 1
 
     # 高压 165：升为3级并建议上转，返回膳食运动指导要点
+    # 手填的下次随访日限在 [今天, 今天 + 3650 天]（P2-1545）：原先写死的 2026-01-01 / 2099-01-01 都在界外，按今天起算
+    due = business_today() + timedelta(days=30)
     result = client.post(
         f"/api/chronic/{chronic['id']}/followups",
-        json={"sbp": 165, "dbp": 95, "next_due": "2026-01-01"},
+        json={"sbp": 165, "dbp": 95, "next_due": due.isoformat()},
         headers=headers,
     ).json()
     assert result["level"] == 3
@@ -216,13 +220,13 @@ def test_chronic_smart_leveling_and_overdue(client, headers, base_data):
     assert "限盐" in result["guidance_points"]
 
     # next_due 已过期 → 出现在超期名单
-    overdue = client.get("/api/chronic/overdue?today=2026-06-01", headers=headers).json()
+    overdue = client.get(f"/api/chronic/overdue?today={due + timedelta(days=1)}", headers=headers).json()
     assert [c["id"] for c in overdue] == [chronic["id"]]
 
     # 控制良好后降为1级
     good = client.post(
         f"/api/chronic/{chronic['id']}/followups",
-        json={"sbp": 128, "dbp": 82, "next_due": "2099-01-01"},
+        json={"sbp": 128, "dbp": 82, "next_due": (business_today() + timedelta(days=365)).isoformat()},
         headers=headers,
     ).json()
     assert good["level"] == 1
@@ -278,7 +282,7 @@ def test_portal_identity_verification(client, headers, base_data, monkeypatch):
         ).json()
         client.post(
             f"/api/chronic/{chronic['id']}/followups",
-            json={"sbp": 165, "dbp": 95, "next_due": "2026-01-01"},
+            json={"sbp": 165, "dbp": 95, "next_due": (business_today() + timedelta(days=30)).isoformat()},
             headers=headers,
         )
 

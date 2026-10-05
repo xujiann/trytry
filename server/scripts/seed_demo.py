@@ -212,13 +212,21 @@ if not _exists(c.get(f"/api/pharmacy/stocks?org_id={zhen1['id']}").json(), lambd
 
 # 慢病、转诊、传染病
 # 慢病建档本身幂等（同一患者同一病种返回既有档案）；随访不是——每交一次多一条，还改写分级与下次随访日，
-# 档案已有随访就不再补（P2-1095）
+# 档案已有随访就不再补（P2-1095）。下次随访日按今天起算：手填的不得早于今天（P2-1545），原先写死的 2026-07-01 / 09-15 交上去
+# 422，两条随访都落不了库、分级也没定
 ch1 = c.post("/api/chronic", json={"patient_id": patients[0]["id"], "disease": "hypertension", "managed_by_org_id": zhen1["id"]}).json()
 if not c.get(f"/api/chronic/{ch1['id']}/followups").json():
-    c.post(f"/api/chronic/{ch1['id']}/followups", json={"sbp": 165, "dbp": 102, "next_due": "2026-07-01"})
+    c.post(f"/api/chronic/{ch1['id']}/followups",
+           json={"sbp": 165, "dbp": 102, "next_due": (date.today() + timedelta(days=30)).isoformat()})
 ch2 = c.post("/api/chronic", json={"patient_id": patients[1]["id"], "disease": "diabetes", "managed_by_org_id": zhen1["id"]}).json()
 if not c.get(f"/api/chronic/{ch2['id']}/followups").json():
-    c.post(f"/api/chronic/{ch2['id']}/followups", json={"glucose": 7.8, "next_due": "2026-09-15"})
+    c.post(f"/api/chronic/{ch2['id']}/followups",
+           json={"glucose": 7.8, "next_due": (date.today() + timedelta(days=90)).isoformat()})
+# 一份超期未随访的档案：随访手填的下次随访日不得早于今天（P2-1545）之后，上面两份随访完都不再超期——超期只能来自建档时
+# 补录的到期日（补录存量档案可以早于今天，只查上界）。慢阻肺建档、到期日在半个月前、尚无随访，慢病超期名单、诊间提醒与
+# 驾驶舱下钻才有东西可看；建档幂等，重跑返回既有档案、不改到期日
+c.post("/api/chronic", json={"patient_id": patients[2]["id"], "disease": "copd", "managed_by_org_id": zhen2["id"],
+                             "next_due": (date.today() - timedelta(days=15)).isoformat()})
 # 上转按（患者、转出、转入、方向）认——后面县外就诊那段另有一张刘洋的上转，不能混成一张
 if not _exists(c.get("/api/referrals").json(),
                lambda r: r["patient_id"] == patients[0]["id"] and r["from_org_id"] == zhen1["id"]

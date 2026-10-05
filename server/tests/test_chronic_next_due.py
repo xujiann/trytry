@@ -9,7 +9,11 @@
 修法：两个字段换 `OptionalDateStr`（留空照旧按病种周期自动建议），出参覆盖回 `str`（P1-63：换真源之前
 存进去的坏值要原样读出来，而不是让清单 500）；两端表单换日期控件。
 """
+from datetime import timedelta
+
 import pytest
+
+from conftest import business_today
 
 from app.database import SessionLocal
 from app.models import ChronicPatient, FollowUp
@@ -68,11 +72,12 @@ def test_随访填非日期的下次随访日_422_档案的下次随访日不被
     finally:
         db.close()
 
-    # 合法日期照收；留空照旧按病种周期自动建议
+    # 合法日期照收（手填的限在 [今天, 今天 + 3650 天]，P2-1545，按今天起算）；留空照旧按病种周期自动建议
+    chosen = (business_today() + timedelta(days=27)).isoformat()
     manual = client.post(f"/api/chronic/{cid}/followups",
-                         json={"sbp": 130, "dbp": 80, "next_due": "2026-11-01"}, headers=admin)
+                         json={"sbp": 130, "dbp": 80, "next_due": chosen}, headers=admin)
     assert manual.status_code == 201, manual.text
-    assert manual.json()["next_due"] == "2026-11-01" and manual.json()["next_due_suggested"] is False
+    assert manual.json()["next_due"] == chosen and manual.json()["next_due_suggested"] is False
     auto = client.post(f"/api/chronic/{cid}/followups", json={"sbp": 130, "dbp": 80, "next_due": ""},
                        headers=admin)
     assert auto.status_code == 201, auto.text

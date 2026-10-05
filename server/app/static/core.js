@@ -2422,6 +2422,12 @@ async function renderChronic() {
   const activeTypes = types.filter((t) => t.active);
   const canType = currentRole() === "admin";
   const overdueIds = new Set(overdue.map((c) => c.id));
+  // 下次随访日的界与后端一致（P2-1545）：今天起、至多 3650 天（与病种随访周期上限 P1-96 同一个数，后端
+  // chronic.FOLLOWUP_INTERVAL_MAX_DAYS）——原先日期框没有界，2062 年、去年都点得进去
+  const dueUntil = new Date();
+  dueUntil.setDate(dueUntil.getDate() + 3650);
+  const dueMax = `${dueUntil.getFullYear()}-${String(dueUntil.getMonth() + 1).padStart(2, "0")}-${
+    String(dueUntil.getDate()).padStart(2, "0")}`;
   // 各病种分级指标：随访录入时提示该病种应采集的指标与周期
   const typeRows = table(["ID", "病种", "编码", "分级指标", "随访周期", "状态"].concat(canType ? ["操作"] : []),
     types, (t) => {
@@ -2449,7 +2455,7 @@ async function renderChronic() {
         <input name="dbp" type="number" placeholder="舒张压">
         <input name="glucose" type="number" step="any" placeholder="空腹血糖">
         <input name="metrics" placeholder="其他指标 如 cat_score=22">
-        <input name="next_due" type="date" title="下次随访（留空按病种周期自动建议）">
+        <input name="next_due" type="date" min="${localToday()}" max="${dueMax}" title="下次随访（留空按病种周期自动建议）">
         <input name="guidance" placeholder="本次指导（可空）" style="min-width:200px">
         <button>提交随访</button>
       </form><p class="msg" id="chronic-msg"></p>

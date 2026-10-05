@@ -155,7 +155,9 @@ def seed(client, admin):
     # 建议到期日 = 业务当天 + 病种周期（高血压 90 天）；随访紧挨着算，跨零点概率可忽略
     data["expected_due"] = (date.today() + timedelta(days=90)).isoformat()
     data["fu1"] = followup(data["c1"], {"sbp": 170, "dbp": 95, "metrics": {"adherence_score": 4}})
-    data["fu2"] = followup(data["c1"], {"sbp": 135, "dbp": 85, "next_due": "2027-01-01"})
+    # 手填的下次随访日限在 [今天, 今天 + 3650 天]（P2-1545）：按今天起算，写死的日子过了那天就进界外
+    data["manual_due"] = (date.today() + timedelta(days=60)).isoformat()
+    data["fu2"] = followup(data["c1"], {"sbp": 135, "dbp": 85, "next_due": data["manual_due"]})
     data["fu3"] = followup(data["c3"], {"sbp": 150, "dbp": 80})
     data["fu4"] = followup(data["c3"], {"sbp": 165, "dbp": 88})
     return data
@@ -273,13 +275,13 @@ def test_随访回执精确_显式到期日不再建议(seed):
             "glucose": None,
             "metrics": {},
             "guidance": "",
-            "next_due": "2027-01-01",
+            "next_due": seed["manual_due"],
             "id": body["followup"]["id"],
             "chronic_id": seed["c1"]["id"],
         },
         "level": 1,
         "guidance_points": HYPERTENSION_GUIDANCE,
-        "next_due": "2027-01-01",
+        "next_due": seed["manual_due"],
         "next_due_suggested": False,
         "refer_up_suggested": False,
         "others": [],

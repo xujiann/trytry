@@ -22,6 +22,7 @@ ADR-0005 之前的三级链审三次，新单两步就到「已接收」，第�
 """
 import runpy
 import sys
+from datetime import date
 from pathlib import Path
 
 import httpx
@@ -36,6 +37,7 @@ from app.models import (
     Appointment,
     AppointmentSlot,
     BillDetail,
+    ChronicPatient,
     Consultation,
     DrugStock,
     EmergencyCase,
@@ -158,6 +160,10 @@ def test_演示种子同一天跑两遍_第二遍不崩也不多灌(monkeypatch,
         assert db.query(MaterialPurchase.status).filter(MaterialPurchase.item_name == "移动输液架").scalar() == "received"
         # 慢专病转诊的两级审核都落了库（ADR-0005：卫生院审核 → 县级医院接收）；多审的那一次修前是 409，上面那句已拦
         assert _count(db, SpdReferralStep, SpdReferralStep.action == "pass") == 2
+        # 慢病超期名单、诊间提醒与驾驶舱下钻有东西可看：随访手填的下次随访日不得早于今天（P2-1545）之后，随访过的档案都
+        # 不再超期，超期只能来自建档时补录的到期日——种子得自己建一份这样的档案
+        assert _count(db, ChronicPatient, ChronicPatient.next_due != "",
+                      ChronicPatient.next_due < date.today().isoformat()) >= 1
     capsys.readouterr()
 
     _bury_first_page()
