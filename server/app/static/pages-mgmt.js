@@ -1297,6 +1297,10 @@ async function renderSurveys() {
     api("/api/surveys/stats"), api("/api/surveys?limit=50"), api("/api/surveys?max_score=2&limit=50")]);
   const totalCount = stats.reduce((s, x) => s + x.count, 0);
   const totalNegative = stats.reduce((s, x) => s + x.negative, 0);
+  // 差评清单只取最新 50 条（P2-1550）：标题原先印这 50 条的条数，60 条差评时最早 10 条页面上无处可看，标题照写「（50）」。
+  // 总数用同页统计的差评数（与清单同一判据：≤2 分、同样不分机构），列不全时写明「已列 N / 共 total」（同 P2-1501）
+  const negativeTitle = `差评清单（${negative.length < totalNegative
+    ? `已列 ${negative.length} / 共 ${totalNegative}` : negative.length}）`;
   // ADR-0009 第二步：面板外壳改用 `panel()`（定义见 core.js），迁一页、人工过一页。
   $("#page-body").innerHTML =
     panel("总览", `
@@ -1313,7 +1317,7 @@ async function renderSurveys() {
          <td><span class="tag ${s.negative ? "red" : "green"}">${s.negative}</span></td>
          <td>${s.negative_rate_pct}%</td></tr>`)}
       ${stats.length ? barChart(stats.map((s) => [SURVEY_TARGETS[s.target_type] || s.target_type, s.avg_score])) : ""}`)
-    + panel(`差评清单（${negative.length}）`, `
+    + panel(negativeTitle, `
       <p class="desc">带评语的差评最有改进价值——这是投诉发生前唯一的信号。</p>
       ${table(["日期", "对象", "患者", "评分", "评语"], negative, (s) =>
         `<tr><td>${esc(s.date)}</td><td>${esc(SURVEY_TARGETS[s.target_type] || s.target_type)}</td>

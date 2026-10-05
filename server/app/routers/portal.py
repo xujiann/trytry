@@ -1455,6 +1455,9 @@ class PortalContractOut(BaseModel):
     signed_date: str
     status: str
     services: list[PortalContractServiceOut]
+    # 这份协议的履约总次数（P2-1550）：`services` 只回最近 20 次，居民端标题原先拿它的条数当总数印「履约记录（20）」。
+    # 新增字段只加在末尾
+    services_total: int
 
 
 @router.get("/me/contract", response_model=list[PortalContractOut])
@@ -1463,7 +1466,11 @@ def portal_my_contract(
     account: ResidentAccount = Depends(current_resident),
     db: Session = Depends(get_db),
 ):
-    """我的家医签约：协议、服务包与履约记录。"""
+    """我的家医签约：协议、服务包与履约记录。
+
+    履约记录每份只回最近 20 次（嵌套上限，刻意的），总次数另给 `services_total`（P2-1550）：原先只给这 20 条，25 次履约的
+    居民看到「履约记录（20）」，最早的 5 次无处可看、也不知道有。
+    """
     patient = accessible_patient(db, account, patient_id, resource="contract")
     contracts = (
         db.query(FamilyDoctorContract)
@@ -1481,6 +1488,9 @@ def portal_my_contract(
             .limit(20)
             .all()
         )
+        services_total = (
+            db.query(func.count(ContractService.id)).filter(ContractService.contract_id == c.id).scalar() or 0
+        )
         result.append(
             {
                 "id": c.id,
@@ -1494,6 +1504,7 @@ def portal_my_contract(
                      "date": s.created_at.date().isoformat()}
                     for s in services
                 ],
+                "services_total": services_total,
             }
         )
     return result

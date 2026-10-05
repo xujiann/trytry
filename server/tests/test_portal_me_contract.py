@@ -289,8 +289,9 @@ def test_我的预约与签约与转诊的键集合(client, auth):
     assert appt and set(appt[0]) == {"id", "patient_id", "patient_name", "org_name",
                                      "resource_name", "slot_date", "slot_time", "status"}
     contract = client.get("/api/portal/me/contract", headers=auth).json()
+    # services_total：该协议的履约总次数，services 只回最近 20 次（P2-1550 只加字段）
     assert contract and set(contract[0]) == {"id", "org_name", "doctor_name", "package",
-                                             "signed_date", "status", "services"}
+                                             "signed_date", "status", "services", "services_total"}
     assert set(contract[0]["services"][0]) == {"service_type", "note", "date"}
     ref = client.get("/api/portal/me/referrals", headers=auth).json()
     assert ref and set(ref[0]) == {"id", "direction", "from_org", "to_org", "reason",

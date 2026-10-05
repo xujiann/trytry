@@ -807,13 +807,17 @@ async function renderAppointments(box) {
 
 async function renderContracts(box) {
   const rows = await authApi(`/api/portal/me/contract${svcQuery()}`);
+  // 履约记录每份只回最近 20 次（P2-1550）：标题原先印这一页的条数，25 次履约的居民看到「履约记录（20）」，最早的 5 次无处可看、
+  // 也不知道有。总数取后端给的 services_total，列不全时写「最近 20 次（共 N 次）」，不足 20 次的照旧写次数
+  const servicesTitle = (c) => (c.services.length < c.services_total
+    ? `履约记录：最近 ${c.services.length} 次（共 ${c.services_total} 次）` : `履约记录（${c.services.length}）`);
   box.innerHTML = rows.length ? rows.map((c) => `<div class="m-card">
     ${kv("签约机构", esc(c.org_name))}
     ${kv("家庭医生", esc(c.doctor_name))}
     ${kv("服务包", esc(PACKAGES[c.package] || c.package))}
     ${kv("签约日期", esc(c.signed_date || "—"))}
     ${kv("状态", `<span class="tag ${c.status === "active" ? "green" : ""}">${c.status === "active" ? "履约中" : "已解约"}</span>`)}
-    ${c.services.length ? `<div class="sec-title">履约记录（${c.services.length}）</div>` +
+    ${c.services.length ? `<div class="sec-title">${esc(servicesTitle(c))}</div>` +
       c.services.map((s) => kv(esc(SERVICE_TYPES[s.service_type] || s.service_type),
         `${esc(s.note || "—")}<br><small>${esc(s.date)}</small>`)).join("") : ""}
   </div>`).join("") : '<p class="empty">暂无签约记录</p>';
