@@ -1429,10 +1429,11 @@ async function drawHomeVisits() {
   const role = currentRole();
   const canDispatch = ["operator", "doctor", "admin"].includes(role);
   const canComplete = ["operator", "doctor", "public_health", "admin"].includes(role);
+  // 卡片口径照后端（P2-1549）：上门工单数与签约关联率都不含已取消的（取消的从没上过门），已取消的看下表的状态
   const holder = appendSection(`
     ${panel("⑨ 送医送护上门（申请 → 派单 → 完成；自动关联履约中家医签约）", `
       <div class="cards">
-        <div class="card"><div class="label">上门工单</div><div class="value">${stats.total}</div></div>
+        <div class="card"><div class="label">上门工单（不含已取消）</div><div class="value">${stats.total}</div></div>
         <div class="card"><div class="label">签约关联率</div><div class="value">${stats.contract_linked_ratio_pct}%</div></div></div>
       <form class="inline" id="hv-form">
         <input name="patient_id" type="number" placeholder="患者ID" required>

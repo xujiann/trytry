@@ -206,11 +206,12 @@ def test_上门服务统计精确_比率恒float(client, admin, seed):
     resp = client.get("/api/homevisits/stats", headers=admin)
     body = resp.json()
     assert list(body.keys()) == STATS_KEYS
+    # 已取消的不计入工单数与关联率（P2-1549）：hv2（无签约、已取消）不算，剩 hv1、hv3 两张、都挂签约；by_status 照旧全列
     assert body == {
-        "total": 3,
+        "total": 2,
         "by_status": {"applied": 1, "cancelled": 1, "completed": 1},
         "contract_linked": 2,
-        "contract_linked_ratio_pct": 66.67,
+        "contract_linked_ratio_pct": 100.0,
     }
     assert isinstance(body["contract_linked_ratio_pct"], float)
     assert type(body["contract_linked"]) is int and type(body["by_status"]["applied"]) is int

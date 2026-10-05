@@ -487,9 +487,10 @@ def test_home_visit_dispatch_flow_and_contract_link(client, admin, env):
     assert free["contract_id"] is None
     assert client.post(f"/api/homevisits/{free['id']}/cancel", headers=operator).json()["status"] == "cancelled"
     stats = client.get("/api/homevisits/stats", headers=admin).json()
-    assert stats["total"] == 2 and stats["contract_linked"] == 1
-    assert stats["contract_linked_ratio_pct"] == 50.0
-    assert stats["by_status"]["completed"] == 1
+    # 已取消的那张（无签约）不计入工单数与关联率（P2-1549）；by_status 照旧全列
+    assert stats["total"] == 1 and stats["contract_linked"] == 1
+    assert stats["contract_linked_ratio_pct"] == 100.0
+    assert stats["by_status"]["completed"] == 1 and stats["by_status"]["cancelled"] == 1
     # 校验：签约与患者不一致 / 签约不存在 / 越权
     assert client.post(
         "/api/homevisits",

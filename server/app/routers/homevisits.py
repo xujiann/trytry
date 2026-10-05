@@ -263,17 +263,22 @@ def cancel_visit(order_id: int, db: Session = Depends(get_db), user: User = Depe
 
 @router.get("/stats", response_model=HomeVisitStatsOut)
 def visit_stats(db: Session = Depends(get_db)):
-    """上门服务统计：状态分布、签约关联率（体现家医签约履约）。"""
+    """上门服务统计：状态分布、签约关联率（体现家医签约履约）。
+
+    口径（P2-1549）：`total`（上门工单数）与 `contract_linked`（其中挂签约的）都不含已取消的——取消的工单从没上过门。
+    原先照数：3 张工单里 1 张挂签约已办结、1 张挂签约已取消、1 张没签约，关联率算成 66.67%（应为 50%）。`by_status`
+    照旧全列（含 cancelled），已取消的有几张在那里看。是否只数已办结的，随 P2-979（上门办结算不算履约）另定。
+    """
     by_status = row_dict(
         db.query(HomeVisitOrder.status, func.count(HomeVisitOrder.id))
         .group_by(HomeVisitOrder.status)
         .order_by(HomeVisitOrder.status)
         .all()
     )
-    total = sum(by_status.values())
+    total = sum(n for code, n in by_status.items() if code != "cancelled")
     linked = (
         db.query(func.count(HomeVisitOrder.id))
-        .filter(HomeVisitOrder.contract_id.isnot(None))
+        .filter(HomeVisitOrder.contract_id.isnot(None), HomeVisitOrder.status != "cancelled")
         .scalar()
         or 0
     )
