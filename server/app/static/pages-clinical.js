@@ -1761,7 +1761,18 @@ async function renderVaccineSupply() {
     (r.status === "frozen" ? `<button class="btn sm" data-unfreeze="${r.id}">解除封存</button>`
                            : `<button class="btn sm danger" data-freeze="${r.id}">封存</button>`) + "</td></tr>");
   $("#vb-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/vaccine-supply/batches", formJson(e.target, ["org_id", "quantity"]), "#vb-msg"); };
-  $("#cc-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/vaccine-supply/cold-chain", formJson(e.target, ["org_id", "temperature", "min_allowed", "max_allowed"]), "#cc-msg"); };
+  // 超温的提示要说出来（P2-1500）：录温回执里的 hint（「请核查该设备内疫苗批次并决定是否封存」）是超温时平台给的那一句
+  // （模块口径 1：不自动封存，由人决定）；原先走 postAction，成功即整页重画、回执整个丢掉，录了 12℃ 页面上什么都没说。
+  // 先重画再写（同 P2-1480 / P2-1432）；没超温的回执不带 hint，不写
+  $("#cc-form").onsubmit = async (e) => {
+    e.preventDefault();
+    try {
+      const r = await api("/api/vaccine-supply/cold-chain", { method: "POST",
+        body: JSON.stringify(formJson(e.target, ["org_id", "temperature", "min_allowed", "max_allowed"])) });
+      await route();
+      if (r.hint) setMsg("#cc-msg", r.hint, false);
+    } catch (err) { setMsg("#cc-msg", err.message, false); }
+  };
   $("#aefi-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/vaccine-supply/aefi", formJson(e.target, ["patient_id", "record_id", "org_id"]), "#aefi-msg"); };
   // 剂次从这位患者的接种记录里选（P2-1499）：原先手填「接种记录ID」，而全站没有一处页面显示记录号。填好患者号（change 时取，
   // 不逐键取——每敲一位就调阅一位别人的接种史）按 /api/vaccination/records 取他的各剂次，首项「不关联」；取不到写进消息行、
