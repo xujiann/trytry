@@ -17,7 +17,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Response
-from pydantic import BaseModel, Field, FiniteFloat, field_validator
+from pydantic import BaseModel, Field, FiniteFloat
 from sqlalchemy import exists
 from sqlalchemy.orm import Session
 
@@ -257,15 +257,12 @@ class MeasurementOut(BaseModel):
     # 处理时刻（P2-1472），只在末尾增：处理接口写着「处理人与时刻留痕」，时刻却只进了库，清单、处理回执、页面都看不到，
     # 质控检查核不了「处理在发报告之前还是之后」。照全站出参惯例给落库时刻（naive UTC）的 isoformat，与别的接口的时间戳
     # 同一写法、能直接比；不在出参里换成本地——显示用哪个时区是待裁定的 P1-105（测定时刻是本地墙上时间，非 UTC 部署下
-    # 同页并列会差几个小时，同属那一问的显示侧）。未处理为 null
-    handled_at: str | None
+    # 同页并列会差几个小时，同属那一问的显示侧）。未处理为 null。
+    # 声明成 datetime 由 pydantic 序列化（与 medwaste / vaccination 出参同一写法，字节与 isoformat() 相同），不在出参
+    # 模型上挂校验器：出参校验器一抛整张清单 500，`test_response_constraint_writers` 不许无说明地挂
+    handled_at: datetime | None
 
     model_config = {"from_attributes": True}
-
-    @field_validator("handled_at", mode="before")
-    @classmethod
-    def _handled_at_iso(cls, value: datetime | str | None) -> str | None:
-        return value.isoformat() if isinstance(value, datetime) else value
 
 
 class MeasurementCreateOut(MeasurementOut):
