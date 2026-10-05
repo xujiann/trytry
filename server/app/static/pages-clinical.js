@@ -1063,9 +1063,20 @@ async function renderInsurance() {
   const role = currentRole();
   const can = (...roles) => role === "admin" || roles.includes(role);
   const canSettle = can("operator"), canApply = can("operator", "doctor"), canReview = can("director");
-  const [fund, settlements, apps, dualApps] = await Promise.all([
+  // 待审的单独取一遍、排在最前（P2-1478，同 P2-1310 / P2-1441 的 actionableFirst）：两张队列原先只取不带 status 的清单，
+  // 接口按 id 倒序只回全部状态里最新的 200 条——已审的一多，压着没审的那条就被挤出窗口，管理层看不到也审不了；同病种 /
+  // 同药品只许挂一条待审（部分唯一索引），申报人重报又是 409，这条申报就永远卡住。接口早就收 status：特病待审是 applied、
+  // 双通道待审是 pending
+  const [fund, settlements, recentApps, appliedApps, recentDual, pendingDual] = await Promise.all([
     canReview ? api("/api/insurance/fund-stats") : Promise.resolve(null), api("/api/insurance/settlements"),
-    api("/api/insurance/special-diseases"), api("/api/insurance/dual-channel")]);
+    api("/api/insurance/special-diseases"), api("/api/insurance/special-diseases?status=applied"),
+    api("/api/insurance/dual-channel"), api("/api/insurance/dual-channel?status=pending")]);
+  const apps = actionableFirst(recentApps, appliedApps);
+  const dualApps = actionableFirst(recentDual, pendingDual);
+  // 列不全时标题写明（P2-1478，同 P2-1441）：两个清单一页最多 200 条、不给总数——最新一页取满了，更早的已审申报就没列出来；
+  // 待审那一页也取满了，最早的待审同样列不出
+  const queueNote = (recent, pending, rows) => recent.length < 200 ? ""
+    : `（待审${pending.length >= 200 ? "只列最新 " : " "}${pending.length} 条排在最前、其余只列最新 ${rows.length - pending.length} 条）`;
   $("#page-body").innerHTML = `
     ${fund ? `<div class="cards">
       <div class="card"><div class="label">医保基金支出总额</div><div class="value">${fund.insurance_pay_total}</div></div>
@@ -1083,11 +1094,11 @@ async function renderInsurance() {
       ${canApply ? `<form class="inline" id="spec-form"><input name="patient_id" type="number" placeholder="患者ID" required><input name="disease_name" placeholder="病种" required><button>特病申报</button></form>` : ""}
       ${canSettle || canApply ? "" : `<p class="muted">结算登记与转诊证明由经办办理，特病申报由经办或医师提出；管理层在下面的队列里审核。</p>`}
       <p class="msg" id="ins-msg"></p>`)}
-    ${panel("特病申报队列", table(["ID", "患者", "病种", "状态", "操作"], apps, (a) =>
+    ${panel("特病申报队列" + queueNote(recentApps, appliedApps, apps), table(["ID", "患者", "病种", "状态", "操作"], apps, (a) =>
       `<tr><td>${a.id}</td><td>${a.patient_id}</td><td>${esc(a.disease_name)}</td>
        <td><span class="tag ${a.status === "approved" ? "green" : a.status === "rejected" ? "red" : "orange"}">${esc(a.status_name)}</span></td>
        <td>${a.status === "applied" && canReview ? `<button class="btn secondary" data-ok="${a.id}">批准</button><button class="btn danger" data-no="${a.id}">驳回</button>` : "—"}</td></tr>`))}
-    ${panel("双通道药品申报（医师/经办申报 → 管理层审核）", `
+    ${panel("双通道药品申报（医师/经办申报 → 管理层审核）" + queueNote(recentDual, pendingDual, dualApps), `
       ${canApply ? `<form class="inline" id="dual-form">
         <input name="patient_id" type="number" placeholder="患者ID" required>
         <input name="drug_name" placeholder="药品名称" required>
