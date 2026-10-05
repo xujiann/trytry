@@ -1778,7 +1778,7 @@ async function renderSurveillance() {
   ]);
   const SYN = { fever: "发热", respiratory: "呼吸道", diarrhea: "腹泻", rash: "皮疹", jaundice: "黄疸", neuro: "脑炎脑膜炎" };
   // 机构名：症候群日报覆盖提示说盖掉的是哪家的（P2-1432）；多点预警、症候群日报、病原日报三张表的机构列印名称、不印编号
-  // （P2-1437，同页保障情况表的做法）。映射不到（页面打开之后才建的机构）回显编号
+  // （P2-1437，同页保障情况表的做法），资源台账同样（P2-1467）。映射不到（页面打开之后才建的机构）回显编号
   const orgNames = Object.fromEntries(orgs.map((o) => [o.id, o.name]));
   // ADR-0009 第六批：面板外壳改用 `panel()`（定义见 core.js），迁一页、人工过一页。
   $("#page-body").innerHTML = `
@@ -1851,7 +1851,7 @@ async function renderSurveillance() {
     const rows = await api(`/api/surveillance/resources?${params}`);
     $("#res-list").innerHTML = table(
       ["机构", "类型", "名称", "数量/下限", "效期", "联系方式", "位置", "操作"], rows, (r) =>
-      `<tr><td>${r.org_id}</td><td>${esc(r.resource_type_name)}</td><td>${esc(r.name)}</td>
+      `<tr><td>${esc(orgNames[r.org_id] || r.org_id)}</td><td>${esc(r.resource_type_name)}</td><td>${esc(r.name)}</td>
        <td>${r.below_min ? `<span class="tag danger">${r.quantity}${esc(r.unit)}/${r.min_quantity}</span>`
          : `${r.quantity}${esc(r.unit)}/${r.min_quantity}`}</td>
        <td>${r.expire_date
