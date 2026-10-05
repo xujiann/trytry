@@ -2010,9 +2010,17 @@ const MS_STATUS = { done: ["已完成", "green"], overdue: ["逾期未完成", "
 
 async function renderProjects() {
   $("#page-desc").textContent = "行政协同项目管理：立项、里程碑（完成与撤销完成）、进度与逾期";
-  const [projects, stats, orgs] = await Promise.all([
-    api("/api/projects"), api("/api/projects/stats/overview"), api("/api/organizations"),
+  // 逾期未结的单独取一遍、排在最前（P2-1441，同 P2-1310 的 actionableFirst）：清单接口只回最新 200 个项目，卡片「逾期未结 N」
+  // 数的却是全量——逾期最久的老项目恰恰被后来立项的挤出窗口，卡片上算着、清单里找不到，「报进度」也够不着。接口的「只看逾期」
+  // 早就在库里筛（P2-414），页面原先一处都没用
+  const [recent, overdue, stats, orgs] = await Promise.all([
+    api("/api/projects"), api("/api/projects?overdue_only=true"), api("/api/projects/stats/overview"),
+    api("/api/organizations"),
   ]);
+  const projects = actionableFirst(recent, overdue);
+  // 清单列不全时标题写明（P2-1441）：卡片「项目总数」与清单是同一批项目的全量，列出的比它少就说清逾期的在前、其余只是最新的
+  const listNote = projects.length < stats.total
+    ? `（共 ${stats.total} 个：逾期未结 ${overdue.length} 个排在最前、其余只列最新 ${projects.length - overdue.length} 个）` : "";
   // 项目清单写明是哪家（P2-1438，同会计、成本两页）：清单是全县各家的项目，原先只有名称——同名的项目分不清是哪家的。
   // 项目行只给机构编号，机构名从机构清单取，映射不到回显编号
   const orgName = Object.fromEntries(orgs.map((o) => [o.id, o.name]));
@@ -2034,7 +2042,7 @@ async function renderProjects() {
         <input name="budget_amount" type="number" step="0.01" placeholder="预算"><button>立项</button></form>
       <p class="msg" id="pj-msg"></p>
       <p class="hint">${esc(stats.caliber)}</p>`)}
-    ${panel("项目清单", `
+    ${panel("项目清单" + listNote, `
       ${table(["名称", "机构", "负责人", "状态", "进度", "计划完成", "里程碑", "操作"], projects, (p) =>
         `<tr><td>${esc(p.name)}${p.overdue ? ' <span class="tag danger">逾期</span>' : ""}</td>` +
         `<td>${esc(orgName[p.org_id] || p.org_id)}</td>` +
