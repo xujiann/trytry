@@ -3214,12 +3214,15 @@ async function renderInpatient() {
          <td><span class="tag ${b.status === "free" ? "green" : "orange"}">${b.status === "free" ? "空闲" : "占用"}</span></td></tr>`))}
     ${panel("住院记录",
       table(["ID", "患者", "病区/床位", "诊断", "状态", "操作"], admissions, (a) => {
+        // 已出院的也给「病案首页」（P2-1534）：后端建首页不看住院状态，HIS 推来的出院（A03 不设首页门禁）与存量导入的出院
+        // 都没有首页，原先操作列是「—」，页面上永远补录不了。点了走同一套处理（先取，填过给只读首页，404 才弹填写表单）；
+        // 住院行不带「有没有首页」，不为一个文案多发请求，统一写「病案首页」
         const actions = a.status === "admitted"
           ? `<button class="btn secondary" data-transfer="${a.id}">转床</button>
              <button class="btn secondary" data-order="${a.id}">开医嘱</button>
              <button class="btn secondary" data-summary="${a.id}">病案首页</button>
              <button class="btn danger" data-discharge="${a.id}">出院</button>`
-          : "—";
+          : `<button class="btn secondary" data-summary="${a.id}">病案首页</button>`;
         // 三种打印件都在后端按患者可见性再判一次；出院小结未出院时后端 409，故只给已出院的摆按钮
         const prints = `<button class="btn secondary" data-print-bill="${a.id}">打印费用清单</button>
              <button class="btn secondary" data-print-case="${a.id}">打印病案首页</button>`
