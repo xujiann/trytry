@@ -1134,7 +1134,8 @@ async function renderInsurance() {
 }
 
 async function renderEducation() {
-  $("#page-desc").textContent = "课程管理、培训考核（60分合格）、个人学分；直播申请与排期审核";
+  // 「个人考核记录」原先写「个人学分」（P2-1431）：平台没有学分 / 学时字段，「我的学习记录」只列课程考试
+  $("#page-desc").textContent = "课程管理、培训考核（60分合格）、个人考核记录；直播申请与排期审核";
   const [courses, mine, lives] = await Promise.all([
     api("/api/education/courses"), api("/api/education/my-records"), api("/api/education/live-sessions")]);
   const role = currentRole();
@@ -1235,8 +1236,9 @@ async function renderEducation() {
     if (d.cstats) {
       try {
         const s = await api(`/api/education/courses/${d.cstats}/stats`);
+        // 「参训人数」原先写「参训人次」（P2-1431）：trainees 数的是考试记录行，每人每课一行，同一个人考几次都只算一个
         $("#edu-detail").innerHTML = panel(`培训统计 · 课程 #${s.course_id}`,
-          spdCards([["参训人次", s.trainees], ["合格", s.passed], ["合格率", s.pass_rate_pct + "%"]]));
+          spdCards([["参训人数", s.trainees], ["合格", s.passed], ["合格率", s.pass_rate_pct + "%"]]));
       } catch (err) { setMsg("#edu-msg", err.message, false); }
       return;
     }
