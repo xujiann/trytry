@@ -2175,6 +2175,8 @@ async function renderPharmacy() {
        <td>${b.status === "normal" && canRecall ? `<button class="btn danger" data-recall="${b.id}">召回</button>` : ""}
            <button class="btn" data-trace="${b.id}">发给了谁</button></td></tr>`);
   const DISPENSE_STATUS = { dispensed: ["已发药", "green"], reversed: ["已冲销", "red"] };
+  // 发药明细「药名 批号×数量」的纯文本：发药记录表（转义后插入）与退药确认框（spdModal 自己转义）共用一份（P2-1539）
+  const dispenseItems = (d) => d.items.map((i) => `${i.drug_name} ${i.batch_no}×${i.quantity}`).join("，");
   // 第二个面板的外壳**迁不了** `panel()`：它的标题里嵌着一个 `<span>`（缺药预警条数），
   // 而组件会把标题整段 `esc()` 掉，迁过去那个 span 会变成一段转义文本显示出来。
   // 同形状的还有慢病页与 openDrilldown，共 3 处，理由记在 docs/adr/0009 第十三批。
@@ -2206,12 +2208,7 @@ async function renderPharmacy() {
         <input name="prescription_id" type="number" placeholder="处方ID" required>
         <button>发药</button>
       </form>
-      <h3 style="margin-top:14px">退药冲销</h3>
-      <form class="inline" id="reverse-form">
-        <input name="dispense_id" type="number" placeholder="发药记录ID" required>
-        <input name="reason" placeholder="冲销原因" required>
-        <button>退药</button>
-      </form>
+      <p class="desc">退药冲销在下方「发药记录」已发药的那一行上点「退药」。</p>
       <h3 style="margin-top:14px">调拨</h3>
       <form class="inline" id="transfer-form">
         <input name="drug_code" placeholder="药品编码" required>
@@ -2230,10 +2227,16 @@ async function renderPharmacy() {
          <td>${esc(b.expire_date)}</td><td>${b.remaining}</td>
          <td>${b.expired ? '<span class="tag red">已过期</span>' : `${b.remaining_days} 天`}</td></tr>`)}
       <h3 style="margin-top:14px">发药记录</h3>
-      ${table(["ID", "处方ID", "状态", "明细（批号×数量）"], dispenses, (d) =>
-        `<tr><td>${d.id}</td><td>${d.prescription_id}</td>
+      ${table(["ID", "处方ID", "患者", "发药时间", "发药人", "状态", "明细（批号×数量）", "冲销时间 / 冲销人 / 冲销原因"]
+        .concat(canOperate ? ["操作"] : []), dispenses, (d) =>
+        `<tr><td>${d.id}</td><td>${d.prescription_id}</td><td>${esc(d.patient_name) || "—"}</td>
+         <td>${esc(d.created_at.slice(0, 16).replace("T", " "))}</td><td>${esc(d.dispensed_by_name) || "—"}</td>
          <td>${d.status === "reversed" ? '<span class="tag red">已冲销</span>' : '<span class="tag green">已发药</span>'}</td>
-         <td>${d.items.map((i) => `${esc(i.drug_name)} ${esc(i.batch_no)}×${i.quantity}`).join("，")}</td></tr>`)}</div>
+         <td>${esc(dispenseItems(d))}</td>
+         <td>${d.status === "reversed" ? `${esc((d.reversed_at || "").slice(0, 16).replace("T", " "))} / `
+           + `${esc(d.reversed_by_name) || "—"}<br><span class="desc">${esc(d.reverse_reason)}</span>` : "—"}</td>
+         ${canOperate ? `<td>${d.status === "dispensed"
+           ? `<button class="btn danger" data-reverse="${d.id}">退药</button>` : ""}</td>` : ""}</tr>`)}</div>
     ${panel("批次台账（召回后不得再发药、不得再入库，余量同事务退出可用汇总）",
       `<form class="inline" id="batch-filter">
          <input name="drug_code" placeholder="按药品编码查">
@@ -2286,16 +2289,6 @@ async function renderPharmacy() {
       pollTodos();
     } catch (err) { setMsg("#pharm-msg", err.message, false); }
   };
-  if (canOperate) $("#reverse-form").onsubmit = async (e) => {
-    e.preventDefault();
-    const f = new FormData(e.target);
-    try {
-      await api(`/api/dispense/${Number(f.get("dispense_id"))}/reverse`, { method: "POST",
-        body: JSON.stringify({ reason: f.get("reason") }) });
-      route();
-      pollTodos();
-    } catch (err) { setMsg("#pharm-msg", err.message, false); }
-  };
   if (canOperate) $("#transfer-form").onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
@@ -2322,7 +2315,25 @@ async function renderPharmacy() {
     } catch (err) { setMsg("#batch-msg", err.message, false); }
   };
   $("#page-body").onclick = async (e) => {
-    const { recall, trace } = e.target.dataset;
+    const { recall, trace, reverse } = e.target.dataset;
+    if (reverse) {
+      // 退药冲销是发药记录行上的按钮（P2-1539）：原先是一张只收「发药记录ID」的表单，敲错一位就冲掉别人的发药——药在人家
+      // 手里、账上却回了库，冲销又撤不回。照同页「召回」弹框，框头印出处方号、患者、批号×数量再确认（纯文本，spdModal 自己
+      // 转义）；原因多行、框自己提交（P2-607），没写原因不发请求
+      const d = dispenses.find((x) => x.id === Number(reverse));
+      const intro = d ? `处方 ${d.prescription_id} · 患者 ${d.patient_name || "—"}\n批号×数量：${dispenseItems(d)}\n`
+        + "冲销后这张处方不可再发药，确需用药须开新处方" : "";
+      try {
+        const done = await spdModal(`退药冲销（发药记录 ${reverse}）`, [
+          { name: "reason", label: "冲销原因（必填，随发药记录留存）", type: "textarea" },
+        ], { intro, submit: (form) => {
+          if (!form.reason) throw new Error("冲销原因必填");
+          return api(`/api/dispense/${reverse}/reverse`, { method: "POST", body: JSON.stringify({ reason: form.reason }) });
+        } });
+        if (done) { route(); pollTodos(); }
+      } catch (err) { setMsg("#pharm-msg", err.message, false); }
+      return;
+    }
     try {
       if (recall) {
         const batch = batches.find((b) => b.id === Number(recall));

@@ -6683,16 +6683,60 @@ def test_药房批次台账按批号查到那一批_召回回执报召回前的�
     expect(page.locator("#batch-msg")).to_contain_text("退出可用汇总 7 → 0")
 
 
-def test_中心药房的操作表单与召回按角色给(page, base_url, batch_seed):
+@pytest.fixture(scope="module")
+def dispense_seed(admin_call, seed):
+    """两张已发药的处方（P2-1539）：一张给退药用例冲销，一张一直是已发药——医师看得到这两条记录、行上没有「退药」。"""
+    admin_call("POST", "/api/pharmacy/batches", {
+        "org_id": seed["org"]["id"], "drug_code": "E2E-P1539", "drug_name": "E2E退药药", "batch_no": "E2E-RV-1",
+        "expire_date": "2029-06-30", "quantity": 10})
+    out = []
+    for _ in range(2):
+        rx = admin_call("POST", "/api/prescriptions", {
+            "patient_id": seed["patient"]["id"], "org_id": seed["org"]["id"], "diagnosis_name": "E2E高血压",
+            "items": [{"drug_code": "E2E-P1539", "drug_name": "E2E退药药", "daily_dose": 1, "days": 2}]})
+        out.append(admin_call("POST", "/api/dispense", {"prescription_id": rx["id"]}))
+    return out
+
+
+def test_中心药房的操作表单与召回按角色给(page, base_url, batch_seed, dispense_seed):
     """P2-430：汇总入库只收管理员、批次入库 / 发药 / 退药 / 调拨只收经办 / 药师、召回只收药师 / 管理层，
-    页面原先对谁都摆着——医师打开中心药房，每个按钮点下去都是 403。修后医师只看得到台账与记录。"""
+    页面原先对谁都摆着——医师打开中心药房，每个按钮点下去都是 403。修后医师只看得到台账与记录。
+    退药冲销改成发药记录行上的「退药」按钮之后（P2-1539），口径照旧：医师看得到已发药的记录，行上没有「退药」。"""
     _login(page, base_url, "e2e_doctor", "passw0rd1")
     _open_page(page, "pharmacy", "中心药房")
     expect(page.locator("#batch-ledger")).to_be_visible()   # 查询类照常给
-    for form in ("#stock-form", "#batch-form", "#dispense-form", "#reverse-form", "#transfer-form"):
+    for form in ("#stock-form", "#batch-form", "#dispense-form", "#transfer-form"):
         expect(page.locator(form)).to_have_count(0)
+    expect(page.locator("tr", has_text="E2E退药药 E2E-RV-1×2")).to_have_count(2)   # 记录照常给
+    expect(page.locator("button[data-reverse]")).to_have_count(0)
     expect(page.locator("button[data-recall]")).to_have_count(0)
     expect(page.locator("button[data-trace]").first).to_be_visible()   # 「发给了谁」是查询，照常给
+
+
+def test_退药冲销在发药记录行上点退药_框里写明处方患者批号_原因必填(page, base_url, dispense_seed, admin_read):
+    """P2-1539（第四十五批扫描 AI3-4 退药那半 + AI3-8）：退药冲销原先是一张只收「发药记录ID」的表单，点了直接提交——敲错
+    一位就冲掉别人的发药，冲销又撤不回；发药记录表也看不出是谁的药、谁发的、谁冲的。修后已发药的行上摆「退药」，点了弹页内框
+    （照同页「召回」），框头写明处方号、患者、批号×数量；原因必填、框自己提交；冲销后这一行印出冲销人与原因、不再摆「退药」。"""
+    target, kept = dispense_seed
+    _login(page, base_url)
+    _open_page(page, "pharmacy", "中心药房")
+    expect(page.locator("#reverse-form")).to_have_count(0)                     # 修前：只收发药记录号的表单
+    page.click(f'button[data-reverse="{target["id"]}"]')
+    form = _modal(page)
+    expect(form).to_contain_text(f"处方 {target['prescription_id']} · 患者 E2E患者")
+    expect(form).to_contain_text("批号×数量：E2E退药药 E2E-RV-1×2")
+    form.locator("button[type=submit]").click()                                # 没写原因
+    expect(form.locator("[data-modal-msg]")).to_have_text("冲销原因必填")
+    assert [d["status"] for d in admin_read(f"/api/dispense?prescription_id={target['prescription_id']}")] == [
+        "dispensed"]                                                           # 请求没发
+    _redrawn(page, lambda: _spd_modal(page, {"reason": "E2E 发错药当场收回"}))
+    row = page.locator("tr", has_text="E2E 发错药当场收回")
+    expect(row).to_contain_text("已冲销")
+    expect(row).to_contain_text("平台管理员")                                    # 冲销人
+    expect(row.locator("button[data-reverse]")).to_have_count(0)
+    expect(page.locator(f'button[data-reverse="{kept["id"]}"]')).to_be_visible()   # 没冲销的那条照旧摆着
+    assert [d["status"] for d in admin_read(f"/api/dispense?prescription_id={target['prescription_id']}")] == [
+        "reversed"]
 
 
 @pytest.fixture(scope="module")

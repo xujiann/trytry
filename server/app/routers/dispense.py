@@ -27,13 +27,14 @@ from sqlalchemy.orm import Query, Session
 
 from ..concurrency import add_amount, ensure_present, take_amount
 from ..database import get_db
-from ..deps import get_current_user, paginate, require_roles, resolve_business_date
+from ..deps import get_current_user, paginate, require_roles, resolve_business_date, row_dict
 from ..models import (
     DispenseItem,
     DispenseRecord,
     DrugBatch,
     DrugStock,
     Organization,
+    Patient,
     Prescription,
     User,
     utcnow,
@@ -90,6 +91,13 @@ class DispenseOut(BaseModel):
     reversed_at: str | None
     created_at: str
     items: list[DispenseItemOut]
+    #: 以下四个键是 P2-1539 加的（只在末尾加键，原有键与次序不动）：冲销人原先只写进库、全仓没有一处读；发药记录表只印
+    #: 处方号，看不出是谁的药、谁发的、谁冲的。患者姓名取处方上的患者；发药人 / 冲销人写姓名，没填姓名的回落账号（同仓
+    #: `full_name or username`）；没冲销的冲销人为 null、显示名为空串
+    reversed_by: int | None
+    patient_name: str
+    dispensed_by_name: str
+    reversed_by_name: str
 
 
 def _required_quantity(daily_dose: float, days: int) -> int:
@@ -112,8 +120,32 @@ def _dispense_items(db: Session, records: list[DispenseRecord]) -> dict[int, lis
     return grouped
 
 
-def _dispense_out(db: Session, record: DispenseRecord, items: list | None = None) -> dict:
-    """`items` 是清单按页取齐的这条记录的明细（`_dispense_items`）；单条出参不给，照旧现查。"""
+def _dispense_names(db: Session, records: list[DispenseRecord]) -> tuple[dict[int, str], dict[int, str]]:
+    """一页发药记录要印的名字（P2-1539）：`({处方号: 患者姓名}, {用户号: 显示名})`，按页各一次 IN 取齐，不逐行查库
+    （与 `_dispense_items` 同一个做法，P2-1157）。显示名是姓名，没填姓名的回落账号（同仓 `full_name or username`）。"""
+    rx_ids = {r.prescription_id for r in records}
+    user_ids = {r.dispensed_by for r in records} | {r.reversed_by for r in records if r.reversed_by is not None}
+    patients = row_dict(
+        db.query(Prescription.id, Patient.name)
+        .join(Patient, Patient.id == Prescription.patient_id)
+        .filter(Prescription.id.in_(rx_ids))
+        .all()
+    ) if rx_ids else {}
+    users = {
+        u.id: u.full_name or u.username
+        for u in db.query(User.id, User.full_name, User.username).filter(User.id.in_(user_ids))
+    } if user_ids else {}
+    return patients, users
+
+
+def _dispense_out(
+    db: Session,
+    record: DispenseRecord,
+    items: list | None = None,
+    names: tuple[dict[int, str], dict[int, str]] | None = None,
+) -> dict:
+    """`items` / `names` 是清单按页取齐的这条记录的明细与名字（`_dispense_items` / `_dispense_names`）；单条出参不给，
+    照旧现查。"""
     if items is None:
         items = (
             db.query(DispenseItem, DrugBatch)
@@ -122,6 +154,7 @@ def _dispense_out(db: Session, record: DispenseRecord, items: list | None = None
             .order_by(DispenseItem.id)
             .all()
         )
+    patients, users = names if names is not None else _dispense_names(db, [record])
     return {
         "id": record.id,
         "prescription_id": record.prescription_id,
@@ -143,6 +176,10 @@ def _dispense_out(db: Session, record: DispenseRecord, items: list | None = None
             }
             for i, b in items
         ],
+        "reversed_by": record.reversed_by,
+        "patient_name": patients.get(record.prescription_id, ""),
+        "dispensed_by_name": users.get(record.dispensed_by, ""),
+        "reversed_by_name": users.get(record.reversed_by, "") if record.reversed_by is not None else "",
     }
 
 
@@ -309,6 +346,20 @@ def _fefo_batches(db: Session, org_id: int, drug_code: str, today: str) -> list[
     return [b for b in rows if batch_available(b) > 0]
 
 
+def _already_dispensed(db: Session, prescription_id: int) -> HTTPException:
+    """撞上 `prescription_id` 唯一约束时回的 409（P2-1539）：已退药冲销的说清须开新处方，没冲销的照旧「已发药」。
+
+    冲销后的处方不可再发（`reverse_dispense`：唯一约束仍占着，确需再发的走新处方），原先两种一律回「该处方已发药，不可
+    重复发药」——把错发的那条冲销掉之后，真正的主人来取药还是这一句，药师照它以为药早发出去了，也看不出得请医师重开。
+    判据是冲销留下的那一句（发药记录置 reversed，与 `prescription_not_reversed` 同一个口径）；调用方已回滚，这里只读
+    占着约束的那一行，事务结构不动。
+    """
+    status = db.query(DispenseRecord.status).filter(DispenseRecord.prescription_id == prescription_id).scalar()
+    if status == "reversed":
+        return HTTPException(status_code=409, detail="该处方已退药冲销，不可再发药，须开新处方")
+    return HTTPException(status_code=409, detail="该处方已发药，不可重复发药")
+
+
 @router.post(
     "",
     response_model=DispenseOut,
@@ -350,7 +401,7 @@ def dispense_prescription(
         db.flush()  # 先占住 prescription_id 唯一约束，重复发药在扣库存前就拦下
     except IntegrityError:
         db.rollback()
-        raise HTTPException(status_code=409, detail="该处方已发药，不可重复发药") from None
+        raise _already_dispensed(db, body.prescription_id) from None
 
     today = resolve_business_date(None).isoformat()
     taken_stocks: list[tuple[DrugStock, int]] = []   # 每个品种扣了汇总多少：提交后判要不要发缺药预警
@@ -406,7 +457,7 @@ def dispense_prescription(
         db.commit()
     except IntegrityError:
         db.rollback()
-        raise HTTPException(status_code=409, detail="该处方已发药，不可重复发药") from None
+        raise _already_dispensed(db, body.prescription_id) from None
     # 发药把库存扣到阈值以下，同样秒级推缺药预警（P2-504）：原先只有调拨推，库存最常见的下降途径——发药——从不推，
     # 「WebSocket 缺药预警秒级广播」要等有人打开缺药清单才看得到
     for stock, taken in taken_stocks:
@@ -435,7 +486,8 @@ def list_dispenses(
         q = q.filter(DispenseRecord.status == status)
     rows = paginate(q.order_by(DispenseRecord.id.desc()), response, offset, limit)
     items = _dispense_items(db, rows)
-    return [_dispense_out(db, r, items.get(r.id, [])) for r in rows]
+    names = _dispense_names(db, rows)   # 患者、发药人、冲销人的名字按页一次取齐（P2-1539）
+    return [_dispense_out(db, r, items.get(r.id, []), names) for r in rows]
 
 
 @router.post(
