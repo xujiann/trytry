@@ -77,7 +77,8 @@ BATCH_KEYS = ["id", "vaccine_code", "vaccine_name", "batch_no", "manufacturer",
               "expire_date", "org_id", "quantity", "used_quantity", "remaining",
               "status", "frozen_reason", "expired", "usable", "unusable_reason"]
 COLD_KEYS = ["id", "org_id", "device_name", "temperature", "range", "exceeded",
-             "recorded_at", "handled", "handle_note"]
+             "recorded_at", "handled", "handle_note",
+             "created_at", "handled_by", "handled_at"]   # P2-1503：录入时刻、处置人与处置时刻，只加在末尾
 AEFI_KEYS = ["id", "patient_id", "record_id", "vaccine_code", "batch_no",
              "reaction_type", "reaction_type_name", "symptom", "onset_date",
              "outcome", "outcome_name", "org_id"]
@@ -227,12 +228,12 @@ def test_冷链录温与处置(client, h, base):
     )
     assert normal.status_code == 201, normal.text
     c1 = normal.json()
-    # 未超温：hint 键**整个不出现**（条件键），9 个键
+    # 未超温：hint 键**整个不出现**（条件键），12 个键
     assert list(c1) == COLD_KEYS
     assert c1 == {"id": c1["id"], "org_id": org_id, "device_name": "1号冷藏箱",
                   "temperature": 5.0, "range": "2.0~8.0℃", "exceeded": False,
                   "recorded_at": f"{business_today_str()} 08:00:00", "handled": False,
-                  "handle_note": ""}
+                  "handle_note": "", "created_at": _iso(c1["created_at"]), "handled_by": "", "handled_at": None}
     # Float 列：整数入参读回来是 5.0
     assert isinstance(c1["temperature"], float)
     base["c1"] = c1
@@ -248,7 +249,7 @@ def test_冷链录温与处置(client, h, base):
     assert c2 == {"id": c2["id"], "org_id": org_id, "device_name": "1号冷藏箱",
                   "temperature": 12.5, "range": "2.0~8.0℃", "exceeded": True,
                   "recorded_at": f"{business_today_str()} 09:30:00", "handled": False,
-                  "handle_note": "",
+                  "handle_note": "", "created_at": _iso(c2["created_at"]), "handled_by": "", "handled_at": None,
                   "hint": "已超出允许区间，请核查该设备内疫苗批次并决定是否封存（平台不自动封存）"}
     c2_row = {k: v for k, v in c2.items() if k != "hint"}
     base["c2"] = c2_row
@@ -263,8 +264,10 @@ def test_冷链录温与处置(client, h, base):
 
     handled = client.post(f"{B}/cold-chain/{c2['id']}/handle",
                           json={"handle_note": "已核查批次并转移疫苗"}, headers=h)
+    assert list(handled.json()) == COLD_KEYS
     assert handled.json() == {**c2_row, "handled": True,
-                              "handle_note": "已核查批次并转移疫苗"}
+                              "handle_note": "已核查批次并转移疫苗", "handled_by": "平台管理员",
+                              "handled_at": _iso(handled.json()["handled_at"])}
     assert client.get(f"{B}/cold-chain", params={"unhandled_only": True},
                       headers=h).json() == []
     base["c2"] = handled.json()

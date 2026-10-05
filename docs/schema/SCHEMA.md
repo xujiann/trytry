@@ -426,6 +426,8 @@
 - `recorded_at` · VARCHAR(19) · NOT NULL · index
 - `handled` · BOOLEAN · NOT NULL
 - `handle_note` · VARCHAR(512) · NOT NULL
+- `handled_by` · VARCHAR(64) · NOT NULL
+- `handled_at` · DATETIME
 - `created_at` · DATETIME · NOT NULL
 - _index_ ix_cold_chain_records_exceeded(exceeded)
 - _index_ ix_cold_chain_records_org_id(org_id)

@@ -434,6 +434,10 @@ class ColdChainRecord(Base):
     recorded_at: Mapped[str] = mapped_column(String(19), index=True)
     handled: Mapped[bool] = mapped_column(Boolean, default=False)
     handle_note: Mapped[str] = mapped_column(String(512), default="")
+    # 处置人与处置时刻（P2-1503，照 QcMeasurement）：处置人记 full_name 或 username，与「未处置」的判定同一条 UPDATE 写入；
+    # 加列之前处置的存量处置人未知，迁移不回填（空串 / NULL）
+    handled_by: Mapped[str] = mapped_column(String(64), default="", server_default="")
+    handled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 

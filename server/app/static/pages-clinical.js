@@ -1677,6 +1677,11 @@ async function renderVaccineSupply() {
   // 「已封存」。批次台账与临期面板共用这一句
   const batchStatus = (x) => (x.usable ? '<span class="tag ok">可用</span>'
     : esc(!x.expired && x.status === "frozen" && x.frozen_reason ? `${x.unusable_reason}：${x.frozen_reason}` : x.unusable_reason));
+  // 冷链处置格：处置说明后面写处置人与处置时刻（P2-1503，截到分钟、显示时区随 P1-105，同质控失控处理 P2-1472）；
+  // 加列之前处置的存量没记人和时刻，只写说明
+  const coldHandled = (r) => esc(r.handle_note) + (r.handled_by || r.handled_at
+    ? `<div style="font-size:12px">${esc(r.handled_by || "—")}${
+      r.handled_at ? ` ${esc(r.handled_at.slice(0, 16).replace("T", " "))}` : ""} 处置</div>` : "");
   const drawExpiring = async (days) => {
     const r = await api(`/api/vaccine-supply/expiring?days=${encodeURIComponent(days)}`);
     $("#vx-list").innerHTML =
@@ -1731,10 +1736,10 @@ async function renderVaccineSupply() {
         <input name="min_allowed" type="number" step="0.1" value="2" style="min-width:70px"><input name="max_allowed" type="number" step="0.1" value="8" style="min-width:70px">
         <label style="font-size:13px">记录时间 <input name="recorded_at" type="datetime-local" required></label><button>录入</button></form>
       <p class="msg" id="cc-msg"></p>
-      ${table(["机构", "设备", "温度", "区间", "状态", "处置"], cold, (r) =>
-        `<tr><td>${r.org_id}</td><td>${esc(r.device_name)}</td><td>${r.temperature}</td><td>${esc(r.range)}</td>` +
+      ${table(["记录时刻", "机构", "设备", "温度", "区间", "状态", "处置"], cold, (r) =>
+        `<tr><td>${esc(r.recorded_at)}</td><td>${r.org_id}</td><td>${esc(r.device_name)}</td><td>${r.temperature}</td><td>${esc(r.range)}</td>` +
         `<td>${r.exceeded ? '<span class="tag danger">超温</span>' : "正常"}</td>` +
-        `<td>${r.exceeded ? (r.handled ? esc(r.handle_note) : `<button class="btn sm" data-handle="${r.id}">处置</button>`) : "—"}</td></tr>`)}
+        `<td>${r.exceeded ? (r.handled ? coldHandled(r) : `<button class="btn sm" data-handle="${r.id}">处置</button>`) : "—"}</td></tr>`)}
     `)}
     ${panel("AEFI 报告", `
       <form class="inline" id="aefi-form">

@@ -45,6 +45,7 @@ from ..models import (
     User,
     VaccinationRecord,
     VaccineBatch,
+    utcnow,
 )
 
 router = APIRouter(
@@ -126,6 +127,13 @@ class ColdChainOut(BaseModel):
     recorded_at: str
     handled: bool
     handle_note: str
+    # 以下三键只在末尾增（P2-1503）。录入时刻：落库 created_at（naive UTC）的 isoformat——`recorded_at` 是录温人填的测量
+    # 时刻，补录时二者不同（同质控的测定时刻 / 录入时刻）
+    created_at: str
+    # 处置人（full_name 或 username）与处置时刻（naive UTC isoformat，显示时区随待裁定的 P1-105），同质控失控处理；
+    # 未处置为空串 / null，加列之前处置的存量同样（处置人未知，迁移不回填）
+    handled_by: str
+    handled_at: str | None
 
 
 class ColdChainCreatedOut(ColdChainOut):
@@ -416,6 +424,9 @@ def _cold_out(r: ColdChainRecord) -> dict:
         "recorded_at": r.recorded_at,
         "handled": r.handled,
         "handle_note": r.handle_note,
+        "created_at": r.created_at.isoformat() if r.created_at else "",
+        "handled_by": r.handled_by,
+        "handled_at": r.handled_at.isoformat() if r.handled_at else None,
     }
 
 
@@ -460,9 +471,12 @@ def list_temperatures(
         query = query.filter(ColdChainRecord.exceeded.is_(True))
     if unhandled_only:
         query = query.filter(ColdChainRecord.exceeded.is_(True), ColdChainRecord.handled.is_(False))
+    # 按记录时刻倒序、id 作尾键（P2-1503）：原先按 id（录入顺序）倒序，补录的 10-03 读数排在 10-05 的超温记录之上，
+    # 页面又不印记录时刻，看不出每条温度是什么时候测的
     return [
         _cold_out(r)
-        for r in paginate(query.order_by(ColdChainRecord.id.desc()), response, offset, limit)
+        for r in paginate(query.order_by(ColdChainRecord.recorded_at.desc(), ColdChainRecord.id.desc()),
+                          response, offset, limit)
     ]
 
 
@@ -479,11 +493,13 @@ def handle_exceedance(record_id: int, body: ColdChainHandle, db: Session = Depen
     if not record.exceeded:
         raise HTTPException(status_code=422, detail="该记录未超温，无需处置")
     # 处置只登记一次（P2-308）：原先已处置的照收、处置说明整段换成后一次的——先到的那条「已转移至备用冰箱、报废 3 支」
-    # 被一句「已处理」盖掉，追溯时查不回当时做了什么。判定与写入压进同一条 UPDATE，两人同时处置也只成一路
+    # 被一句「已处理」盖掉，追溯时查不回当时做了什么。判定与写入压进同一条 UPDATE，两人同时处置也只成一路。
+    # 处置人与处置时刻一并写进这条 UPDATE（P2-1503，同质控失控处理）：原先只写说明，谁在什么时候处置的只能去翻审计路径
     handled = cast(CursorResult, db.execute(
         update(ColdChainRecord)
         .where(ColdChainRecord.id == record.id, ColdChainRecord.handled.is_(False))
-        .values(handled=True, handle_note=body.handle_note)
+        .values(handled=True, handle_note=body.handle_note, handled_by=user.full_name or user.username,
+                handled_at=utcnow())
         .execution_options(synchronize_session=False)
     ))
     if not handled.rowcount:
