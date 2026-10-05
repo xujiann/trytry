@@ -3638,8 +3638,11 @@ async function renderLabQc() {
       <p class="msg" id="meas-msg"></p>
       ${table(["ID", "测得值", "z", "测定时间", "操作者", "判定", "处理", "操作"], lj.points, (p) => {
         const m = detail[p.id] || {};
+        // 处理时刻一并写出（P2-1472）：原先只有原因、纠正措施与处理人，核不了处理在发报告之前还是之后；时刻取清单出参，
+        // 照全站惯例截到分钟（显示时区随 P1-105）
         const handledNote = m.handled
-          ? `<div style="font-size:12px">原因：${esc(m.handle_reason)}；纠正措施：${esc(m.corrective_action)}（${esc(m.handled_by)}）</div>` : "";
+          ? `<div style="font-size:12px">原因：${esc(m.handle_reason)}；纠正措施：${esc(m.corrective_action)}（${esc(m.handled_by)}${
+            m.handled_at ? `，${esc(m.handled_at.slice(0, 16).replace("T", " "))} 处理` : ""}）</div>` : "";
         return `<tr><td>${p.id}</td><td>${p.value}</td><td>${p.z}</td><td>${esc(p.measured_at)}</td><td>${esc(m.operator) || "—"}</td>
          <td>${p.out_of_control ? `<span class="tag red">失控 ${esc(p.violated_rules)}</span>`
             : p.warning ? '<span class="tag orange">1-2s 警告</span>' : '<span class="tag green">在控</span>'}</td>
