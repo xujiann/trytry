@@ -774,6 +774,11 @@ async function renderTelemedicine() {
   const role = currentRole();
   const canReply = ["doctor", "admin"].includes(role);
   const canClose = ["operator", "doctor", "admin"].includes(role);
+  // 「关联处方」一列带出处方状态（P2-1476）：原先只印编号——回复之后才退药冲销的那张方再也发不出去，这里看不出来。
+  // 审方状态取后端的中文名，已退药冲销另标（与医生 360 处方段同一对键）
+  const rxCell = (c) => c.prescription_id == null ? "—"
+    : `${c.prescription_id}（${esc(c.prescription_status_name)}）${c.prescription_dispense_reversed
+      ? ' <span class="tag red">已退药冲销</span>' : ""}`;
   $("#page-body").innerHTML = `
     ${panel("发起咨询", `
       <form class="inline" id="tm-form">
@@ -783,7 +788,7 @@ async function renderTelemedicine() {
       </form><p class="msg" id="tm-msg"></p>`)}
     ${panel("", table(["ID", "患者", "类型", "内容", "回复", "关联处方", "状态", "操作"], consults, (c) => {
       return `<tr><td>${c.id}</td><td>${c.patient_id}</td><td>${c.consult_type === "repeat_rx" ? "续方" : "咨询"}</td>
-        <td>${esc(c.question)}</td><td>${esc(c.reply) || "—"}</td><td>${c.prescription_id ?? "—"}</td>
+        <td>${esc(c.question)}</td><td>${esc(c.reply) || "—"}</td><td>${rxCell(c)}</td>
         <td>${statusTag(TS, c.status)}</td>
         <td>${c.status === "open" ? (canReply ? `<button class="btn secondary" data-reply="${c.id}">回复</button>` : "待医师回复")
           : c.status === "replied" && canClose ? `<button class="btn secondary" data-close="${c.id}">结束</button>` : "—"}</td></tr>`;
@@ -798,7 +803,7 @@ async function renderTelemedicine() {
       const done = await spdModal(`回复咨询 ${reply}`, [
         { name: "reply", label: "回复内容（必填）", type: "textarea" },
         { name: "doctor_name", label: "回复医师姓名", required: true },
-        { name: "prescription_id", label: "关联处方ID（续方时填写，须是该患者已通过审方的处方；可空）" },
+        { name: "prescription_id", label: "关联处方ID（续方时填写，须是该患者已通过审方、未退药冲销的处方；可空）" },
       ], { submit: (v) => {
         const rx = v.prescription_id;
         return api(`/api/telemedicine/consults/${reply}/reply`, { method: "POST", body: JSON.stringify({
