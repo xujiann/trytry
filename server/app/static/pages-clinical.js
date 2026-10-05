@@ -1672,6 +1672,11 @@ async function renderVaccineSupply() {
     api("/api/vaccine-supply/aefi"), api("/api/vaccine-supply/stats"),
   ]);
   const a = stats.aefi, b = stats.batches;
+  // 状态列带上封存原因（P2-1502）：封存框写着「封存原因会印在批次状态列上」，原先只印后端的「已封存」——召回与超温待评估
+  // 分不清，旁边就是一点即发的「解除封存」。过期优先照旧（后端 unusable_reason 先判过期，过期的不带原因），原因为空照旧只写
+  // 「已封存」。批次台账与临期面板共用这一句
+  const batchStatus = (x) => (x.usable ? '<span class="tag ok">可用</span>'
+    : esc(!x.expired && x.status === "frozen" && x.frozen_reason ? `${x.unusable_reason}：${x.frozen_reason}` : x.unusable_reason));
   const drawExpiring = async (days) => {
     const r = await api(`/api/vaccine-supply/expiring?days=${encodeURIComponent(days)}`);
     $("#vx-list").innerHTML =
@@ -1680,7 +1685,7 @@ async function renderVaccineSupply() {
          <td>${esc(x.manufacturer) || "—"}</td>
          <td>${esc(x.expire_date)}${x.expired ? ' <span class="tag danger">已过期</span>' : ""}</td>
          <td>${x.remaining}/${x.quantity}</td>
-         <td>${x.usable ? '<span class="tag ok">可用</span>' : esc(x.unusable_reason)}</td></tr>`)
+         <td>${batchStatus(x)}</td></tr>`)
       // today 与 generated_at 都印出来：这张表的"临期"是相对**业务日期**算的，不是浏览器当下
       + `<p class="desc">共 ${r.batches.length} 个批次，口径日期 ${esc(r.today)}、
         未来 ${r.within_days} 天，生成于 ${esc((r.generated_at || "").slice(0, 19).replace("T", " "))}。
@@ -1757,7 +1762,7 @@ async function renderVaccineSupply() {
     `<tr><td>${esc(r.vaccine_name)}</td><td>${esc(r.batch_no)}</td><td>${esc(r.manufacturer || "—")}</td>` +
     `<td>${esc(r.expire_date)}${r.expired ? ' <span class="tag danger">已过期</span>' : ""}</td>` +
     `<td>${r.remaining}/${r.quantity}</td>` +
-    `<td>${r.usable ? '<span class="tag ok">可用</span>' : esc(r.unusable_reason)}</td>` +
+    `<td>${batchStatus(r)}</td>` +
     `<td><button class="btn sm" data-recipients="${r.id}">受种者</button>` +
     (r.status === "frozen" ? `<button class="btn sm" data-unfreeze="${r.id}">解除封存</button>`
                            : `<button class="btn sm danger" data-freeze="${r.id}">封存</button>`) + "</td></tr>");
