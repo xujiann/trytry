@@ -13,7 +13,7 @@
 （人工登记合格/不合格），本模块是检验科室内质控的数值体系，互不替代。
 """
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -89,6 +89,27 @@ def _moment(value: str) -> str | None:
         return datetime(year, month, day, hour, minute, second).strftime("%Y-%m-%d %H:%M:%S")
     except ValueError:
         return None
+
+
+#: 测定时刻晚于当前时刻的容差（P2-1470）：一天。服务器的「本地」与录入电脑的墙上钟可以不在同一个时区——镜像与 compose
+#: 都不设 TZ，默认部署的容器是 UTC，东八区录入电脑的钟比它快 8 小时；按哪个时区解读业务时刻是待裁定的 P1-105。容差取几分钟
+#: 的话，东八区上午 10 点补录早上 8 点的点（服务器此刻 02:00）就成了「晚于当前时刻」、被拒。一天盖得住任何两个时区之差
+#: （东西两端相差 26 小时的组合不现实），又拦得住年份 / 月份敲错这类真问题；P1-105 定了口径之后可以收紧
+_FUTURE_TOLERANCE = timedelta(days=1)
+
+
+def _not_after_now(measured_at: str) -> None:
+    """测定时刻比当前时刻晚一天以上的拒收（P2-1470）：测定时刻记的是已经测过的那一刻，原先只查格式——年份敲错（2026 敲成
+    2027）的点 201，按测定时刻永远排在 L-J 最右，之后每录一点都被当成插在它前面的「补录」、去改判它，失控标记反复翻转，
+    真的 2-2s 落在年份错的那一点上。
+
+    与落库同一把尺子：测定时刻是本地墙上时间（页面 datetime-local 手填；留空按 `now_local()` 记，P2-171），拿本地当前时刻
+    比；容差见 `_FUTURE_TOLERANCE`（为什么不是「不得晚于当前时刻」、只差几分钟就拒）。按 `_moment` 读成同一种写法再比；
+    留空的不查（就是现在）。
+    """
+    moment = _moment(measured_at)
+    if moment is not None and moment > (now_local() + _FUTURE_TOLERANCE).strftime("%Y-%m-%d %H:%M:%S"):
+        raise HTTPException(status_code=422, detail=f"测定时刻（{measured_at}）比当前时刻晚一天以上，请核对年份与日期")
 
 
 def _time_order(m: QcMeasurement) -> tuple[str, int]:
@@ -215,7 +236,7 @@ def set_lot_active(lot_id: int, body: LotPatch, db: Session = Depends(get_db), u
 
 class MeasurementCreate(BaseModel):
     value: FiniteFloat
-    # 测定时刻（补录时与录入时刻不同）；空串=以录入时刻为准
+    # 测定时刻（补录时与录入时刻不同）；空串=以录入时刻为准；比当前时刻晚一天以上的 422（P2-1470，见 `_not_after_now`）
     measured_at: OptionalDateTimeStr = ""  # 时间戳真源（P1-100）：形状不对 422，合法值原样落库
     operator: str = Field(default="", max_length=64)
 
@@ -266,6 +287,7 @@ def create_measurement(
     assert_obj_org_writable(db, user, lot)
     if not lot.active:
         raise HTTPException(status_code=409, detail="批号已停用，不可继续录入测定值")
+    _not_after_now(body.measured_at)   # P2-1470
     # 失控未处理警示：不拦录入（质控测定本身就是纠偏动作的一部分），但要说出来
     unhandled_before = (
         db.query(QcMeasurement)
