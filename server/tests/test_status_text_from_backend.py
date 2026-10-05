@@ -348,7 +348,7 @@ def _label_tables():
     from app.models import AccountSubject, ChargeItem, Course, Department, OfficialDoc, Organization, SimulationCase
     from app.models import (Encounter, SpdAssessPlan, SpdDataSource, SpdEduMaterial, SpdEnrollment, SpdGroup,
                             SpdMeasurement, SpdPackageBinding, SpdPathNode, SpdScreening, SpdTag, SpdTeam)
-    from app.models import LoginLog, ShiftHandover
+    from app.models import DualChannelApp, LoginLog, ShiftHandover
     from app.spd import service
     from app.spd.routers import assess, population
     from app.routers import (accounting, admin_mgmt, appointments, billing, clinical_docs, consents, consultations,
@@ -367,6 +367,9 @@ def _label_tables():
             (education.ENROLLMENT_STATUS_NAMES, TrainingEnrollment, "status", set()),
         "insurance.SPECIAL_DISEASE_STATUS_NAMES":
             (insurance.SPECIAL_DISEASE_STATUS_NAMES, SpecialDiseaseApp, "status", set()),
+        # P2-1482：双通道清单原先没有状态文案、页面三元自带一份（措辞同上一张特病的，取舍见文案表注释）
+        "insurance.DUAL_CHANNEL_STATUS_NAMES":
+            (insurance.DUAL_CHANNEL_STATUS_NAMES, DualChannelApp, "status", set()),
         # 空串 = 非危急值，没有闭环状态，文案也是空串
         "exams.CRITICAL_STATUS_NAMES": (exams.CRITICAL_STATUS_NAMES, ExamReport, "critical_status", {""}),
         "workbench.CENTER_STATUS_NAMES": (workbench.CENTER_STATUS_NAMES, SpdCenter, "status", set()),
@@ -479,6 +482,7 @@ LABEL_TABLE_NAMES = [
     "users.LOGIN_FAIL_REASON_NAMES", "clinical_docs.SHIFT_NAMES", "service.ENROLL_STATUS_LABELS",
     "service.PACKAGE_BINDING_STATUS_NAMES", "exams.EXAM_SAMPLE_STATUS_NAMES",
     "prescriptions.RULE_CHANGE_ACTION_NAMES", "workflows.TRANSITION_ACTION_NAMES",
+    "insurance.DUAL_CHANNEL_STATUS_NAMES",
 ]
 
 

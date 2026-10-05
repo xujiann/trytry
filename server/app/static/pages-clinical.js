@@ -1078,7 +1078,9 @@ async function renderInsurance() {
   const queueNote = (recent, pending, rows) => recent.length < 200 ? ""
     : `（待审${pending.length >= 200 ? "只列最新 " : " "}${pending.length} 条排在最前、其余只列最新 ${rows.length - pending.length} 条）`;
   // 特病申报表单收「申报理由」、队列加理由列（P2-1481，照同页双通道的表单与队列）：接口早就收 reason、出参也带，页面原先
-  // 表单只有患者号和病种、队列不显示理由——申报的人写不了，审核的人只看得见一个病种名
+  // 表单只有患者号和病种、队列不显示理由——申报的人写不了，审核的人只看得见一个病种名。
+  // 双通道的状态文案取后端的 status_name（P2-1482，同页特病同一做法），这里只管配色：原先三元写死三种文案，表外的值
+  // 一律显示成「待审核」
   $("#page-body").innerHTML = `
     ${fund ? `<div class="cards">
       <div class="card"><div class="label">医保基金支出总额</div><div class="value">${fund.insurance_pay_total}</div></div>
@@ -1108,7 +1110,7 @@ async function renderInsurance() {
         <button>申报</button></form>` : ""}
       ${table(["ID", "患者", "药品", "理由", "状态", "审核意见", "操作"], dualApps, (a) =>
         `<tr><td>${a.id}</td><td>${a.patient_id}</td><td>${esc(a.drug_name)}</td><td>${esc(a.reason) || "—"}</td>
-         <td><span class="tag ${a.status === "approved" ? "green" : a.status === "rejected" ? "red" : "orange"}">${a.status === "approved" ? "已批准" : a.status === "rejected" ? "已驳回" : "待审核"}</span></td>
+         <td><span class="tag ${a.status === "approved" ? "green" : a.status === "rejected" ? "red" : "orange"}">${esc(a.status_name)}</span></td>
          <td>${esc(a.review_comment) || "—"}</td>
          <td>${a.status === "pending" && canReview
            ? `<button class="btn secondary" data-dualok="${a.id}">批准</button><button class="btn danger" data-dualno="${a.id}">驳回</button>` : "—"}</td></tr>`)}`)}

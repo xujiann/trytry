@@ -14,8 +14,8 @@
   两条产地全是浮点，声明 float 才是原样。
 - 转诊证明/双通道三种回执都是**固定键集**（无条件键），不需要 exclude_unset；
   `review_comment` 是「键恒在值可空为空串」→ 声明 str，不是 str | None。
-- 三种双通道回执**不同形**（申报 3 键带 drug_name / 审核 2 键 / 列表行 6 键），
-  各建各的模型，不硬套继承。
+- 三种双通道回执**不同形**（申报 3 键带 drug_name / 审核 2 键 / 列表行 7 键——末尾的 `status_name`
+  是 P2-1482 加的），各建各的模型，不硬套继承。
 """
 import pytest
 from fastapi.testclient import TestClient
@@ -28,7 +28,10 @@ FUND_KEYS = ["insurance_pay_total", "local_ratio_pct", "grassroots_ratio_pct"]
 CERT_KEYS = ["cert_no", "referral_id"]
 DUAL_APPLY_KEYS = ["id", "status", "drug_name"]
 DUAL_REVIEW_KEYS = ["id", "status"]
-DUAL_ROW_KEYS = ["id", "patient_id", "drug_name", "reason", "status", "review_comment"]
+DUAL_ROW_KEYS = [
+    "id", "patient_id", "drug_name", "reason", "status", "review_comment",
+    "status_name",   # P2-1482：末尾只增状态文案，前面的键与次序不动
+]
 
 
 @pytest.fixture(scope="module")
@@ -235,6 +238,7 @@ def test_双通道列表精确_键序与过滤(client, seed):
             "reason": "",
             "status": "rejected",
             "review_comment": "",
+            "status_name": "已驳回",
         },
         {
             "id": seed["dc1"]["id"],
@@ -243,6 +247,7 @@ def test_双通道列表精确_键序与过滤(client, seed):
             "reason": "淋巴瘤一线用药",
             "status": "approved",
             "review_comment": "符合双通道条件",
+            "status_name": "已批准",
         },
     ]
     assert client.get(

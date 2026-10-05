@@ -284,8 +284,14 @@ class DualChannelCreate(BaseModel):
     reason: str = Field(default="", max_length=512)
 
 
+#: `dual_channel_apps.status` → 中文（§13「状态文案取自后端」，P2-1482）：页面原先自带一份三元「已批准 / 已驳回 / 待审核」，
+#: 表外的值一律显示成「待审核」。措辞与同页特病的 `SPECIAL_DISEASE_STATUS_NAMES` 同一套口径——列注释写的「通过 / 驳回」与
+#: 「已批准 / 已驳回」是同一个意思，取同页特病（也是页面一直显示）的说法；「待审核」照列注释（特病没有这一态）
+DUAL_CHANNEL_STATUS_NAMES = {"pending": "待审核", "approved": "已批准", "rejected": "已驳回"}
+
+
 class DualChannelCreatedOut(BaseModel):
-    """申报回执 3 键——与审核回执（2 键）、列表行（6 键）不同形，分模型不硬套继承。"""
+    """申报回执 3 键——与审核回执（2 键）、列表行（7 键）不同形，分模型不硬套继承。"""
 
     id: int
     status: str
@@ -306,6 +312,8 @@ class DualChannelOut(BaseModel):
     reason: str
     status: str
     review_comment: str
+    # 状态文案（P2-1482）：末尾只增这一键，前面的键与次序不动
+    status_name: str
 
 
 @router.post(
@@ -379,6 +387,7 @@ def list_dual_channel(status: str | None = None, db: Session = Depends(get_db)):
             "reason": a.reason,
             "status": a.status,
             "review_comment": a.review_comment,
+            "status_name": DUAL_CHANNEL_STATUS_NAMES.get(a.status, a.status),
         }
         for a in q.order_by(DualChannelApp.id.desc()).limit(200).all()
     ]
