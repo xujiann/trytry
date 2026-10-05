@@ -351,8 +351,8 @@ async function renderFollowups() {
     + panel(`待随访任务（${pending.length}）`, `
       <form class="inline" id="fu-form"><input name="patient_id" type="number" placeholder="患者ID" required>
         <input name="org_id" type="number" placeholder="机构ID" required>
-        <select name="category"><option value="chronic">慢病随访</option><option value="discharge">出院随访</option>
-          <option value="surgery">术后随访</option><option value="maternal">妇幼访视</option></select>
+        <select name="category" required><option value="">请选择随访类别</option><option value="chronic">慢病随访</option>
+          <option value="discharge">出院随访</option><option value="surgery">术后随访</option><option value="maternal">妇幼访视</option></select>
         <input name="due_date" placeholder="应随访日 YYYY-MM-DD" required>
         <input name="assigned_to" placeholder="负责人"><button>补建任务</button></form>
       <p class="msg" id="fu-msg"></p>
@@ -361,8 +361,12 @@ async function renderFollowups() {
          <td>${esc(t.category_name)}</td><td>${esc(t.title)}</td><td>${esc(t.due_date)}</td>
          <td><button class="btn secondary" data-done="${t.id}">完成</button>
              <button class="btn danger" data-cancel="${t.id}">取消</button></td></tr>`)}`);
+  // 类别首项为空、必选（P2-1542，同消毒供应申领机构 P2-1443）：原先首项是「慢病随访」，不动下拉补建的出院 / 术后随访记成慢病
+  // 随访，表单没有标题栏，标题也跟着落成「慢病随访」
   $("#fu-form").onsubmit = (e) => { e.preventDefault();
-    postAction("/api/followups", formJson(e.target, ["patient_id", "org_id"]), "#fu-msg"); };
+    const body = formJson(e.target, ["patient_id", "org_id"]);
+    if (!body.category) return setMsg("#fu-msg", "请选择随访类别", false);
+    postAction("/api/followups", body, "#fu-msg"); };
   $("#page-body").onclick = async (e) => {
     const d = e.target.dataset;
     try {
@@ -2478,7 +2482,7 @@ async function renderDiseasePrograms() {
         ? '<p class="desc">该专病目录已停用，不再入组；已入组的病例照常查看、记录节点。</p>'
         : `<form class="inline" id="dp-enroll">
         <input name="patient_id" type="number" placeholder="患者ID" required>
-        <select name="org_id">${orgs.map((o) =>
+        <select name="org_id" required><option value="">请选择入组机构</option>${orgs.map((o) =>
           `<option value="${o.id}">${esc(o.name)}</option>`).join("")}</select>
         <button>入组</button>
       </form>`}
@@ -2528,9 +2532,12 @@ async function renderDiseasePrograms() {
   };
   const enrollForm = $("#dp-enroll");   // 停用的目录不摆这张表
   if (picked && enrollForm) {
+    // 入组机构首项为空、必选（P2-1542，同消毒供应申领机构 P2-1443）：原先缺省机构表第一家，不动下拉就把病例记到那一家——
+    // 之后本机构医生记节点、出组都 403；非全域医生直接 403
     enrollForm.onsubmit = (e) => { e.preventDefault();
-      postAction(`/api/disease-programs/${picked}/enrollments`,
-        formJson(e.target, ["patient_id", "org_id"]), "#dp-msg"); };
+      const body = formJson(e.target, ["patient_id", "org_id"]);
+      if (!body.org_id) return setMsg("#dp-msg", "请选择入组机构", false);
+      postAction(`/api/disease-programs/${picked}/enrollments`, body, "#dp-msg"); };
   }
   const nodeName = (key) => {
     const n = ((current && current.path_nodes) || []).find((x) => x.key === key);
@@ -2594,8 +2601,10 @@ async function renderDiseasePrograms() {
         if (!nodes.length) return setMsg("#dp-msg", "本专病还没有配置路径节点，先在目录里「编辑」加上", false);
         // 节点键从目录里选：手打一个不在路径里的 key，后端 422，而完成度也永远算不对
         // 框自己提交（P2-607）：日期写错、备注写超了时报错写在框里、框不关，填的都在
+        // 节点必选（P2-1542，spdModal 的 select 给 placeholder 即必选，P2-1443）：原先缺省首节点，不动下拉就把首节点记成已完成，
+        // 节点记录又没有删除入口
         const ok = await spdModal("记录路径节点", [
-          { name: "node_key", label: "节点", type: "select", value: nodes[0].key,
+          { name: "node_key", label: "节点", type: "select", placeholder: "请选择节点",
             options: nodes.map((n) => ({ value: n.key,
               label: `${n.name}${n.required === false ? "（选做）" : ""}` })) },
           { name: "performed_at", label: "完成日期（留空按业务日期记）", type: "text", value: "" },

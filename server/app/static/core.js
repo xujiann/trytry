@@ -2437,7 +2437,8 @@ async function renderChronic() {
     ${panel("慢病建档", `
       <form class="inline" id="chronic-form">
         <input name="patient_id" type="number" placeholder="患者ID" required>
-        <select name="disease">${activeTypes.map((t) => `<option value="${esc(t.code)}">${esc(t.name)}</option>`).join("")}</select>
+        <select name="disease" required><option value="">请选择病种</option>${
+          activeTypes.map((t) => `<option value="${esc(t.code)}">${esc(t.name)}</option>`).join("")}</select>
         <input name="managed_by_org_id" type="number" placeholder="管理机构ID" required>
         <button>建档</button>
       </form>
@@ -2474,9 +2475,12 @@ async function renderChronic() {
          <td><button class="btn" data-risk="${c.id}">风险评分</button>
            <button class="btn secondary" data-fuhist="${c.id}">随访记录</button></td></tr>`)}
       <div id="risk-box"></div><div id="fu-history"></div></div>`;
+  // 病种首项为空、必选（P2-1542，同消毒供应申领机构 P2-1443）：原先缺省第一项「高血压」，给糖尿病患者建档没动下拉就建成了
+  // 高血压档案——慢病档案只有建档、记随访两个写接口，建错了改不了病种也删不掉，假档案照样进在管人数、绩效分母与超期名单
   $("#chronic-form").onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
+    if (!f.get("disease")) return setMsg("#chronic-msg", "请选择病种", false);
     try {
       await api("/api/chronic", { method: "POST", body: JSON.stringify({
         patient_id: Number(f.get("patient_id")), disease: f.get("disease"),
