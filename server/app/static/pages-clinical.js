@@ -1520,6 +1520,10 @@ async function renderMaternal() {
   await drawPrenatalScreenings();  // 块4㉔ 产前筛查与诊断
 }
 
+/* 接种史行点「上报 AEFI」时带过去的这一剂（P2-1499）：{ patient_id, record_id }，「疫苗批次与冷链」页的 AEFI 表单取用一次即清
+ * （同 P2-1316 的 spdEnrollJump）。只放内存、不进 localStorage——它是「这一次点击」的上下文，刷新页面就该回到空表单。 */
+let vacAefiJump = null;
+
 async function renderVaccination() {
   $("#page-desc").textContent = "接种前综合评估（禁忌硬拦截）、接种登记、禁忌管理";
   // ADR-0009 第五批：面板外壳改用 `panel()`（定义见 core.js），迁一页、人工过一页。
@@ -1618,11 +1622,23 @@ async function renderVaccination() {
       $("#vac-hist-result").innerHTML = `<p class="msg err">${esc(err.message)}</p>`;
       return;
     }
-    $("#vac-hist-result").innerHTML = table(["疫苗", "剂次", "日期", "机构", "操作"], records, (r) =>
-      `<tr><td>${esc(r.vaccine_name)}</td><td>第${r.dose_no}剂</td><td>${esc(r.vaccinated_date)}</td><td>${r.org_id}</td>
-       <td><button class="btn secondary" data-print-vac="${r.id}">打印接种证明</button></td></tr>`);
+    // 记录号、批号印出来，每一剂可直接上报 AEFI（P2-1499）：原先记录号只藏在打印按钮的 data 属性里，AEFI 表单却要人手填
+    // 「接种记录ID」——全站没有一处页面显示它，从界面上报的 AEFI 关联不到剂次、批号恒空（按批号查不到这一例，「发病不得早于
+    // 接种」不拦，统计按上报机构归）
+    $("#vac-hist-result").innerHTML = table(["记录号", "疫苗", "剂次", "日期", "批号", "机构", "操作"], records, (r) =>
+      `<tr><td>${r.id}</td><td>${esc(r.vaccine_name)}</td><td>第${r.dose_no}剂</td><td>${esc(r.vaccinated_date)}</td>
+       <td>${esc(r.batch_no || "—")}</td><td>${r.org_id}</td>
+       <td><button class="btn secondary" data-print-vac="${r.id}">打印接种证明</button>
+           <button class="btn secondary" data-aefi-dose="${r.id}" data-aefi-pid="${r.patient_id}">上报 AEFI</button></td></tr>`);
   };
   $("#vac-hist-result").onclick = async (e) => {
+    const { aefiDose, aefiPid } = e.target.dataset;
+    if (aefiDose) {
+      // AEFI 表单在「疫苗批次与冷链」页：带着这一剂过去，患者号与剂次替人填好，症状、发病日期仍由人填（P2-1499）
+      vacAefiJump = { patient_id: Number(aefiPid), record_id: Number(aefiDose) };
+      nav("vaccinesupply");
+      return;
+    }
     const id = e.target.dataset.printVac; if (!id) return;
     try { await openPrintPage(`/api/print/vaccinations/${id}`); }
     catch (err) { setMsg("#vac-msg", err.message, false); }
@@ -1648,6 +1664,9 @@ const AEFI_OUTCOMES = {
 
 async function renderVaccineSupply() {
   $("#page-desc").textContent = "疫苗批次（批号/厂家/效期）、冷链温度监测、AEFI 上报与统计";
+  // 从接种史行点「上报 AEFI」带来的这一剂（P2-1499），进门先取走：下面取数失败也不留到下次从导航进来
+  const aefiJump = vacAefiJump;
+  vacAefiJump = null;
   const [batches, cold, aefi, stats] = await Promise.all([
     api("/api/vaccine-supply/batches"), api("/api/vaccine-supply/cold-chain"),
     api("/api/vaccine-supply/aefi"), api("/api/vaccine-supply/stats"),
@@ -1713,12 +1732,15 @@ async function renderVaccineSupply() {
     `)}
     ${panel("AEFI 报告", `
       <form class="inline" id="aefi-form">
-        <input name="patient_id" type="number" placeholder="患者ID" required><input name="record_id" type="number" placeholder="接种记录ID（可空）">
+        <input name="patient_id" id="aefi-pid" type="number" placeholder="患者ID" required>
+        <select name="record_id" id="aefi-dose"><option value="">不关联</option></select>
         <input name="vaccine_code" placeholder="疫苗编码（未关联记录时必填）">
         <select name="reaction_type"><option value="general">一般反应</option><option value="severe">严重反应</option>
           <option value="psychogenic">心因性</option><option value="coincidental">偶合症</option></select>
         <input name="symptom" placeholder="症状" required><input name="onset_date" placeholder="发生日期" required>
         <input name="org_id" type="number" placeholder="机构ID" required><button class="btn danger">上报</button></form>
+      <p class="desc">剂次从这位患者的接种记录里选（填好患者号即列出，也可从「疫苗接种」页接种史的「上报 AEFI」带过来）：
+        关联了剂次，疫苗与批号按接种记录带出，按批号才查得到这一例。</p>
       <p class="msg" id="aefi-msg"></p>
       ${table(["患者", "疫苗", "批号", "类型", "症状", "发生日期", "转归"], aefi, (r) =>
         `<tr><td>${r.patient_id}</td><td>${esc(r.vaccine_code)}</td><td>${esc(r.batch_no || "—")}</td>` +
@@ -1741,6 +1763,29 @@ async function renderVaccineSupply() {
   $("#vb-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/vaccine-supply/batches", formJson(e.target, ["org_id", "quantity"]), "#vb-msg"); };
   $("#cc-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/vaccine-supply/cold-chain", formJson(e.target, ["org_id", "temperature", "min_allowed", "max_allowed"]), "#cc-msg"); };
   $("#aefi-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/vaccine-supply/aefi", formJson(e.target, ["patient_id", "record_id", "org_id"]), "#aefi-msg"); };
+  // 剂次从这位患者的接种记录里选（P2-1499）：原先手填「接种记录ID」，而全站没有一处页面显示记录号。填好患者号（change 时取，
+  // 不逐键取——每敲一位就调阅一位别人的接种史）按 /api/vaccination/records 取他的各剂次，首项「不关联」；取不到写进消息行、
+  // 只剩「不关联」。连着改患者号只画最后一次的（P2-1012 同一种修法）
+  let aefiDoseSeq = 0;
+  const drawAefiDoses = async (patientId, recordId = "") => {
+    const seq = ++aefiDoseSeq;
+    const none = '<option value="">不关联</option>';
+    $("#aefi-dose").innerHTML = none;
+    setMsg("#aefi-msg", "");
+    if (!patientId) return;
+    let records;
+    try { records = await api(`/api/vaccination/records?patient_id=${encodeURIComponent(patientId)}`); }
+    catch (err) {
+      if (seq === aefiDoseSeq) setMsg("#aefi-msg", err.message, false);
+      return;
+    }
+    if (seq !== aefiDoseSeq) return;
+    $("#aefi-dose").innerHTML = none + records.map((r) =>
+      `<option value="${r.id}">${esc(r.vaccine_name)} 第${r.dose_no}剂 ${esc(r.vaccinated_date)} ` +
+      `${r.batch_no ? `批号 ${esc(r.batch_no)}` : "无批号"}</option>`).join("");
+    if (records.some((r) => String(r.id) === String(recordId))) $("#aefi-dose").value = String(recordId);
+  };
+  $("#aefi-pid").onchange = (e) => drawAefiDoses(e.target.value.trim());
   $("#vx-form").onsubmit = async (e) => {
     e.preventDefault();
     try { await drawExpiring(Number(new FormData(e.target).get("days")) || 30); }
@@ -1788,6 +1833,12 @@ async function renderVaccineSupply() {
   };
   // 取数放最后：监听已与 innerHTML 同一同步块挂好，窗口为零（P2-31 根修，样板见 pages-spd.js renderSpdPath）
   await drawExpiring(30);
+  // 从接种史行点「上报 AEFI」进来的（P2-1499）：患者号与这一剂预填好，表单滚到眼前
+  if (aefiJump) {
+    $("#aefi-pid").value = aefiJump.patient_id;
+    await drawAefiDoses(aefiJump.patient_id, aefiJump.record_id);
+    $("#aefi-form").scrollIntoView();
+  }
 }
 
 async function renderSurveillance() {

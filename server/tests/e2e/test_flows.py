@@ -6701,6 +6701,47 @@ def test_接种登记从下拉选批次_带出疫苗与机构_登记即扣一支
     assert (batch["used_quantity"], batch["remaining"]) == (1, 9)            # 修前库存不扣
 
 
+def test_接种史行点上报AEFI_带着这一剂去AEFI表单_上报带出批号(page, base_url, seed, admin_call, admin_read):
+    """P2-1499（第四十四批扫描 AH1-1）：AEFI 表单原先要手填「接种记录ID」，全站却没有一处页面显示记录号——从界面上报的
+    AEFI 关联不到剂次、批号恒空。修后接种史表印记录号与批号，每行「上报 AEFI」带着这一剂去「疫苗批次与冷链」页，患者号与
+    剂次预填好；AEFI 表单的剂次是下拉，填好患者号即列出他的各剂次。上报后这一例带出批号。"""
+    patient = admin_call("POST", "/api/patients",
+                         {"name": "E2E接种史AEFI受种者", "id_card": "320981202501011499", "birth_date": "2025-01-01"})
+    batch = admin_call("POST", "/api/vaccine-supply/batches", {
+        "vaccine_code": "E2E-MMR", "vaccine_name": "E2E麻腮风疫苗", "batch_no": "E2E-MMR-1499",
+        "expire_date": "2099-12-31", "org_id": seed["org"]["id"], "quantity": 5})
+    dose = admin_call("POST", "/api/vaccination/records", {
+        "patient_id": patient["id"], "vaccine_code": "E2E-MMR", "vaccine_name": "E2E麻腮风疫苗",
+        "org_id": seed["org"]["id"], "batch_id": batch["id"], "vaccinated_date": "2026-09-01"})
+    label = "E2E麻腮风疫苗 第1剂 2026-09-01 批号 E2E-MMR-1499"
+
+    _login(page, base_url)
+    _open_page(page, "vaccinesupply", "疫苗批次与冷链")
+    page.fill("#aefi-pid", str(patient["id"]))
+    page.locator("#aefi-pid").blur()                                  # 填好患者号（change）即列出他的各剂次
+    expect(page.locator("#aefi-dose option")).to_have_count(2)
+    expect(page.locator("#aefi-dose option").nth(1)).to_have_text(label)
+    expect(page.locator("#aefi-dose")).to_have_value("")             # 首项「不关联」，不替人选
+
+    _open_page(page, "vaccination", "疫苗接种")
+    page.fill("#vac-hist input[name=patient_id]", str(patient["id"]))
+    page.click("#vac-hist button")
+    row = page.locator("#vac-hist-result tr", has_text="E2E-MMR-1499")
+    expect(row).to_contain_text(str(dose["id"]))                     # 修前接种史表没有记录号、批号
+    row.locator(f'button[data-aefi-dose="{dose["id"]}"]').click()
+    expect(page.locator("#main h2")).to_have_text("疫苗批次与冷链")
+    expect(page.locator("#aefi-pid")).to_have_value(str(patient["id"]))
+    expect(page.locator("#aefi-dose")).to_have_value(str(dose["id"]))
+    form = page.locator("#aefi-form")
+    form.locator('[name="symptom"]').fill("E2E 接种后高热")
+    form.locator('[name="onset_date"]').fill("2026-09-02")
+    form.locator('[name="org_id"]').fill(str(seed["org"]["id"]))
+    _redrawn(page, lambda: form.locator("button").click())
+    reports = admin_read(f"/api/vaccine-supply/aefi?patient_id={patient['id']}")
+    assert [(r["record_id"], r["batch_no"], r["vaccine_code"]) for r in reports] == [
+        (dose["id"], "E2E-MMR-1499", "E2E-MMR")], reports
+
+
 def test_前端取今天按本地日历_东八区早上8点前不取成昨天(browser, base_url):
     """P2-228：前端取「今天 / 本月」原先拿 `toISOString()` 截（UTC）——东八区早上 8 点前截到的是昨天，每月 1 日截出
     上个月；复诊「完成」写进库的实际日期、对账日、报表月份的默认值都跟着错。真浏览器里把时区拨到东八区、时钟拨到
