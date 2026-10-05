@@ -80,7 +80,7 @@ async function renderDrgs() {
   // 统计一个 403 整页报错，同页给一线的事中预警、事前提示也跟着够不着（P2-459）。统计取不到就在原位说为什么，其余照常
   const [groups, stats] = await Promise.all([api("/api/drgs/groups"),
     api("/api/drgs/stats").catch((err) => ({ orgs: [], mdcs: [], groups: [], error: err.message }))]);
-  const canGroup = currentRole() === "admin";   // 建组与调权同一权限（后端 require_admin）
+  const canGroup = currentRole() === "admin";   // 建组、调权、编辑、启停同一权限（后端 require_admin）
   const drawAlerts = async (mult) => {
     try {
       const a = await api(`/api/drgs/in-stay-alerts?los_multiplier=${mult}`);
@@ -115,7 +115,7 @@ async function renderDrgs() {
          <td>${m.groups}</td><td>${m.cases}</td><td>${m.cmi}</td><td>${m.avg_cost} 元</td></tr>`)) : ""}
     ${stats.groups.length ? panel("组均费用",
       barChart(stats.groups.map((g) => [`${g.drg_code} ${g.drg_name}`, g.avg_cost]), { unit: " 元" })) : ""}
-    ${panel("分组目录（admin 可增补、调权）", `<p class="msg" id="drg-msg"></p>${canGroup ? `
+    ${panel("分组目录（admin 可增补、调权、编辑、停用 / 启用）", `<p class="msg" id="drg-msg"></p>${canGroup ? `
       <form class="inline" id="drg-group-form" style="margin-bottom:8px">
         <input name="code" placeholder="分组编码" required style="width:110px">
         <input name="name" placeholder="分组名称" required>
@@ -132,7 +132,11 @@ async function renderDrgs() {
          <td>${esc(g.keywords) || "—"}</td>
          <td>${esc(g.procedure_keywords) || "—"}${g.require_procedure ? ' <span class="tag orange">必须</span>' : ""}</td>
          <td><span class="tag ${g.active ? "green" : "red"}">${g.active ? "启用" : "停用"}</span></td>
-         <td>${canGroup ? `<button class="btn secondary" data-drg-weight="${g.id}">调权</button>` : "—"}</td></tr>`)}`)}
+         <td>${canGroup ? `<button class="btn secondary" data-drg-weight="${g.id}">调权</button>${g.is_fallback ? ""
+           // 编辑与启停（P2-1535）：兜底组不摆——入组时它按编码取、不看启停，关键词对它也没有意义
+           : ` <button class="btn secondary" data-drg-edit="${g.id}">编辑</button>
+             <button class="btn secondary" data-drg-toggle="${g.id}" data-active="${g.active ? 1 : 0}">${g.active ? "停用" : "启用"}</button>`}`
+           : "—"}</td></tr>`)}`)}
     ${panel("事中预警：在院病例住院日已明显超出同组均值", `
       <form class="inline" id="drg-alert-form">
         <input name="los_multiplier" type="number" step="0.1" min="1" max="5" value="1.5" style="min-width:120px"
@@ -182,7 +186,43 @@ async function renderDrgs() {
     } catch (err) { $("#drg-pre").innerHTML = `<p class="msg err">${esc(err.message)}</p>`; }
   };
   $("#page-body").onclick = async (e) => {
-    const id = e.target.dataset.drgWeight;
+    const { drgWeight: id, drgEdit, drgToggle, active } = e.target.dataset;
+    // 编辑（P2-1535）：PATCH 收名称、基准权重、关键词、主手术关键词、必须命中主手术、MDC、MDC 名称（动了匹配配置的后端按 P2-1019
+    // 判），页面原先只给调权——建错的组（关键词过宽、漏勾必须命中主手术）改不了，种子只增不改，存量库的关键词只能调接口改。
+    // 框照 P2-1533「改档」：都是单行字段与下拉，点确定关框、由页面发请求，失败写本页消息行；只送和预填值不同的项（照 P2-969），
+    // spdModal 交回的值去了首尾空白，原值也去掉再比。启停用行上的按钮；只改权重的「调权」照旧留着
+    if (drgEdit) {
+      const g = groups.find((x) => x.id === Number(drgEdit));
+      if (!g) return;
+      const picked = await spdModal(`编辑分组：${g.code} ${g.name}`, [
+        { name: "name", label: "分组名称（必填）", type: "text", value: g.name, required: true },
+        { name: "base_weight", label: "基准权重（须 > 0）", type: "number", value: g.base_weight },
+        { name: "mdc", label: "MDC", type: "text", value: g.mdc },
+        { name: "mdc_name", label: "MDC 名称", type: "text", value: g.mdc_name },
+        { name: "keywords", label: "主诊断关键词（逗号分隔）", type: "text", value: g.keywords },
+        { name: "procedure_keywords", label: "主手术关键词（逗号分隔）", type: "text", value: g.procedure_keywords },
+        { name: "require_procedure", label: "必须命中主手术（外科组：未命中主手术不入该组）", type: "select",
+          value: g.require_procedure ? "1" : "0", options: [{ value: "0", label: "否" }, { value: "1", label: "是" }] },
+      ], { intro: "只提交改了的项；改动只作用于此后入组的病例，已入组的不重算（权重按入组时的快照计）。启停用行上的「停用 / 启用」。" });
+      if (!picked) return;
+      const body = {};
+      if (picked.name !== g.name.trim()) body.name = picked.name;
+      if (picked.base_weight !== g.base_weight) body.base_weight = picked.base_weight;
+      for (const f of ["mdc", "mdc_name", "keywords", "procedure_keywords"]) {
+        if (picked[f] !== (g[f] || "").trim()) body[f] = picked[f];
+      }
+      if ((picked.require_procedure === "1") !== g.require_procedure) body.require_procedure = picked.require_procedure === "1";
+      if (!Object.keys(body).length) return setMsg("#drg-msg", "没有改动：各项都与原来相同，未提交", false);
+      try { await api(`/api/drgs/groups/${drgEdit}`, { method: "PATCH", body: JSON.stringify(body) }); route(); }
+      catch (err) { setMsg("#drg-msg", err.message, false); }
+      return;
+    }
+    // 停用 / 启用（P2-1535）：照本文件 ESB 接入方、数据质控规则的切换写法；停用的组预检与出院入组都不再命中
+    if (drgToggle) {
+      try { await api(`/api/drgs/groups/${drgToggle}`, { method: "PATCH", body: JSON.stringify({ active: active !== "1" }) }); route(); }
+      catch (err) { setMsg("#drg-msg", err.message, false); }
+      return;
+    }
     if (!id) return;
     const picked = await spdModal("调整基准权重", [
       { name: "base_weight", label: "新基准权重（须 > 0）", type: "number" }]);

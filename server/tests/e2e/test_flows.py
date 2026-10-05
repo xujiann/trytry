@@ -4808,6 +4808,41 @@ def test_DRG分组目录能在界面上增补(page, base_url, admin_read):
     expect(page.locator("tr:has(button[data-drg-weight])", has_text="E2EZ9")).to_contain_text("必须")
 
 
+def test_DRG分组目录能编辑关键词与停用_预检随之变(page, base_url, admin_read, admin_call):
+    """P2-1535（第四十五批扫描 AI4-6）：分组目录原先只给「调权」——关键词、主手术关键词、必须命中主手术、MDC、名称、启停都
+    没有入口，建错的组改不了也停不掉、继续吃病例。现在普通组的行上有「编辑」（只送改了的项）与「停用 / 启用」。"""
+    group = admin_call("POST", "/api/drgs/groups", {"code": "E2EZ8", "name": "E2E 编辑试验组", "base_weight": 1.05,
+                                                    "keywords": "E2E甲病"})
+    _login(page, base_url)
+    _open_page(page, "drgs", "DRGs分析")
+
+    def row():
+        return page.locator("tr:has(button[data-drg-weight])", has_text="E2EZ8")
+
+    def pre_check(diagnosis):
+        page.fill('#drg-pre-form [name="diagnosis"]', diagnosis)
+        page.click("#drg-pre-form button")
+
+    row().locator("button[data-drg-edit]").click()
+    expect(_modal(page).locator('[name="keywords"]')).to_have_value("E2E甲病")   # 预填原值
+    _redrawn(page, lambda: _spd_modal(page, {"keywords": "E2E乙病"}))
+    saved = next(g for g in admin_read("/api/drgs/groups") if g["id"] == group["id"])
+    assert (saved["keywords"], saved["name"], saved["active"]) == ("E2E乙病", "E2E 编辑试验组", True), saved
+    expect(row()).to_contain_text("E2E乙病")
+    pre_check("E2E乙病")
+    expect(page.locator("#drg-pre")).to_contain_text("E2EZ8")   # 按新词命中
+
+    _redrawn(page, lambda: row().locator("button[data-drg-toggle]").click())
+    expect(row().locator("button[data-drg-toggle]")).to_have_text("启用")
+    assert next(g for g in admin_read("/api/drgs/groups") if g["id"] == group["id"])["active"] is False
+    pre_check("E2E乙病")
+    expect(page.locator("#drg-pre")).to_contain_text("未匹配到任何分组")   # 停用的组不再命中
+    # 兜底组不摆编辑与停用（入组按编码取、不看启停），调权照旧
+    fallback = page.locator("tr:has(button[data-drg-weight])", has_text="QY")
+    expect(fallback).to_have_count(1)
+    expect(fallback.locator("button[data-drg-edit], button[data-drg-toggle]")).to_have_count(0)
+
+
 def test_DRG页对医生照样打得开_事前提示够得着_不摆调权(page, base_url, seed):
     """P2-459：机构 CMI 等统计只给管理层，原先与分组目录放在同一个 Promise.all 里——医生打开 DRGs 分析页，统计一个 403
     整页报错，同页给一线的事中预警（在院病例住院日超标）、事前提示（按拟诊断预判入组）都够不着；管理员才能点的「调权」
