@@ -2495,7 +2495,7 @@ async function renderResources() {
         `<td><button class="btn sm secondary" data-rsedit="${r.id}">编辑</button>` +
         (r.status === "published" ? `<button class="btn sm danger" data-withdraw="${r.id}">撤回</button>`
                                   : `<button class="btn sm" data-publish="${r.id}">发布</button>`) + "</td></tr>")}
-      <p class="desc">编辑改的是名称 / 容量 / 位置 / 联系方式 / 备注这几项，
+      <p class="desc">编辑改的是名称 / 容量 / 单位 / 位置 / 联系方式 / 备注这几项，
         <b>编码与资源类型建后不可改</b>（后端那个入参模型里就没有这两个键）——
         它们是这条资源的身份，改了等于换了一个东西。
         留空的字段不进 PATCH body：只想改位置的那一次，不该把备注清掉。</p>
@@ -2547,10 +2547,12 @@ async function renderResources() {
     if (d.publish) return postAction(`/api/resources/${d.publish}/publish`, {}, "#rs-msg");
     if (d.rsedit) {
       const r = resources.find((x) => x.id === Number(d.rsedit));
-      // 框自己提交（P2-607）：名称只填了空格、备注写超了（后端 512 字）、五项都留空，报错写在框里、框不关，改好的几项不用重填
+      // 框自己提交（P2-607）：名称只填了空格、备注写超了（后端 512 字）、六项都留空，报错写在框里、框不关，改好的几项不用重填。
+      // 单位一项是 P2-1508 补的：后端改档入参原先没有 unit，建档时误填的单位改不了，框里也没有这一项
       const done = await spdModal(`编辑资源 ${r ? r.code : d.rsedit}`, [
         { name: "name", label: "名称（留空不改）", type: "text", value: r ? r.name : "" },
         { name: "capacity", label: "容量（留空不改，最小 1）", type: "number", value: r ? r.capacity : 1 },
+        { name: "unit", label: "单位（留空不改）", type: "text", value: r ? r.unit || "" : "" },
         { name: "location", label: "位置（留空不改）", type: "text", value: r ? r.location || "" : "" },
         { name: "contact", label: "联系方式（留空不改）", type: "text", value: r ? r.contact || "" : "" },
         { name: "note", label: "备注（留空不改）", type: "textarea", value: r ? r.note || "" : "" },
@@ -2559,10 +2561,11 @@ async function renderResources() {
         const body = {};
         if (picked.name) body.name = picked.name;
         if (picked.capacity) body.capacity = picked.capacity;
+        if (picked.unit) body.unit = picked.unit;
         if (picked.location) body.location = picked.location;
         if (picked.contact) body.contact = picked.contact;
         if (picked.note) body.note = picked.note;
-        if (!Object.keys(body).length) throw new Error("五项都留空了，没有要改的");
+        if (!Object.keys(body).length) throw new Error("六项都留空了，没有要改的");
         return api(`/api/resources/${d.rsedit}`, { method: "PATCH", body: JSON.stringify(body) });
       } });
       if (done) route();

@@ -75,6 +75,9 @@ class ResourceUpdate(BaseModel):
     # 改档与建档同口径（P1-98）：原先改名为空串照收
     name: str | None = Field(default=None, min_length=1, max_length=128, pattern=NON_BLANK)
     capacity: int | None = Field(default=None, ge=1, le=INT4_MAX)
+    # 单位原先不在这里（P2-1508）：建档时误填成「人」就再也改不了——`{"unit": "台"}` 被当成不认识的键丢掉，PATCH 照回 200、
+    # 单位还是「人」，编辑框里也没有这一项。约束照 ResourceIn
+    unit: str | None = Field(default=None, max_length=16)
     location: str | None = Field(default=None, max_length=256)
     contact: str | None = Field(default=None, max_length=64)
     note: str | None = Field(default=None, max_length=512)

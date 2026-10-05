@@ -2908,13 +2908,33 @@ def test_编辑资源由框自己提交_备注写超了框不关(page, base_url,
     _login(page, base_url)
     _open_page(page, "resources", "统一资源与排程")
     page.click(f'button[data-rsedit="{rs["id"]}"]')
-    form = _spd_modal_rejected(page, {"name": "", "capacity": "", "location": "", "contact": "", "note": ""})
-    expect(form.locator("[data-modal-msg]")).to_contain_text("五项都留空了")
+    # 框里多了「单位」一项（P2-1508），全留空的提示跟着是六项
+    form = _spd_modal_rejected(page, {"name": "", "capacity": "", "unit": "", "location": "", "contact": "", "note": ""})
+    expect(form.locator("[data-modal-msg]")).to_contain_text("六项都留空了")
     form = _spd_modal_rejected(page, {"name": "E2E框内提交会议室", "location": "E2E三楼东", "note": "备" * 513})
     expect(form.locator('[name="location"]')).to_have_value("E2E三楼东")   # 修前框关，改的位置没了
     assert (saved()["location"], saved()["note"]) == ("", "")
     _redrawn(page, lambda: _spd_modal(page, {"note": "E2E 可容纳 20 人"}))
     assert (saved()["location"], saved()["note"]) == ("E2E三楼东", "E2E 可容纳 20 人"), saved()
+
+
+def test_编辑资源改得动单位_别的项不动(page, base_url, seed, admin_read, admin_call):
+    """P2-1508：后端改档入参原先没有 unit、编辑框里也没有这一项——建档时单位误填成「人」，`PATCH {"unit": "台"}` 照回 200、
+    单位还是「人」。现在框里有「单位」，只改单位那一次，别的几项照旧。"""
+    rs = admin_call("POST", "/api/resources", {"org_id": seed["org"]["id"], "resource_type": "equipment",
+                                               "code": "E2E-RS-P21508", "name": "E2E便携投影仪", "unit": "人",
+                                               "location": "E2E设备科"})
+
+    def saved():
+        return next(x for x in admin_read("/api/resources") if x["id"] == rs["id"])
+
+    _login(page, base_url)
+    _open_page(page, "resources", "统一资源与排程")
+    page.click(f'button[data-rsedit="{rs["id"]}"]')
+    expect(_modal(page).locator('[name="unit"]')).to_have_value("人")   # 修前框里没有这一项
+    _redrawn(page, lambda: _spd_modal(page, {"unit": "台"}))
+    assert (saved()["unit"], saved()["name"], saved()["location"]) == ("台", "E2E便携投影仪", "E2E设备科"), saved()
+    expect(page.locator(f'tr:has(button[data-rsedit="{rs["id"]}"])')).to_contain_text("1台")   # 登记表的容量列
 
 
 def test_不良事件审核与整改由框自己提交_写超了框不关(page, base_url, seed, admin_read, admin_call):
