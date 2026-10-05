@@ -3646,14 +3646,19 @@ async function renderLabQc() {
          <td>${p.out_of_control ? (p.handled ? `<span class="tag green">已处理</span>${handledNote}` : '<span class="tag orange">未处理</span>') : "—"}</td>
          <td>${p.out_of_control && !p.handled ? `<button class="btn secondary" data-handle="${p.id}">失控处理</button>` : "—"}</td></tr>`;
       })}`;
+    // 测定面板的消息框随整块重画换新，这里仍写明清空（P2-1471）：换批号、处理完失控点之后，上一张录入回执的警示不跟过来
+    setMsg("#meas-msg", "");
     const measForm = $("#meas-form");
     if (measForm) measForm.onsubmit = async (e) => {
       e.preventDefault();
       const body = formJson(e.target, ["value"]);
       try {
         const created = await api(`/api/labqc/lots/${lotId}/measurements`, { method: "POST", body: JSON.stringify(body) });
-        if (created.alert) { setMsg("#labqc-msg", created.alert, false); }
-        drawLot(lotId);
+        // 失控未处理的警示写进测定面板自己的消息框（P2-1471）：原先写在顶部「新建质控批号」面板的 #labqc-msg，离测定面板很远，
+        // 又从不清——处理完、再录一个在控点、换到别的批号都还挂着。先重画（重画即清空这一格）再写回执（P2-1013），回执里
+        // 没有警示就是空的。顶部那一格不再写测定的警示
+        await drawLot(lotId);
+        setMsg("#meas-msg", created.alert, false);
       } catch (err) { setMsg("#meas-msg", err.message, false); }
     };
     panel.onclick = async (e) => {
