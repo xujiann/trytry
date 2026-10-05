@@ -1,8 +1,9 @@
 """⑳远程医学教育（含㉑适宜技术培训考核）：课程、学习/考核记录。"""
+import re
 from typing import cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import and_, func, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
@@ -40,6 +41,20 @@ from ..visibility import assert_obj_org_writable, assert_org_visible, assert_org
 router = APIRouter(prefix="/api/education", tags=["远程医学教育"], dependencies=[Depends(get_current_user)])
 
 PASS_SCORE = 60
+
+#: 外链地址只认 http(s)（P2-1428）：页面把课件外链画成可点的链接、「点播」直接开它——`javascript:` / `data:` 链接点开是在本站
+#: 执行脚本（main.py 的 CSP 为免构建的内联脚本放行了 'unsafe-inline'，页面只做 esc() 挡不住），相对路径、ftp: 打不开或开出来
+#: 的是本站别的页面。与页面的 /^https?:\/\//i（收银页 pay_url，P2-1021）同一判据：前缀、不分大小写、只认 ASCII 字母
+#: （re.ASCII：不让 Python 把 ſ 也当成 s）
+_HTTP_URL = re.compile(r"^https?://", re.IGNORECASE | re.ASCII)
+
+
+def _check_http_url(value: str, label: str) -> str:
+    """外链地址收空串或 http(s) 开头的（判据见 `_HTTP_URL`），其余 422。空串放过——必不必填由字段自己的约束定。
+    只挂在入参上：存量的非 http(s) 地址出参照原样读出，不让清单 500。"""
+    if value and not _HTTP_URL.match(value):
+        raise ValueError(f"{label}须以 http:// 或 https:// 开头")
+    return value
 
 
 class CourseCreate(BaseModel):
@@ -418,7 +433,13 @@ MATERIAL_TYPES = {"slide": "课件", "video": "视频", "doc": "文档", "link":
 class MaterialCreate(BaseModel):
     title: str = Field(min_length=1, max_length=256, pattern=NON_BLANK)
     material_type: str = Field(default="slide", pattern="^(slide|video|doc|link)$")
+    # 外链只收空串或 http(s)（P2-1428）：原先什么都收，`javascript:alert(1)`、`data:`、相对路径、ftp: 一律 201
     url: str = Field(default="", max_length=512)
+
+    @field_validator("url")
+    @classmethod
+    def _url(cls, value: str) -> str:
+        return _check_http_url(value, "外链地址")
 
 
 def _material_out(m: CourseMaterial, attachments: int = 0) -> dict:

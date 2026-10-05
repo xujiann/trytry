@@ -2081,6 +2081,51 @@ def test_课件附件上传后看得到也下得了(page, base_url, admin_call, 
     expect(listing).to_contain_text("e2e_p2431.pdf")
 
 
+def test_课件外链看得到点得开_点播打开并计一次_清单不被重画(page, base_url, admin_call, admin_read, tmp_path):
+    """P2-1428：课件清单原先不读外链——视频、PPT 只能填外链，填进去页面上哪儿都看不到；「点播」只发计数再整页重画，什么也
+    不打开，刚查出来的课件清单也没了。修后「外链」列给 http(s) 地址画链接；「点播」先开外链再计一次、只改这一行的点播数；
+    没有外链但有附件的计一次并展开附件清单；两样都没有的不摆「点播」。"""
+    course = admin_call("POST", "/api/education/courses", {"title": "E2E课件外链课程"})
+    url = f"{base_url}/api/health"   # 用本服务自己的地址：端到端环境不出网
+    mats = {title: admin_call("POST", f"/api/education/courses/{course['id']}/materials", body)["id"]
+            for title, body in (("E2E外链课件", {"title": "E2E外链课件", "material_type": "video", "url": url}),
+                                ("E2E只有附件的课件", {"title": "E2E只有附件的课件", "material_type": "doc"}),
+                                ("E2E什么都没有的课件", {"title": "E2E什么都没有的课件", "material_type": "doc"}))}
+    pdf = tmp_path / "e2e_p21428.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n")
+
+    def plays():
+        return {m["title"]: m["play_count"] for m in admin_read(f"/api/education/courses/{course['id']}/materials")}
+
+    _login(page, base_url)
+    _open_page(page, "education", "远程医学教育")
+    form = page.locator("#cm-att")
+    form.locator('input[name="material_id"]').fill(str(mats["E2E只有附件的课件"]))
+    form.locator('input[type="file"]').set_input_files(str(pdf))
+    form.locator("button").click()
+    expect(page.locator("#cm-att-list")).to_contain_text("e2e_p21428.pdf")
+    query = page.locator("#cm-query")
+    query.locator('input[name="course_id"]').fill(str(course["id"]))
+    query.locator("button").click()
+    listing = page.locator("#cm-list")
+    linked = listing.locator("tr", has_text="E2E外链课件")
+    expect(linked.locator("a")).to_have_attribute("href", url)   # 修前清单没有外链这一列
+    expect(listing.locator("tr", has_text="E2E什么都没有的课件").locator("button[data-play]")).to_have_count(0)
+    page.eval_on_selector("#page-body", "el => el.dataset.stamp = 'e2e-keep'")
+    with page.expect_popup() as popup:
+        linked.locator("button[data-play]").click()   # 修前什么也不打开
+    expect(popup.value).to_have_url(url)
+    popup.value.close()
+    expect(linked.locator(f'[data-plays="{mats["E2E外链课件"]}"]')).to_have_text("1")
+    assert page.eval_on_selector("#page-body", "el => el.dataset.stamp") == "e2e-keep", "点播之后整页重画了，查出来的清单被冲掉"
+    page.eval_on_selector("#cm-att-list", "el => el.innerHTML = ''")
+    attached = listing.locator("tr", has_text="E2E只有附件的课件")
+    attached.locator("button[data-play]").click()
+    expect(page.locator("#cm-att-list")).to_contain_text("e2e_p21428.pdf")   # 没有外链的展开附件清单
+    expect(attached.locator(f'[data-plays="{mats["E2E只有附件的课件"]}"]')).to_have_text("1")
+    assert plays() == {"E2E外链课件": 1, "E2E只有附件的课件": 1, "E2E什么都没有的课件": 0}
+
+
 def test_会诊与转诊的佐证材料在页面上传得上看得到(page, base_url, seed, admin_call, tmp_path):
     """P2-432：会诊、转诊两类附件（病历影像截图、检查单 PDF）后端早就支持，页面上连上传入口都没有——
     只能靠接口调用方。修后两页各有一块佐证材料面板：按单号上传、查附件、下载。"""
