@@ -31,7 +31,7 @@ from ..datetypes import OptionalDateStr, PeriodStr
 from ..concurrency import insert_or_conflict, move_row, serialized_on, upsert_unique
 from ..database import get_db
 from ..deps import get_current_user, month_bounds, require_roles, resolve_org_scope
-from ..formula import FormulaError, evaluate, validate
+from ..formula import FormulaError, evaluate_raw, validate
 from ..models import (
     FundDistribution,
     FundPeriod,
@@ -602,7 +602,10 @@ def distribute(pool_id: int, body: DistributeIn, db: Session = Depends(get_db)):
     clamped = 0
     for rank, card in enumerate(scorecards, start=1):
         try:
-            weight = evaluate(
+            # 份额权重取不舍入的有限值（P2-1479）：原先走 `evaluate`，先按绝对值舍到 4 位小数再归一化——归一化本该与量纲
+            # 无关，`score / 10000` 却比 `score` 少分 13875 元给高分的一家（权重舍成 0.0013 / 0.0007），`(score / 100) ** 6`
+            # 整个舍成 0 报 422。只在下面落库快照时按原有位数舍入
+            weight = evaluate_raw(
                 body.formula_expr,
                 {"score": card["score"], "rank": float(rank), "org_count": float(org_count)},
             )
@@ -614,12 +617,16 @@ def distribute(pool_id: int, body: DistributeIn, db: Session = Depends(get_db)):
         weights.append((card, rank, max(weight, 0.0)))
     weight_sum = sum(w for _, _, w in weights)
     if weight_sum <= 0:
-        raise HTTPException(
-            status_code=422,
-            detail="所有机构的份额权重都为 0，无法归一化分配。"
-                   "常见原因是本期绩效得分普遍为 0（业务数据尚未产生），"
-                   "此时应改用与得分无关的公式（如均分写 1）",
-        )
+        # 两种原因分开说（P2-1479）：得分不全为 0 时还说「常见原因是本期绩效得分普遍为 0」，看的人去查业务数据，
+        # 毛病其实在公式（甲镇 13.3、乙镇 6.7 分，`score - 50` 算出来全是负数）
+        if any(card["score"] for card in scorecards):
+            detail = ("所有机构的份额权重都为 0，无法归一化分配：本期绩效得分并非全为 0，"
+                      "是分配公式对各机构算出的结果全部 ≤ 0（或过小），请检查公式")
+        else:
+            detail = ("所有机构的份额权重都为 0，无法归一化分配。"
+                      "常见原因是本期绩效得分普遍为 0（业务数据尚未产生），"
+                      "此时应改用与得分无关的公式（如均分写 1）")
+        raise HTTPException(status_code=422, detail=detail)
 
     # 重新分配即覆盖上一次结果——分配方案改了要能重来，但快照随之刷新。
     #
@@ -655,6 +662,7 @@ def distribute(pool_id: int, body: DistributeIn, db: Session = Depends(get_db)):
             # 当时的归一化指标权重与考核期一并冻结（P2-568）：原先快照里只有原始计数，权重一调，已分的钱按
             # 快照参数重跑也复现不出来、平台上也查不到当时的权重（模型注释写的是「记录参数，便于复现」）
             score_detail={**card["detail"], "weights": scored["weights"], "period": scored["period"]},
+            # 快照照原有位数舍入（P2-1479）：分钱、算占比用的是上面不舍入的权重，舍入只在落库这一步
             weight=round(weight, 6),
             share_pct=round(share * 100, 4),
             amount=amount,

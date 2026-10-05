@@ -151,13 +151,23 @@ def _parse(expression: str) -> ast.expr:
         raise FormulaError(f"表达式语法错误：{exc.msg}") from None
 
 
-def evaluate(expression: str, variables: dict[str, float]) -> float:
-    """求值；表达式非法、引用未知变量或这组取值下算不出有限实数时抛 FormulaError。"""
+def evaluate_raw(expression: str, variables: dict[str, float]) -> float:
+    """求值、**不舍入**：解析与有限性检查与 `evaluate` 同一套，只是不取 4 位小数（P2-1479）。
+
+    给只拿结果作相对比例的调用方（基金分配的份额权重：各机构权重归一化后乘结余）：先按绝对值舍到 0.0001 再归一化，
+    成比例的两个公式分出不同的钱（`score / 10000` 的权重舍成 0.0013 / 0.0007），更小量级的整个舍成 0。
+    报表、指标值、规则比较照旧用 `evaluate`。
+    """
     value = _eval_node(_parse(expression), variables)
     if not math.isfinite(value):
         # `a * 1e308 * 10` 这类不抛异常、直接得 inf / nan：原样返回，序列化成 JSON 时 500
         raise FormulaError("计算结果超出数值范围")
-    return round(value, 4)
+    return value
+
+
+def evaluate(expression: str, variables: dict[str, float]) -> float:
+    """求值；表达式非法、引用未知变量或这组取值下算不出有限实数时抛 FormulaError。结果取 4 位小数。"""
+    return round(evaluate_raw(expression, variables), 4)
 
 
 def validate(expression: str, known_variables: set[str]) -> None:
