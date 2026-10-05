@@ -2,6 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
+from .. import clock
 from ..concurrency import insert_or_conflict
 from ..visibility import assert_obj_org_writable, assert_patient_visible, scope_patient_list
 from ..database import get_db
@@ -23,6 +24,11 @@ def sign(body: ContractCreate, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="患者不存在")
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="机构不存在")
+    # 签约日期不得晚于今天（P2-1548，与接种日期 P2-1304 / 发病日期 P2-454 同一句）：记的是已经签下的那一天，原先只查格式——
+    # 填成 2099-01-01 照样 201、当即「履约中」，这份将来才生效的协议上照样记履约。同机构曾解约的再签走下面「重新激活」那条路，
+    # 改写的也是这个日期，所以判在两条路之前。留空照旧不判（能不能留空随签约期 P2-1037 另定）
+    if body.signed_date and body.signed_date > clock.today().isoformat():
+        raise HTTPException(status_code=422, detail=f"签约日期（{body.signed_date}）不得晚于今天")
     existing = (
         db.query(FamilyDoctorContract)
         .filter(
