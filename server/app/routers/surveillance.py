@@ -410,9 +410,11 @@ def multi_point_alerts(
         # 不经浮点舍入；比值相同再按例数降序、机构 id，最后按行 id 倒序——取数没有 ORDER BY，末位键唯一才是全序
         "syndrome_alerts": sorted(syndrome_alerts, key=lambda x: (
             -Fraction(x["case_count"], x["threshold"]), -x["case_count"], x["org_id"], -x["id"])),
-        "pathogen_alerts": sorted(
-            pathogen_alerts, key=lambda x: -(x["positive_rate_pct"] or 0)
-        ),
+        # 病原按阳性率从高到低，同一套全序（P2-1466）：原先按四舍五入到两位的百分比排、没有次键——真实比值不同而舍入后相同
+        # （10/30 与 3333/10000 都是 33.33%）、比值本身相同（2/10 与 4/20）时，先后全凭取数顺序，而取数没有 ORDER BY。
+        # 改用分数比、不经舍入；比值相同再按阳性数降序、机构 id，最后按行 id 倒序。送检数 ≥10 才进预警，分母不会为 0
+        "pathogen_alerts": sorted(pathogen_alerts, key=lambda x: (
+            -Fraction(x["positive_count"], x["tested_count"]), -x["positive_count"], x["org_id"], -x["id"])),
         "caliber": {
             "syndrome": "上报值达到该机构自设阈值即列出；阈值为 0 的不参与预警",
             "pathogen": "送检数 ≥10 且阳性率 ≥10% 才列出——小样本的高阳性率没有意义",
