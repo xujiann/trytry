@@ -143,8 +143,14 @@ def _rows_in_year(
     P1-2：这里原先把 Employee 与 Secondment 整表拉进内存再在 Python 里筛。数据量小的时候看不出来，但随年份累积会慢慢变差。
     改为 SQL 侧先筛：用 ISO 日期字符串的字典序与时序一致这一点，把"整段落在统计年度外"的派驻直接排除掉；职称等级用外连接
     一次带出，不再整表建字典。
+
+    统计年度超出日期范围（负数、五位数）的 422（P2-1509）：原先在下面构造年初日期时抛 ValueError、回 500；台账的 `needs_level`
+    也收年度之后，两条路都经这里，在这一处挡。
     """
-    year_start, year_end = date(target_year, 1, 1), date(target_year, 12, 31)
+    try:
+        year_start, year_end = date(target_year, 1, 1), date(target_year, 12, 31)
+    except (ValueError, OverflowError):   # 超出 C long 的年份 date() 抛 OverflowError、不是 ValueError
+        raise HTTPException(status_code=422, detail=f"统计年度超出范围：{target_year}") from None
     query = (
         db.query(Secondment, Employee.title_level)
         .outerjoin(Employee, Employee.id == Secondment.employee_id)
@@ -256,6 +262,7 @@ def list_secondments(
     assignment_type: str | None = None,
     ongoing: bool | None = None,
     needs_level: bool | None = None,
+    year: int | None = None,
     offset: int = 0,
     limit: int = 50,
     db: Session = Depends(get_db),
@@ -264,7 +271,11 @@ def list_secondments(
 
     `needs_level=true` 只列「长期派驻当年满半年、职称等级未填」的（`false` 列其余；P2-1314）：下沉统计把这批人次单独报成
     `unknown_title_level`，页面提示「请在下方台账补齐等级」——可它们恰是早建的行，台账按编号倒序只取一页就挤出去了，又没有
-    对应的筛选。判据与 `dispatch_stats` 同一组帮手，年度取当年（下沉统计的缺省年度）。
+    对应的筛选。判据与 `dispatch_stats` 同一组帮手。
+
+    `year` 是 `needs_level` 判「当年满半年」用的统计年度，取法与 `dispatch_stats` 同一句：不带取当年（下沉统计的缺省年度），与原先
+    一样（P2-1509）。原先固定取今年——1 月 1 日一过，人员下沉页按上一年度看下沉指标，提示条报的那几人次在台账里筛不出来。
+    只作用于 `needs_level`，台账本身不按年度筛。
     """
     query = db.query(Secondment)
     scope = resolve_org_scope(db, group_id, to_org_id)
@@ -278,7 +289,8 @@ def list_secondments(
         query = query.filter(Secondment.end_date != "")
     today = clock.today()
     if needs_level is not None:
-        flagged = Secondment.id.in_([row.id for row, title_level, days in _rows_in_year(db, scope, today.year, today)
+        target_year = year or today.year   # 与 dispatch_stats 同一句（P2-1509）
+        flagged = Secondment.id.in_([row.id for row, title_level, days in _rows_in_year(db, scope, target_year, today)
                                      if days is not None and _needs_title_level(row, title_level, days)])
         query = query.filter(flagged if needs_level else ~flagged)
     rows = paginate(query.order_by(Secondment.id.desc()), response, offset, limit)

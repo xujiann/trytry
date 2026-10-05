@@ -2284,19 +2284,26 @@ const ASSIGN_TYPES = { long_term: "长期派驻", support: "短期支援", round
 // 与后端 staffing.TITLE_LEVELS 同一张表（键与名由 tests/test_staffing_title_level_options.py 钉住）
 const TITLE_LEVELS = { none: "未填", junior: "初级", intermediate: "中级", deputy_senior: "副高", senior: "正高" };
 
-/** 派驻台账的筛选（P2-1314）：只留在内存里、不进存储——点了提示条才只看待补职称等级的那几条，「看全部」回去。 */
-const STAFFING_FILTER = { needs_level: false };
+/** 派驻台账的筛选（P2-1314）：只留在内存里、不进存储——点了提示条才只看待补职称等级的那几条，「看全部」回去。
+    `year` 是下沉指标的统计年度（P2-1509），空串为当年，同样只留在内存里（与绩效页 PERF_FILTER 同一个做法）：原先两次请求都不带
+    年度，1 月 1 日一过，上一年度的下沉指标和「待补职称等级」在页面上都看不到了，而下沉指标是按年度上报的。统计与台账带同一个
+    年度——提示条报的人次与台账 needs_level 筛出的必须是同一批。 */
+const STAFFING_FILTER = { needs_level: false, year: "" };
 
 async function renderStaffing() {
   $("#page-desc").textContent =
     "监测指标只认长期派驻满半年且中级及以上——巡诊不算下沉，职称等级必须显式维护而不从职称文本推断";
+  const yearQuery = STAFFING_FILTER.year ? `year=${encodeURIComponent(STAFFING_FILTER.year)}` : "";
   const [rows, stats, orgs] = await Promise.all([
-    api(`/api/staffing/secondments?limit=100${STAFFING_FILTER.needs_level ? "&needs_level=true" : ""}`),
-    api("/api/staffing/dispatch-stats"),
+    api(`/api/staffing/secondments?limit=100${STAFFING_FILTER.needs_level ? "&needs_level=true" : ""}${yearQuery ? `&${yearQuery}` : ""}`),
+    api(`/api/staffing/dispatch-stats${yearQuery ? `?${yearQuery}` : ""}`),
     api("/api/organizations"),
   ]);
   $("#page-body").innerHTML = `
     ${panel(`下沉指标（${stats.year} 年度）`, `
+      <form class="inline" id="st-year">
+        <input name="year" placeholder="统计年度 YYYY（默认当年）" value="${esc(STAFFING_FILTER.year)}" pattern="\\d{4}">
+        <button>按此年度统计</button></form>
       ${stats.unknown_title_level
         ? `<p class="msg err">有 ${stats.unknown_title_level} 人次满足长期派驻满半年，
             但职称等级未维护，未计入"中级及以上"。请在下方台账补齐等级。
@@ -2337,6 +2344,11 @@ async function renderStaffing() {
          <td>${r.days}</td>
          <td>${r.ongoing ? `<button data-stend="${r.id}">结束派驻</button>` : ""}</td></tr>`)}
     `)}`;
+  $("#st-year").onsubmit = (e) => {
+    e.preventDefault();
+    STAFFING_FILTER.year = String(new FormData(e.target).get("year") ?? "").trim();
+    route();
+  };
   $("#st-form").onsubmit = (e) => { e.preventDefault();
     postAction("/api/staffing/secondments",
       formJson(e.target, ["employee_id", "from_org_id", "to_org_id"]), "#st-msg"); };

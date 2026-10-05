@@ -121,8 +121,10 @@ def test_提示条点了台账按needs_level重取():
     source = (STATIC / "pages-mgmt.js").read_text(encoding="utf-8")
     start = source.index("async function renderStaffing()")
     body = source[start:source.index("\nasync function ", start + 1)]
-    assert "const STAFFING_FILTER = { needs_level: false };" in source
-    assert 'api(`/api/staffing/secondments?limit=100${STAFFING_FILTER.needs_level ? "&needs_level=true" : ""}`)' in body
+    # 筛选对象多了统计年度、台账请求带上同一个年度（P2-1509，见 test_staffing_dispatch_year）
+    assert 'const STAFFING_FILTER = { needs_level: false, year: "" };' in source
+    assert ('api(`/api/staffing/secondments?limit=100${STAFFING_FILTER.needs_level ? "&needs_level=true" : ""}'
+            '${yearQuery ? `&${yearQuery}` : ""}`)') in body
     prompt = body[body.index("${stats.unknown_title_level"):body.index('${table(["接收机构"')]
     assert 'data-stneeds="1"' in prompt   # 修前只是一行字，「请在下方台账补齐等级」却找不到那几条
     handler = body[body.index("$(\"#page-body\").onclick"):]
