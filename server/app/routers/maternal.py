@@ -1,16 +1,17 @@
 """㉔妇幼保健业务协同：孕产妇建册/高危管理/产检/产后访视/分娩记录，
 儿童保健档案与访视、新生儿疾病筛查、高危儿管理，婚前/孕前/妇女保健与避孕节育记录。"""
 from datetime import datetime
-from typing import cast
+from typing import Annotated, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Response
-from pydantic import BaseModel, Field, FiniteFloat
+from pydantic import BaseModel, BeforeValidator, Field, FiniteFloat
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 from .. import clock
 from ..datetypes import DateStr, OptionalDateStr, before_birth_problem, legacy_date
 from ..concurrency import append_text, appended_text, insert_if_absent, insert_or_conflict, serialized_on
 from ..numtypes import INT4_MAX
+from ..schemas import _gender_input
 from ..texttypes import NON_BLANK
 from ..visibility import assert_org_writable, scope_patient_list
 from ..database import get_db
@@ -271,13 +272,18 @@ def close_record(record_id: int, db: Session = Depends(get_db)):
 
 class ChildCreate(BaseModel):
     name: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
-    gender: str = Field(default="未知", max_length=8)
+    # 性别与建档同一口径（P2-1540，复用建档的 `schemas._gender_input`，P2-941）：原先是自由文本，儿保档案填 M 照存、清单上
+    # 原样印「M」，与患者建档、法定医学证明不是同一套写法。常见编码归一成「男 / 女 / 未知」，认不出的 422
+    gender: Annotated[str, BeforeValidator(_gender_input)] = "未知"
     birth_date: DateStr
     guardian_patient_id: int | None = None
 
 
 class ChildOut(ChildCreate):
     id: int
+    # 出参不带入参的归一校验（P2-1540，同 `PatientOut` 的 P2-941）：库里修之前存进去的「M」「X1」要原样读出来，而不是让
+    # 清单 500 或悄悄改写
+    gender: str = "未知"
     # 出参不带入参的日历校验（P1-63）：库里的存量坏日期要原样读出来，而不是让响应 500
     birth_date: str
     # 出参不带「不能只填空格」（P1-109）：修之前存进去的纯空白行要原样读出来，而不是让整个清单 500

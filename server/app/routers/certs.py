@@ -1,7 +1,9 @@
 """法定医学证明（浙#7、㉔出生医学证明签发）：出生/死亡医学证明签发与出生缺陷儿登记。"""
 
+from typing import Annotated
+
 from fastapi import APIRouter, Depends, HTTPException, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, BeforeValidator, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -14,6 +16,7 @@ from ..models import ChildRecord, MedicalCert, Organization, Patient, User
 from ..datetypes import DateStr, before_birth_problem
 from ..texttypes import NON_BLANK
 from ..privacy import mask_id_card, mask_phone
+from ..schemas import _gender_input
 from .printing import CERT_DATE_LABELS
 from .reports import _csv_response
 
@@ -26,7 +29,10 @@ _TYPE_NAMES = {"birth": "出生医学证明", "death": "死亡医学证明", "de
 class CertCreate(BaseModel):
     cert_type: str = Field(pattern="^(birth|death|defect)$")
     name: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
-    gender: str = Field(default="未知", max_length=8)
+    # 性别与建档同一口径（P2-1540，复用建档的 `schemas._gender_input`，P2-941）：原先是自由文本——死亡证明收 F、1、女性、X1
+    # 全部 201，原样写进死因报告卡导出（女性患者导成「1」，而 GB/T 2261.1 里 1 是男）。常见编码归一成「男 / 女 / 未知」、认不出
+    # 的 422；出参（清单 `CertOut`、死因报告卡）另写 `gender: str`，不带归一，库里修之前存进去的照原样读出
+    gender: Annotated[str, BeforeValidator(_gender_input)] = "未知"
     event_date: DateStr
     detail: str = Field(default="", max_length=512)
     org_id: int
