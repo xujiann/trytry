@@ -1029,11 +1029,12 @@ function wfInstanceQuery() {
   return query.toString() ? `?${query}` : "";
 }
 
-/* 实例表：每一行都给「流转记录」；状态文案取后端的 status_name，发起人、发起时间是 P2-1474 补的三键里的另两个 */
+/* 实例表：每一行都给「流转记录」；状态文案取后端的 status_name，发起人、发起时间是 P2-1474 补的三键里的另两个；
+   「流程」印流程名（P2-1475，原先印 definition_key），定义不在了回显编码 */
 function wfInstanceTable(instances) {
   return `<p class="desc">列出 ${instances.length} 条（新的在前）</p>`
     + table(["ID", "流程", "事项", "发起人", "发起时间", "当前节点", "状态", "更新时间", "操作"], instances, (i) =>
-      `<tr><td>${i.id}</td><td>${esc(i.definition_key)}</td><td>${esc(i.title)}</td>
+      `<tr><td>${i.id}</td><td>${esc(i.definition_name || i.definition_key)}</td><td>${esc(i.title)}</td>
        <td>${esc(i.created_by_name)}</td><td>${esc(i.created_at.slice(0, 16).replace("T", " "))}</td>
        <td>${esc(i.current_node_name || i.current_node)}</td><td>${esc(i.status_name)}</td>
        <td>${esc(i.updated_at.slice(0, 16).replace("T", " "))}</td>
@@ -1047,8 +1048,9 @@ async function renderWorkflows() {
     api("/api/workflows/my-tasks")]);
   $("#page-body").innerHTML = `
     ${panel(`我的待办（${tasks.count}）`, `${
-      table(["实例", "流程", "事项", "当前节点", "需要角色", "操作"], tasks.tasks, (t) =>
-        `<tr><td>${t.id}</td><td>${esc(t.definition_key)}</td><td>${esc(t.title)}</td>
+      table(["实例", "流程", "机构", "事项", "当前节点", "需要角色", "操作"], tasks.tasks, (t) =>
+        `<tr><td>${t.id}</td><td>${esc(t.definition_name || t.definition_key)}</td>
+         <td>${t.org_id == null ? "全县流程" : esc(t.org_name || t.org_id)}</td><td>${esc(t.title)}</td>
          <td>${esc(t.current_node_name || t.current_node)}</td><td>${esc(t.current_node_role || "任意")}</td>
          <td><button class="btn secondary" data-advance="${t.id}">推进</button>
              <button class="btn danger" data-cancel="${t.id}">终止</button></td></tr>`)}
@@ -1134,9 +1136,13 @@ async function renderWorkflows() {
       else if (d.history) {
         const rows = await api(`/api/workflows/instances/${d.history}/history`);
         $("#wf-history").classList.remove("hidden");
+        // 节点、动作、操作人印后端给的名称（P2-1475）：原先印节点编码与 advance / cancel，没填姓名的操作人一格空白；
+        // 终止那一行的 to_node 是空串，「到」不再印「终态」（单子没走到终态，是在这一步被终止的）
         $("#wf-history-body").innerHTML = table(["从", "到", "动作", "意见", "操作人", "时间"], rows, (h) =>
-          `<tr><td>${esc(h.from_node)}</td><td>${esc(h.to_node || "终态")}</td><td>${esc(h.action)}</td>
-           <td>${esc(h.comment)}</td><td>${esc(h.actor)}</td><td>${esc(h.created_at.slice(0, 16).replace("T", " "))}</td></tr>`);
+          `<tr><td>${esc(h.from_node_name || h.from_node)}</td>
+           <td>${h.to_node ? esc(h.to_node_name || h.to_node) : h.action === "cancel" ? "（已终止）" : "终态"}</td>
+           <td>${esc(h.action_name)}</td><td>${esc(h.comment)}</td><td>${esc(h.actor_name)}</td>
+           <td>${esc(h.created_at.slice(0, 16).replace("T", " "))}</td></tr>`);
         return;
       } else return;
       route();

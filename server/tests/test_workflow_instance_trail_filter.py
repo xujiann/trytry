@@ -29,6 +29,8 @@ PAGE = (Path(__file__).resolve().parents[1] / "app" / "static" / "pages-mgmt.js"
 OLD_KEYS = ["id", "definition_key", "business_type", "business_id", "title", "org_id", "current_node",
             "current_node_name", "current_node_role", "status", "updated_at"]
 NEW_KEYS = ["status_name", "created_by_name", "created_at"]
+#: 之后又只在末尾补的（P2-1475：流程名；待办行再多一个机构名）
+LATER_KEYS = ["definition_name"]
 
 
 @pytest.fixture(scope="module")
@@ -120,14 +122,14 @@ def test_只看我发起的只在可见范围之内收窄(client, world):
 
 def test_出参末尾补三键_原有键与次序不动_没填姓名的发起人回落账号(client, world):
     rows = _list(client, world["h"]["doc"])
-    assert all(list(r) == OLD_KEYS + NEW_KEYS for r in rows), [list(r) for r in rows][:1]
+    assert all(list(r) == OLD_KEYS + NEW_KEYS + LATER_KEYS for r in rows), [list(r) for r in rows][:1]
     by_op = next(r for r in rows if r["id"] == world["by_op"]["id"])
     assert (by_op["created_by_name"], by_op["status_name"]) == ("p21474_op", "流转中")   # 修前没有这两个键
     tasks = client.get("/api/workflows/my-tasks", headers=world["h"]["doc"]).json()["tasks"]
-    assert tasks and all(list(t) == OLD_KEYS + NEW_KEYS for t in tasks)
+    assert tasks and all(list(t) == OLD_KEYS + NEW_KEYS + LATER_KEYS + ["org_name"] for t in tasks)
     # 发起与推进的回执同一个出参
     for body in (world["started"], world["advanced"], world["by_op"]):
-        assert list(body) == OLD_KEYS + NEW_KEYS
+        assert list(body) == OLD_KEYS + NEW_KEYS + LATER_KEYS
     assert (world["started"]["created_by_name"], world["advanced"]["created_by_name"]) == ("P21474 医生甲",) * 2
     assert world["advanced"]["created_at"] == world["started"]["created_at"]   # 推进不改发起时间
 

@@ -56,6 +56,9 @@ router = APIRouter(prefix="/api/workflows", tags=["流程引擎"], dependencies=
 
 # 状态文案（措辞照抄模型列注释；报错文案用它，别把英文码直接拼给窗口人员看——P2-74）
 INSTANCE_STATUS_NAMES = {"running": "流转中", "completed": "已完成", "cancelled": "已终止"}
+# 流转动作文案（P2-1475，措辞照抄 WorkflowTransition.action 的列注释）：流转记录原先把 advance / cancel 原样印给审批人看。
+# 名称表只在这一处，页面印 action_name（先例：spd 转诊轨迹的 REFERRAL_ACTION_NAMES）
+TRANSITION_ACTION_NAMES = {"advance": "推进", "cancel": "终止"}
 
 
 # ============================================================================
@@ -134,6 +137,15 @@ class WorkflowInstanceOut(BaseModel):
     # 发起人 full_name or username（开通账号时姓名非必填，同 printing._user_name）；账号不在了折成空串
     created_by_name: str
     created_at: str
+    # 流程名（P2-1475）：「流程」一栏原先印 definition_key（leave）；定义不在了折成空串，同 current_node_name
+    definition_name: str
+
+
+class WorkflowTaskOut(WorkflowInstanceOut):
+    """待办行比实例多一个机构名（P2-1475）：全域角色的待办混着各家的「院长审批」，原先分不出是哪家的。
+    不挂机构的全县流程为空串（页面写「全县流程」）。"""
+
+    org_name: str
 
 
 class WorkflowInstanceStatusOut(BaseModel):
@@ -147,13 +159,21 @@ class WorkflowTransitionOut(BaseModel):
     to_node: str
     action: str
     comment: str
+    # 只取 full_name，没填姓名的账号是空串——原样不动，新的 actor_name 才回落到账号
     actor: str
     created_at: str
+    # 以下四键只补在末尾（P2-1475）：页面「从 / 到」原先印节点编码、「动作」印 advance / cancel、操作人没填姓名就空白。
+    # 起止节点名按实例的流程定义取，定义或节点不在了折成空串（终态 / 终止那一行的 to_node 本来就是空串）
+    from_node_name: str
+    to_node_name: str
+    action_name: str
+    # full_name or username（同 created_by_name）
+    actor_name: str
 
 
 class MyTasksOut(BaseModel):
     count: int
-    tasks: list[WorkflowInstanceOut]
+    tasks: list[WorkflowTaskOut]
 
 
 class UnifiedRequestOut(BaseModel):
@@ -262,8 +282,10 @@ def _scope_instances(db: Session, user: User, query):
     return query.filter(or_(WorkflowInstance.org_id.in_(allowed), WorkflowInstance.org_id.is_(None)))
 
 
-def _instance_out(i: WorkflowInstance, node: dict | None, creator: User | None) -> dict:
-    """`creator` 是发起人账号（P2-1474）：清单按本页的 created_by 用 `rows_by_id` 一次取回，别逐行查。"""
+def _instance_out(i: WorkflowInstance, definition: WorkflowDefinition | None, creator: User | None) -> dict:
+    """`definition` 是实例所属的流程定义（不在了传 None）：当前节点与流程名都从它取（P2-1475 起传定义，不再只传节点）。
+    `creator` 是发起人账号（P2-1474）：清单按本页的 created_by 用 `rows_by_id` 一次取回，别逐行查。"""
+    node = _node(definition, i.current_node) if definition else None
     return {
         "id": i.id,
         "definition_key": i.definition_key,
@@ -279,6 +301,7 @@ def _instance_out(i: WorkflowInstance, node: dict | None, creator: User | None) 
         "status_name": INSTANCE_STATUS_NAMES.get(i.status, i.status),
         "created_by_name": (creator.full_name or creator.username) if creator else "",
         "created_at": i.created_at.isoformat(),
+        "definition_name": definition.name if definition else "",
     }
 
 
@@ -304,7 +327,7 @@ def start_instance(
     db.add(instance)
     db.commit()
     db.refresh(instance)
-    return _instance_out(instance, first, user)
+    return _instance_out(instance, definition, user)
 
 
 class AdvanceIn(BaseModel):
@@ -410,7 +433,7 @@ def advance_instance(
     )
     db.commit()
     db.refresh(instance)
-    return _instance_out(instance, _node(definition, instance.current_node), db.get(User, instance.created_by))
+    return _instance_out(instance, definition, db.get(User, instance.created_by))
 
 
 @router.post("/instances/{instance_id}/cancel",
@@ -476,14 +499,7 @@ def list_instances(
     rows = paginate(query.order_by(WorkflowInstance.id.desc()), response, offset, limit)
     definitions = {d.key: d for d in db.query(WorkflowDefinition).all()}
     creators = rows_by_id(db, User, (i.created_by for i in rows))
-    return [
-        _instance_out(
-            i, _node(definitions[i.definition_key], i.current_node)
-            if i.definition_key in definitions else None,
-            creators.get(i.created_by),
-        )
-        for i in rows
-    ]
+    return [_instance_out(i, definitions.get(i.definition_key), creators.get(i.created_by)) for i in rows]
 
 
 @router.get("/instances/{instance_id}/history",
@@ -499,7 +515,11 @@ def instance_history(instance_id: int, db: Session = Depends(get_db), user: User
         .order_by(WorkflowTransition.id)
         .all()
     )
-    actors = row_dict(db.query(User.id, User.full_name).all())
+    # 节点名按实例的流程定义取（P2-1475）；不经 `_definition_or_404`——停用的定义照样要把历史读得懂。节点键定义期已判唯一
+    definition = db.query(WorkflowDefinition).filter(WorkflowDefinition.key == instance.definition_key).first()
+    node_names = {n["key"]: n.get("name", "") for n in definition.nodes} if definition else {}
+    # 经手人按本页的 actor_id 一次取回（原先整张用户表的（id, 姓名）读进内存）；actor 照旧只给 full_name
+    actors = rows_by_id(db, User, (t.actor_id for t in rows))
     return [
         {
             "id": t.id,
@@ -507,8 +527,12 @@ def instance_history(instance_id: int, db: Session = Depends(get_db), user: User
             "to_node": t.to_node,
             "action": t.action,
             "comment": t.comment,
-            "actor": actors.get(t.actor_id, ""),
+            "actor": actors[t.actor_id].full_name if t.actor_id in actors else "",
             "created_at": t.created_at.isoformat(),
+            "from_node_name": node_names.get(t.from_node, ""),
+            "to_node_name": node_names.get(t.to_node, ""),
+            "action_name": TRANSITION_ACTION_NAMES.get(t.action, t.action),
+            "actor_name": (actors[t.actor_id].full_name or actors[t.actor_id].username) if t.actor_id in actors else "",
         }
         for t in rows
     ]
@@ -551,11 +575,12 @@ def my_tasks(
             query = query.filter(~or_(*others_nodes))
     rows = paginate(query.order_by(WorkflowInstance.id.desc()), response, offset, limit)
     creators = rows_by_id(db, User, (i.created_by for i in rows))
-    tasks = []
-    for instance in rows:
-        found = definitions.get(instance.definition_key)
-        tasks.append(_instance_out(instance, _node(found, instance.current_node) if found else None,
-                                   creators.get(instance.created_by)))
+    orgs = rows_by_id(db, Organization, (i.org_id for i in rows))   # 待办行的机构名（P2-1475），不挂机构的为空串
+    tasks = [
+        {**_instance_out(instance, definitions.get(instance.definition_key), creators.get(instance.created_by)),
+         "org_name": orgs[instance.org_id].name if instance.org_id in orgs else ""}
+        for instance in rows
+    ]
     # 计数与响应头同一个数：paginate 刚按同一个查询数过
     return {"count": int(response.headers["X-Total-Count"]), "tasks": tasks}
 

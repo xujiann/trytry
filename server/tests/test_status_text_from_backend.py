@@ -344,7 +344,7 @@ def _label_tables():
                             PathologySpecimen, Prescription, Referral, SpecialDiseaseApp, SpdCenter,
                             SpdFollowupRecord, SpdFollowupRule, SpdPathTemplate, SterilizationBatch, SurgeryRequest,
                             TcmDispenseOrder, TcmPreparationBatch, TrainingEnrollment, TrainingPlan, VisitCredential,
-                            Voucher, WorkflowInstance)
+                            Voucher, WorkflowInstance, WorkflowTransition)
     from app.models import AccountSubject, ChargeItem, Course, Department, OfficialDoc, Organization, SimulationCase
     from app.models import (Encounter, SpdAssessPlan, SpdDataSource, SpdEduMaterial, SpdEnrollment, SpdGroup,
                             SpdMeasurement, SpdPackageBinding, SpdPathNode, SpdScreening, SpdTag, SpdTeam)
@@ -416,6 +416,9 @@ def _label_tables():
         "tcm.DISPENSE_ORDER_STATUS_NAMES": (tcm.DISPENSE_ORDER_STATUS_NAMES, TcmDispenseOrder, "status", set()),
         "telemedicine.CONSULT_STATUS_NAMES": (telemedicine.CONSULT_STATUS_NAMES, OnlineConsult, "status", set()),
         "workflows.INSTANCE_STATUS_NAMES": (workflows.INSTANCE_STATUS_NAMES, WorkflowInstance, "status", set()),
+        # P2-1475：流转记录的动作（页面原先印 advance / cancel）
+        "workflows.TRANSITION_ACTION_NAMES":
+            (workflows.TRANSITION_ACTION_NAMES, WorkflowTransition, "action", set()),
         # P2-74 ② 平台侧：状态之外的封闭码表字段（accounting / billing 两张是既有的，本批起清单也用它）
         "organizations.ORG_LEVEL_NAMES": (organizations.ORG_LEVEL_NAMES, Organization, "level", set()),
         "accounting.CATEGORY_NAMES": (accounting.CATEGORY_NAMES, AccountSubject, "category", set()),
@@ -475,7 +478,7 @@ LABEL_TABLE_NAMES = [
     "followup.ENCOUNTER_TYPE_NAMES", "devices.DATA_SOURCE_STATUS_NAMES",
     "users.LOGIN_FAIL_REASON_NAMES", "clinical_docs.SHIFT_NAMES", "service.ENROLL_STATUS_LABELS",
     "service.PACKAGE_BINDING_STATUS_NAMES", "exams.EXAM_SAMPLE_STATUS_NAMES",
-    "prescriptions.RULE_CHANGE_ACTION_NAMES",
+    "prescriptions.RULE_CHANGE_ACTION_NAMES", "workflows.TRANSITION_ACTION_NAMES",
 ]
 
 
