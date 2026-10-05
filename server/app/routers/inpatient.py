@@ -473,6 +473,14 @@ class CaseSummaryCreateOut(CaseSummaryOut):
     drg: DrgAssignOut | None = None
 
 
+class CaseSummaryDetailOut(CaseSummaryOut):
+    """回读（GET）。只在末尾多一个 `drg_label`（P2-1536，继承加尾键保键序）：病案首页「DRG 分组」那一句，与打印件同由
+    `drgs.drg_label` 出——住院页只读首页原先自己写 `drg_code || "未入组"`，兜底病例印「DRG：QY」、打印件印
+    「未入组（QY，需病案首页复核）」（P2-1279）。结案回执（POST）不动。"""
+
+    drg_label: str
+
+
 def _case_summary_out(s: CaseSummary) -> dict:
     return {
         "id": s.id,
@@ -555,15 +563,18 @@ def create_case_summary(
     return out
 
 
-@router.get("/admissions/{admission_id}/case-summary", response_model=CaseSummaryOut)
+@router.get("/admissions/{admission_id}/case-summary", response_model=CaseSummaryDetailOut)
 def get_case_summary(
     admission_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
+    from .drgs import drg_label   # 与结案入组同样延迟 import 兄弟路由（见 create_case_summary）
+
     _admission_visible_or_404(db, admission_id, user, resource="case_summary")
     summary = db.query(CaseSummary).filter(CaseSummary.admission_id == admission_id).first()
     if summary is None:
         raise HTTPException(status_code=404, detail="病案首页未填写")
-    return _case_summary_out(summary)
+    # 「DRG 分组」那一句由后端给（P2-1536），与打印件同一个帮手；页面不再自己判断兜底、未入组
+    return {**_case_summary_out(summary), "drg_label": drg_label(summary.drg_code, summary.drg_weight)}
 
 
 # ---------- 出院 ----------

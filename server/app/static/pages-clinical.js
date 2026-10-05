@@ -3300,10 +3300,12 @@ async function renderInpatient() {
         try { filled = await api(`/api/inpatient/admissions/${d.summary}/case-summary`); }
         catch (err) { if (err.status !== 404) throw err; }
         if (filled) {
+          // DRG 一行印后端给的 `drg_label`（P2-1536），与打印件「DRG 分组」那一格同一句：原先这里自己写 `drg_code || "未入组"`，
+          // 兜底病例印「DRG：QY」、打印件印「未入组（QY，需病案首页复核）」（P2-1279），正式入组的也没有权重
           return spdModal(`病案首页（住院 ${d.summary}，已填写）`, [], { intro: [
             `出院诊断：${filled.discharge_diagnosis}`, `手术：${filled.operation || "—"}`,
             `总费用：${filled.total_cost} 元（其中药费 ${filled.drug_cost} 元）`, `转归：${filled.outcome}`,
-            `DRG：${filled.drg_code || "未入组"}`, `备注：${filled.note || "—"}`, `填写人：${filled.created_by_name}`,
+            `DRG 分组：${filled.drg_label}`, `备注：${filled.note || "—"}`, `填写人：${filled.created_by_name}`,
           ].join("\n") });
         }
         // 出院诊断不预填入院诊断：入出院诊断符合率比的就是这两个，照抄过来它就只剩 100%

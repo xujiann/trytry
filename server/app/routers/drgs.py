@@ -32,7 +32,7 @@ router = APIRouter(prefix="/api/drgs", tags=["DRGs分析"], dependencies=[Depend
 # 兜底组编码：未匹配任何分组的病例落入此组，统计单列且不计入 CMI
 FALLBACK_CODE = FALLBACK_DRG_GROUP["code"]
 
-__all__ = ["router", "assign_drg_group", "SEED_DRG_GROUPS", "FALLBACK_DRG_GROUP", "FALLBACK_CODE"]
+__all__ = ["router", "assign_drg_group", "drg_label", "SEED_DRG_GROUPS", "FALLBACK_DRG_GROUP", "FALLBACK_CODE"]
 
 
 def _split(value: str) -> list[str]:
@@ -123,6 +123,21 @@ def assign_drg_group(db: Session, summary: CaseSummary) -> dict | None:
         "weight": chosen.base_weight,
         "fallback": bool(chosen.is_fallback),
     }
+
+
+def drg_label(drg_code: str, drg_weight: float) -> str:
+    """病案首页上「DRG 分组」那一句：打印件与住院页只读首页（回读接口的 `drg_label`）同一个产地（P2-1536）。
+
+    QY 兜底组不印权重（P2-1279）：它收的是哪组都没入上的病例，种子权重 0.50 只是占位，CMI 统计也剔除了；原先照样印
+    「QY（权重 0.5）」，拿首页对账的人当成一个权重 0.5 的组。兜底与没入组同样印「未入组」，带上兜底组编码与复核提示。
+    原先这句只写在打印件里，住院页的只读首页另写一份 `drg_code || "未入组"`：同一份首页，页面上印「DRG：QY」、打印出来是
+    「未入组（QY，需病案首页复核）」，正式入组的页面上也没有权重。
+    """
+    if not drg_code:
+        return "未入组"
+    if drg_code == FALLBACK_CODE:
+        return f"未入组（{drg_code}，需病案首页复核）"
+    return f"{drg_code}（权重 {drg_weight}）"
 
 
 # ---------- 分组目录 ----------

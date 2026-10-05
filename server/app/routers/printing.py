@@ -38,7 +38,6 @@ from sqlalchemy.orm import Session
 
 from ..clock import now_local, to_local
 from ..concurrency import upsert_unique
-from ..data.drg_groups_seed import FALLBACK_DRG_GROUP
 from ..database import get_db
 from ..deps import get_current_user, require_admin
 from ..models import (
@@ -112,6 +111,7 @@ from .exams import EXAM_REQUEST_STATUS_NAMES, EXAM_SAMPLE_STATUS_NAMES  # noqa: 
 from .prescriptions import PRESCRIPTION_STATUS_NAMES  # noqa: E402
 from .consents import GUARDIAN_RELATION_NAMES  # noqa: E402  监护关系编码的中文，与居民端同一份（P2-238）
 from .checkups import abnormal_text as checkup_abnormal_text  # noqa: E402  异常项提示与体检清单同一口径（P2-422）
+from .drgs import drg_label  # noqa: E402  病案首页「DRG 分组」那句与住院页只读首页同一个产地（P2-1536）
 CONSENT_SCENE_NAMES = {
     "archive": "居民健康建档",
     "chronic_enroll": "慢病入组管理",
@@ -643,14 +643,8 @@ def print_case_summary(
     discharged = (
         _shown_at(admission.discharged_at) if admission.discharged_at else "—"
     )
-    # QY 兜底组不印权重（P2-1279）：它收的是哪组都没入上的病例，种子权重 0.50 只是占位，CMI 统计也剔除了；原先照样印
-    # 「QY（权重 0.5）」，拿首页对账的人当成一个权重 0.5 的组。兜底与没入组同样印「未入组」，带上兜底组编码与复核提示
-    if not summary.drg_code:
-        drg = "未入组"
-    elif summary.drg_code == FALLBACK_DRG_GROUP["code"]:
-        drg = f"未入组（{summary.drg_code}，需病案首页复核）"
-    else:
-        drg = f"{summary.drg_code}（权重 {summary.drg_weight}）"
+    # QY 兜底组不印权重、兜底与没入组同样印「未入组」（P2-1279）；这句由 drgs.drg_label 出，住院页只读首页印同一句（P2-1536）
+    drg = drg_label(summary.drg_code, summary.drg_weight)
     meta = _patient_rows(patient, user) + (
         f'<tr><td class="k">住院机构</td><td>{_esc(org_name)}</td>'
         f'<td class="k">主管医师</td><td>{_esc(admission.doctor_name) or "—"}</td></tr>'

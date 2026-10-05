@@ -11,7 +11,8 @@
 - **Float 列恒 float**：`drg_weight` 是 Float 列（0.95），`drg.weight` 同源；
   `occupancy_pct` 是 `*100.0` 真除法或兜底 `0.0`——这些声明 float 才是原样。
 - **病案首页两种形状**：POST 回执在 11 键之外恒多一个尾键 `drg`
-  （M12 在位时 `assign_drg_group` 的入组结果，固定 6 键）；GET 回读只有 11 键。
+  （M12 在位时 `assign_drg_group` 的入组结果，固定 6 键）；GET 回读是 11 键加尾键 `drg_label`
+  （P2-1536 只增追加：「DRG 分组」那一句，与打印件同由 `drgs.drg_label` 出），没有 `drg`。
   `drg` 按「可选 + exclude_unset」建模镜像代码里的 ImportError 分支
   （M12 摘除时键整个不出现）——该分支在本仓库不可达，故此处只钉"在"的一侧。
 - 入院/转科/出院回执与列表行**同形**（`_admission_out` 唯一产地）；
@@ -290,12 +291,13 @@ def test_病案首页回执_11键加drg尾键_Money与Float之别(seed):
     assert isinstance(body["drg_weight"], float) and isinstance(body["drg"]["weight"], float)
 
 
-def test_病案首页回读_只有11键无drg(client, admin, seed):
+def test_病案首页回读_11键加drg_label尾键_无drg(client, admin, seed):
     body = client.get(
         f"/api/inpatient/admissions/{seed['a1']['id']}/case-summary", headers=admin
     ).json()
-    assert list(body.keys()) == CASE_KEYS
-    assert body == {k: v for k, v in seed["case"].items() if k != "drg"}
+    # 末尾只增 `drg_label`（P2-1536：「DRG 分组」那一句与打印件同一个产地），原有 11 键与次序不动
+    assert list(body.keys()) == CASE_KEYS + ["drg_label"]
+    assert body == {**{k: v for k, v in seed["case"].items() if k != "drg"}, "drg_label": "ES31（权重 0.95）"}
     assert type(body["total_cost"]) is int and isinstance(body["drg_weight"], float)
 
 
