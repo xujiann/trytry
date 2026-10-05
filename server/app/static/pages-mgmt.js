@@ -2236,6 +2236,8 @@ async function renderFund() {
 }
 
 function renderSettlement(s, vars) {
+  // 结余为 0 不给公式框与「按公式分配」（P2-1483）：后端收支相抵一律 409「本池收支相抵、结余为 0，无结余可分配」（P2-261），
+  // 原先这里只按 is_overrun 分两支，结余 0 照样摆着公式框和按钮、点了必 409。直接写后端那一句（与 fund.distribute 同一句）
   return `
     <div class="cards">
       <div class="card"><span class="k">筹资</span><b>${s.total_income}</b></div>
@@ -2248,6 +2250,8 @@ function renderSettlement(s, vars) {
     ${s.is_overrun
       ? `<p class="msg err">本池超支，无结余可分配。当前超支处置方式：${
           esc(s.overrun_action_name)}——平台只记录，不自动扣减任何机构。</p>`
+      : s.balance === 0
+      ? `<p class="desc">本池收支相抵、结余为 0，无结余可分配</p>`
       : `<form class="inline">
           <input id="fd-formula" value="${esc(s.formula_expr || "score")}" style="min-width:200px">
           <button type="button" id="fd-distribute">按公式分配</button></form>
