@@ -22,6 +22,8 @@
   HTTP 种不出跨天住院，故种完后用 SessionLocal 把时刻**改到固定日期**、
   `today` 参数也传同一基准日（analytics/metrics 契约网的既有做法），
   三条分支（alerts / insufficient_baseline / ungrouped）各钉一遍。
+- 事中预警行末尾两键 `patient_name` / `org_name` 是 P2-1537 只增追加的（预警表原先只印患者 ID 与机构 ID），
+  原有八键与次序不动。
 """
 from datetime import datetime
 
@@ -52,6 +54,7 @@ ALERTS_KEYS = [
 ALERT_ROW_KEYS = [
     "admission_id", "patient_id", "org_id", "drg_code",
     "stayed_days", "baseline_avg_days", "baseline_cases", "over_ratio",
+    "patient_name", "org_name",   # P2-1537 只增追加：预警表印姓名与机构名，原有八键与次序不动
 ]
 INSUFFICIENT_ROW_KEYS = ["admission_id", "drg_code", "history_cases", "stayed_days"]
 PRECHECK_CALIBER = (
@@ -335,6 +338,8 @@ def test_事中预警精确_三条分支各钉一遍(client, admin, seed):
             "baseline_avg_days": 10.0,
             "baseline_cases": 5,
             "over_ratio": 2.0,
+            "patient_name": "契约DRG患者6",
+            "org_name": "契约DRG医院",
         }],
         # BR23 同组出院史 0 例：不预警但单列；未填首页的计数报出。
         # 基准日当天入院的在院天数计 1 天（P2-533：当日入当日出计 1 天，与居民端在院天数同一口径；原先钉 0）

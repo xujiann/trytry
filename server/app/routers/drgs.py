@@ -20,8 +20,8 @@ from .. import clock
 from ..concurrency import insert_or_conflict
 from ..visibility import scope_org_list
 from ..database import get_db
-from ..deps import get_current_user, require_admin, require_roles, resolve_business_date
-from ..models import Admission, CaseSummary, DrgGroup, Organization, User
+from ..deps import get_current_user, require_admin, require_roles, resolve_business_date, row_dict
+from ..models import Admission, CaseSummary, DrgGroup, Organization, Patient, User
 from ..texttypes import NON_BLANK, split_list, text_key
 
 # 同组历史病例少于该数不做事中预警——3 个病例算出来的"均值"，预警的是噪声。
@@ -277,6 +277,10 @@ class DrgInStayAlertOut(BaseModel):
     baseline_avg_days: float
     baseline_cases: int
     over_ratio: float
+    # 认人用的两项（P2-1537）：只增键、排在末尾，原有键与次序不动。预警表的「患者」「机构」两列原先只印编号（「患者 17、机构 3」），
+    # 预警要人去处置，管理层看多家机构时更认不出是谁；住院页的同一个形状 P2-1335 早已补上姓名
+    patient_name: str
+    org_name: str
 
 
 class DrgInsufficientBaselineOut(BaseModel):
@@ -590,6 +594,18 @@ def in_stay_alerts(
                 "baseline_cases": len(samples),
                 "over_ratio": round(stayed / avg, 2),
             })
+    # 患者姓名、机构名按这一批预警的 id 各取一次（P2-1537，与住院清单 `inpatient._admissions_out`、随访清单
+    # `followups._name_maps` 同一写法），不逐行查库；取不到的给空串，页面回显编号
+    if alerts:
+        patients = row_dict(
+            db.query(Patient.id, Patient.name).filter(Patient.id.in_({a["patient_id"] for a in alerts})).all()
+        )
+        orgs = row_dict(
+            db.query(Organization.id, Organization.name).filter(Organization.id.in_({a["org_id"] for a in alerts})).all()
+        )
+        for alert in alerts:
+            alert["patient_name"] = patients.get(alert["patient_id"], "")
+            alert["org_name"] = orgs.get(alert["org_id"], "")
     return {
         "today": end.isoformat(),
         "los_multiplier": los_multiplier,

@@ -84,11 +84,12 @@ async function renderDrgs() {
   const drawAlerts = async (mult) => {
     try {
       const a = await api(`/api/drgs/in-stay-alerts?los_multiplier=${mult}`);
+      // 「患者」「机构」两列印姓名与机构名（P2-1537，后端随预警行带出）：原先只印患者 ID 与机构 ID；取不到名字的回显编号
       $("#drg-alerts").innerHTML = `
         <p class="desc">业务日 ${esc(a.today)}，倍数 ${a.los_multiplier}；
           <b>未入组的在院病例 ${a.ungrouped_in_stay} 例</b>（没有 DRG 就没有同组均值可比，不参与预警）。</p>
         ${table(["住院号", "患者", "机构", "DRG", "已住(天)", "同组均值", "历史例数", "超出倍数"], a.alerts, (r) =>
-          `<tr><td>${r.admission_id}</td><td>${r.patient_id}</td><td>${r.org_id}</td>
+          `<tr><td>${r.admission_id}</td><td>${esc(r.patient_name) || r.patient_id}</td><td>${esc(r.org_name) || r.org_id}</td>
            <td><span class="tag">${esc(r.drg_code)}</span></td><td><b>${r.stayed_days}</b></td>
            <td>${r.baseline_avg_days}</td><td>${r.baseline_cases}</td>
            <td><span class="tag red">${r.over_ratio}×</span></td></tr>`)}
