@@ -2620,6 +2620,8 @@ async function renderDiseasePrograms() {
         const picked = await spdModal("出组", [
           { name: "status", label: "出组方式", type: "select", value: "completed",
             options: [{ value: "completed", label: "完成出组" }, { value: "exited", label: "中途退出" }] },
+          // 出组日期可补录（P2-1543）：原先恒记今天，早已转院、今天才补出组的也记成今天
+          { name: "exited_at", label: "出组日期（留空按今天；补录填当时的日期）", type: "text", value: "" },
           { name: "outcome", label: "疗效（留空=未评价，与「无效」不是一回事）", type: "select", value: "",
             options: [{ value: "", label: "未评价" }, { value: "cured", label: "治愈" },
               { value: "improved", label: "好转" }, { value: "stable", label: "稳定" },

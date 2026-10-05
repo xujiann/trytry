@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from .. import clock
 from ..concurrency import insert_or_conflict
-from ..datetypes import OptionalDateStr
+from ..datetypes import OptionalDateStr, legacy_date
 from ..texttypes import NON_BLANK
 from ..visibility import assert_org_writable, assert_patient_visible, scope_patient_list
 from ..database import get_db
@@ -81,6 +81,8 @@ class ExitIn(BaseModel):
     outcome: str = Field(default="", pattern="^(|cured|improved|stable|worsened|died)$")
     outcome_note: str = Field(default="", max_length=512)
     exit_reason: str = Field(default="", max_length=256)
+    # 出组日期可补录（P2-1543）：缺省今天；原先没有这一项，9-01 已转院、今天补出组的照样记成今天
+    exited_at: OptionalDateStr = ""
 
 
 def _program_out(p: DiseaseProgram) -> dict:
@@ -237,6 +239,10 @@ def enroll(
         raise HTTPException(status_code=404, detail="患者不存在")
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="机构不存在")
+    # 入组日期不得晚于今天（P2-1543，与 maternal 末次月经 / 分娩日期 P2-1305 同一句）：记的是已经入组的那一天，原先只查格式，
+    # 填成将来照收——节点完成日、出组日都拿它当下界，入组记录又没有改的入口
+    if body.enrolled_at and body.enrolled_at > clock.today().isoformat():
+        raise HTTPException(status_code=422, detail=f"入组日期（{body.enrolled_at}）不得晚于今天")
     existing = (
         db.query(DiseaseEnrollment)
         .filter(
@@ -318,12 +324,19 @@ def record_node(
             status_code=422,
             detail=f"节点 {body.node_key} 不在本专病路径中，可用节点：{sorted(valid) or '（未配置）'}",
         )
+    # 节点完成日期不得晚于今天、不得早于入组日期（P2-1543，与 maternal 的 P2-1305 / P2-1020 同一句）：原先只查格式，比入组早
+    # 九个月、晚于今天的都照收，节点记录又没有删除入口
+    performed_at = body.performed_at or clock.today().isoformat()
+    if performed_at > clock.today().isoformat():
+        raise HTTPException(status_code=422, detail=f"节点完成日期（{performed_at}）不得晚于今天")
+    enrolled = _enrolled_on(enrollment)
+    if enrolled is not None and performed_at < enrolled:
+        raise HTTPException(status_code=422, detail=f"节点完成日期 {performed_at} 早于入组日期 {enrolled}")
     db.add(
         DiseasePathRecord(
             enrollment_id=enrollment_id,
             created_by=user.id,
-            **{**body.model_dump(),
-               "performed_at": body.performed_at or clock.today().isoformat()},
+            **{**body.model_dump(), "performed_at": performed_at},
         )
     )
     db.commit()
@@ -351,11 +364,22 @@ def exit_enrollment(
     # 判 strip 之后的（P2-418，同 P2-309）：一串空格原先当成填了，出组留痕的退出原因是空白
     if body.status == "exited" and not body.exit_reason.strip():
         raise HTTPException(status_code=422, detail="中途退出须填写原因")
+    # 出组日期可补录（P2-1543）：原先恒记今天——9-01 已转院、今天补出组的记成今天，比入组日还早也照收。缺省今天；不晚于今天、
+    # 不早于入组日、不早于最晚的节点完成日（句式同 `record_node`）
+    exited_at = body.exited_at or clock.today().isoformat()
+    if exited_at > clock.today().isoformat():
+        raise HTTPException(status_code=422, detail=f"出组日期（{exited_at}）不得晚于今天")
+    enrolled = _enrolled_on(enrollment)
+    if enrolled is not None and exited_at < enrolled:
+        raise HTTPException(status_code=422, detail=f"出组日期 {exited_at} 早于入组日期 {enrolled}")
+    latest = _latest_performed_on(db, enrollment_id)
+    if latest is not None and exited_at < latest:
+        raise HTTPException(status_code=422, detail=f"出组日期 {exited_at} 早于最晚的节点完成日期 {latest}")
     enrollment.status = body.status
     enrollment.outcome = body.outcome
     enrollment.outcome_note = body.outcome_note
     enrollment.exit_reason = body.exit_reason
-    enrollment.exited_at = clock.today().isoformat()
+    enrollment.exited_at = exited_at
     db.commit()
     return _enrollment_out(enrollment, db)
 
@@ -426,6 +450,21 @@ def program_stats(
 
 
 # ============================================================ 内部
+
+
+def _enrolled_on(enrollment: DiseaseEnrollment) -> str | None:
+    """入组日期当下界用（P2-1543）：按存量写法读（`legacy_date`）；读不成的、修前存进去的将来日子当「不知道」、不当下界——
+    同 P2-940「将来的出生日期按写坏处理」：入组记录没有改的入口，拿将来的入组日当下界，这份病例从此记不了节点、出不了组。"""
+    day = legacy_date(enrollment.enrolled_at)
+    return day if day is not None and day <= clock.today().isoformat() else None
+
+
+def _latest_performed_on(db: Session, enrollment_id: int) -> str | None:
+    """最晚的节点完成日期（P2-1543，出组日的下界）：读法与「将来的不当下界」同 `_enrolled_on`——节点记录同样没有删除入口。"""
+    today = clock.today().isoformat()
+    days = [legacy_date(performed_at) for (performed_at,) in
+            db.query(DiseasePathRecord.performed_at).filter(DiseasePathRecord.enrollment_id == enrollment_id)]
+    return max((day for day in days if day is not None and day <= today), default=None)
 
 
 def _required_pct(required_keys: list[str], done: set[str]) -> float:
