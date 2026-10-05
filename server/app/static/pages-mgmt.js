@@ -2155,8 +2155,17 @@ async function renderFund() {
     postAction("/api/fund/pools", body, "#fd-msg");
   };
   if (picked && poolOpen) {
-    $("#fd-prepay").onsubmit = (e) => { e.preventDefault();
-      postAction(`/api/fund/pools/${picked}/prepayments`, formJson(e.target, ["amount"]), "#fd-msg"); };
+    // 超计划的警告要说出来（P2-1480）：预付只警告不拦截，回执里的 warning 是这道防线唯一的出口；原先走 postAction，成功即
+    // 整页重画、回执整个丢掉，警告在页面上从来没出现过。先重画再写（同 P2-1432 / P2-1013）
+    $("#fd-prepay").onsubmit = async (e) => {
+      e.preventDefault();
+      try {
+        const r = await api(`/api/fund/pools/${picked}/prepayments`, { method: "POST",
+          body: JSON.stringify(formJson(e.target, ["amount"])) });
+        await route();
+        if (r.warning) setMsg("#fd-msg", r.warning, false);
+      } catch (err) { setMsg("#fd-msg", err.message, false); }
+    };
     $("#fd-period").onsubmit = (e) => {
       e.preventDefault();
       const body = formJson(e.target, ["actual_amount"]);

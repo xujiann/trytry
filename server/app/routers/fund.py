@@ -331,11 +331,21 @@ def add_prepayment(
         db.add(FundPrepayment(pool_id=pool_id, created_by=user.id, **body.model_dump()))
         db.commit()
     out = _pool_out(pool, db)
-    if out["planned_prepay"] and out["prepaid_amount"] > out["planned_prepay"]:
-        out["warning"] = (
-            f"累计预付 {out['prepaid_amount']} 元已超过计划预付额 {out['planned_prepay']} 元，"
-            "请确认是否为追加预拨"
+    # 计划预付额为 0 也是计划（P2-1480）：编辑框写明「0 = 不预付」（P2-590），原先 `if out["planned_prepay"] and …`
+    # 把 0 当成没有计划——比例 0、筹资 50 万的池子预付 500 万照样 201、一句警告都没有。累计预付超过筹资总额另给一句
+    # （计划额不超过筹资总额，超过筹资总额必然先超计划，两句接着说）。仍只警告不拦截，口径见上
+    parts: list[str] = []
+    if out["prepaid_amount"] > out["planned_prepay"]:
+        parts.append(
+            f"累计预付 {out['prepaid_amount']} 元已超过计划预付额 {out['planned_prepay']} 元，请确认是否为追加预拨"
+            if out["planned_prepay"] else
+            f"本池计划预付额为 0（不预付），累计预付 {out['prepaid_amount']} 元，请确认是否为追加预拨"
         )
+    if out["prepaid_amount"] > out["total_amount"]:
+        # 金额列读回来整数是 int、PG 上是 float（见上方响应契约的说明），文案里统一按 float 写，与前一句的两个数同一个写法
+        parts.append(f"累计预付已超过筹资总额 {float(out['total_amount'])} 元，请核对")
+    if parts:
+        out["warning"] = "；".join(parts)
     return out
 
 
