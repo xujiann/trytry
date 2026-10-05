@@ -516,22 +516,34 @@ async function renderAccounting() {
     row.className = "inline entry-row";
     row.innerHTML = `<select class="e-subject">${options}</select>
       <input class="e-summary" placeholder="分录摘要">
-      <input class="e-debit" type="number" step="0.01" placeholder="借方">
-      <input class="e-credit" type="number" step="0.01" placeholder="贷方">`;
+      <input class="e-debit" type="number" step="0.01" min="0" placeholder="借方">
+      <input class="e-credit" type="number" step="0.01" min="0" placeholder="贷方">`;
     $("#entry-rows").appendChild(row);
     row.oninput = refreshTotal;
   };
+  // 分录行只从这一处取（P2-1442）：实时合计与提交原先各取各的——合计把负数算进去，提交却只留借或贷大于 0 的行，只填了负数
+  // 的分录行被悄悄丢掉，存下的凭证与屏幕上「✓ 平衡」的不是同一张（借 1000 / 贷 1000 / 借 −200 / 贷 −200：屏幕 800 / 800，
+  // 存成 1000 / 1000；全是负数时行被丢光，后端只报「entries 至少 2 项」）。借贷都没填的空行不算；填了负数的照留，下面拦住说清
+  const entryRows = () => [...document.querySelectorAll(".entry-row")].map((r) => ({
+    subject_code: r.querySelector(".e-subject").value,
+    summary: r.querySelector(".e-summary").value,
+    debit: Number(r.querySelector(".e-debit").value || 0),
+    credit: Number(r.querySelector(".e-credit").value || 0),
+  })).filter((x) => x.debit !== 0 || x.credit !== 0);
+  // 分录金额后端只收非负（accounting.EntryIn 的 ge=0）：冲销走作废，不收红字负数
+  const NEGATIVE_AMOUNT = "金额不能为负，红字更正请走作废后重录";
+  const hasNegative = (rows) => rows.some((x) => x.debit < 0 || x.credit < 0);
   const refreshTotal = () => {
-    let debit = 0, credit = 0;
-    document.querySelectorAll(".entry-row").forEach((r) => {
-      debit += Number(r.querySelector(".e-debit").value || 0);
-      credit += Number(r.querySelector(".e-credit").value || 0);
-    });
+    const rows = entryRows();
+    const debit = rows.reduce((sum, x) => sum + x.debit, 0);
+    const credit = rows.reduce((sum, x) => sum + x.credit, 0);
+    const negative = hasNegative(rows);
+    const balanced = !negative && Math.abs(debit - credit) < 0.005;
     const el = $("#entry-total");
     // 借贷是否相等实时提示，避免提交后才被 422 打回
     el.textContent = `借方合计 ${debit.toFixed(2)}　贷方合计 ${credit.toFixed(2)}　${
-      Math.abs(debit - credit) < 0.005 ? "✓ 平衡" : "✗ 不平"}`;
-    el.style.color = Math.abs(debit - credit) < 0.005 ? "#1e7e34" : "#c0392b";
+      negative ? `✗ ${NEGATIVE_AMOUNT}` : balanced ? "✓ 平衡" : "✗ 不平"}`;
+    el.style.color = balanced ? "#1e7e34" : "#c0392b";
   };
   addEntryRow(); addEntryRow(); refreshTotal();
   $("#add-entry").onclick = addEntryRow;
@@ -556,13 +568,9 @@ async function renderAccounting() {
   };
   $("#voucher-form").onsubmit = async (e) => {
     e.preventDefault();
+    const entries = entryRows();   // 与实时合计同一组行（P2-1442）
+    if (hasNegative(entries)) return setMsg("#acc-msg", NEGATIVE_AMOUNT, false);   // 提交前说清，不再悄悄丢行
     const head = formJson(e.target, ["org_id"]);
-    const entries = [...document.querySelectorAll(".entry-row")].map((r) => ({
-      subject_code: r.querySelector(".e-subject").value,
-      summary: r.querySelector(".e-summary").value,
-      debit: Number(r.querySelector(".e-debit").value || 0),
-      credit: Number(r.querySelector(".e-credit").value || 0),
-    })).filter((x) => x.debit > 0 || x.credit > 0);
     postAction("/api/accounting/vouchers", { ...head, period, entries }, "#acc-msg");
   };
   $("#page-body").onclick = async (e) => {
