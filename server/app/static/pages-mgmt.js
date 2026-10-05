@@ -1960,6 +1960,7 @@ async function renderOrgGroups() {
          <td>${esc(orgName[g.lead_org_id] || "—")}</td><td>${g.member_count}</td>
          <td><span class="tag ${g.active ? "green" : "red"}">${g.active ? "启用" : "停用"}</span></td>
          <td><button data-ogpick="${g.id}">管理成员</button>
+             <button data-ogedit="${g.id}">改档</button>
              <button data-ogtoggle="${g.id}" data-active="${g.active}">${
                g.active ? "停用" : "启用"}</button></td></tr>`)}
     `)}
@@ -2042,8 +2043,44 @@ async function renderOrgGroups() {
       postAction(`/api/org-groups/${selected}/members`, formJson(e.target, ["org_id"]), "#og-msg"); };
   }
   $("#page-body").onclick = async (e) => {
-    const { ogpick, ogtoggle, active, ogdrop } = e.target.dataset;
+    const { ogpick, ogedit, ogtoggle, active, ogdrop } = e.target.dataset;
     if (ogpick) { localStorage.setItem("medplat_group_id", ogpick); return route(); }
+    // 改档（P2-1533）：PATCH 能改名称、类型（P2-1511）、牵头机构（传 null 即清空，P2-351）和备注，行上原先只有「停用 / 启用」——
+    // 类型、名称建错了只能停用，名称唯一、想用原名重建也得先改旧组的名字。框照本文件「编辑基金池」的写法：四项都是单行字段与
+    // 下拉（P2-607 棘轮只管多行文本框），点确定关框、由页面发请求，失败写本页消息行。只送和预填值不同的项（照 P2-969）：这里没动
+    // 的项不拿进页面时那份写回去；spdModal 交回的值去了首尾空白，原值也去掉再比，没动的名称、备注不会被当成改了
+    if (ogedit) {
+      const g = groups.find((x) => x.id === Number(ogedit));
+      if (!g) return;
+      const picked = await spdModal(`改档：${g.name}`, [
+        { name: "name", label: "分组名称（必填，最多 64 个字）", type: "text", value: g.name, required: true },
+        { name: "group_type", label: "类型", type: "select", value: g.group_type,
+          options: Object.entries(GROUP_TYPES).map(([value, label]) => ({ value, label })) },
+        { name: "lead_org_id", label: "牵头机构", type: "select", value: g.lead_org_id ?? "",
+          options: [{ value: "", label: "无牵头机构" }, ...orgs.map((o) => ({ value: o.id, label: o.name }))] },
+        { name: "note", label: "备注（最多 256 个字，可留空）", type: "text", value: g.note },
+      ], { intro: "只提交改了的项；牵头机构选「无牵头机构」即清空。启停用行上的「停用 / 启用」。" });
+      if (!picked) return;
+      const body = {};
+      if (picked.name !== g.name.trim()) body.name = picked.name;
+      if (picked.group_type !== g.group_type) body.group_type = picked.group_type;
+      if (picked.lead_org_id !== String(g.lead_org_id ?? "")) {
+        body.lead_org_id = picked.lead_org_id ? Number(picked.lead_org_id) : null;
+      }
+      if (picked.note !== (g.note || "").trim()) body.note = picked.note;
+      // 一项都没变不发请求（后端此时也 422「请至少改一项」）
+      if (!Object.keys(body).length) return setMsg("#og-msg", "没有改动：名称、类型、牵头机构、备注都与原来相同，未提交", false);
+      // 页面约束与后端 GroupUpdate 同一口径：名称至少有一个看得见的字（texttypes.NON_BLANK：空白、控制字符、零宽这类格式字符
+      // 都不算）、最多 64 个字，备注最多 256 个字；字数按字符算，同后端
+      if ("name" in body && !/[^\s\p{Cc}\p{Cf}]/u.test(body.name)) return setMsg("#og-msg", "分组名称不能只填空格", false);
+      if ("name" in body && [...body.name].length > 64) return setMsg("#og-msg", "分组名称最多 64 个字，超出了", false);
+      if ("note" in body && [...body.note].length > 256) return setMsg("#og-msg", "备注最多 256 个字，超出了", false);
+      try {
+        await api(`/api/org-groups/${ogedit}`, { method: "PATCH", body: JSON.stringify(body) });
+        route();
+      } catch (err) { setMsg("#og-msg", err.message, false); }
+      return;
+    }
     if (ogtoggle) {
       try {
         await api(`/api/org-groups/${ogtoggle}`, { method: "PATCH",

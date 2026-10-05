@@ -2292,6 +2292,23 @@ def test_已归档的基金池写明状态_不给预付预结清算表单(page, 
         expect(page.locator(form)).to_have_count(0)
 
 
+def test_机构协作分组改档改类型_表里类型列跟着变(page, base_url, admin_call):
+    """P2-1533：分组表每行原先只有「管理成员」「停用 / 启用」——名称、类型、牵头机构、备注建错了只能停用。现在点「改档」弹页内
+    表单、预填原值，改了类型点确定即重画，表里类型列换成新类型，没改的名称、备注照旧。"""
+    group = admin_call("POST", "/api/org-groups", {"name": "E2E P21533 胸痛专科联盟", "note": "E2E 原备注"})   # 类型缺省片区
+    _login(page, base_url)
+    _open_page(page, "orggroups", "机构协作分组")
+    row = page.locator(f'tr:has(button[data-ogedit="{group["id"]}"])')
+    expect(row.locator("td").nth(1)).to_have_text("片区/分片")
+    page.click(f'button[data-ogedit="{group["id"]}"]')
+    expect(_modal(page).locator('[name="name"]')).to_have_value("E2E P21533 胸痛专科联盟")   # 预填原值
+    expect(_modal(page).locator('[name="group_type"]')).to_have_value("zone")
+    _redrawn(page, lambda: _spd_modal(page, {"group_type": "alliance"}))
+    expect(row.locator("td").nth(1)).to_have_text("专科联盟")
+    (saved,) = [g for g in admin_call("GET", "/api/org-groups") if g["id"] == group["id"]]
+    assert (saved["group_type"], saved["name"], saved["note"]) == ("alliance", "E2E P21533 胸痛专科联盟", "E2E 原备注"), saved
+
+
 def test_统一支付的金额占位按渠道写明留空时收哪一份(page, base_url):
     """P2-605：金额留空时医保渠道记本单的统筹支付额、其余渠道记冲抵后的自付额，占位原先一律写后者。"""
     _login(page, base_url)
