@@ -17,8 +17,10 @@
 - **动词**：按接地址的函数认——`api` / `authApi` / `fetch` 看同一次调用里的选项对象写没写
   `method`，没写即 GET（三端的 `api` 都是 `options.method || "GET"`）；`postAction` 看第四个
   实参，缺省 POST；医生端 `spdPost` / `act` 恒 POST；`openPrintPage` / `downloadCsv` /
-  `spdOpenSvg` 恒 GET。选项对象是变量、第四参不是字面量、或地址不在调用的第一个实参上的，
-  只判地址。
+  `spdOpenSvg` 恒 GET；续页取全的 `fetchAllPages(api, 地址)`（`shared.js`，P2-1333）恒 GET，地址在第二个实参
+  （P2-1546：随访中心的待随访清单只经它取，不认它，`GET /api/followups` 就成了读动词孤儿）——只认取数函数是
+  `api` / `authApi` 的写法（不带选项即 GET），换成别的函数不知道它发什么动词，只判地址。选项对象是变量、第四参
+  不是字面量、或地址不在调用的第一个实参上的（`fetchAllPages(api, …)` 除外），只判地址。
 - **判不了的**：插值夹在一段中间（`/api/x/pre${id}`），计入「判不了」，同样零基线——
   地址写成整段插值，闸门才看得见。
 """
@@ -38,7 +40,7 @@ BASELINE = 0
 
 FETCH_LIKE = {"api", "authApi", "fetch"}
 POST_ONLY = {"spdPost", "act"}
-GET_ONLY = {"openPrintPage", "downloadCsv", "spdOpenSvg"}
+GET_ONLY = {"openPrintPage", "downloadCsv", "spdOpenSvg", "fetchAllPages"}
 
 
 def _repo_files() -> dict[str, str]:
@@ -208,6 +210,9 @@ def scan(files: dict[str, str] | None = None) -> dict[str, list[str]]:
                 out["no_route"].append(where)
                 continue
             head = re.search(r"([\w$.]+)\(\s*$", text[max(0, m.start() - 40): m.start()])
+            # 续页取全的地址在第二个实参（`fetchAllPages(api, "/api/…")`，P2-1546）；取数函数换成别的就不知道发什么动词
+            head = head or re.search(r"\b(fetchAllPages)\(\s*(?:api|authApi)\s*,\s*$",
+                                     text[max(0, m.start() - 60): m.start()])
             callee = head.group(1).rsplit(".", 1)[-1] if head else None
             method = _method(callee, _call_args(text, end)) if callee else None
             if method is None:
@@ -261,6 +266,20 @@ def test_判据自证_写错地址与动词当场点名():
     assert out["no_route"] == ["自证.js:2 /api/mgmt/budget"]
     assert out["unchecked"] == ["自证.js:6 /api/patients/p${pid}"]
     assert len(out["total"]) == 8 and len(out["verb_checked"]) == 6
+
+
+def test_判据自证_续页取全按GET认_地址在第二个实参():
+    """P2-1546：`fetchAllPages(api, 地址)` 恒 GET（`shared.js` 只管翻页、不碰请求）；只经它取的清单（随访中心的待随访）
+    不再被动词级孤儿棘轮算成「GET 没有入口」。"""
+    out = scan({"自证.js": "\n".join([
+        'const rows = await fetchAllPages(api, "/api/followups?status=pending");',
+        'const drafts = await fetchAllPages(api, `/api/accounting/vouchers?period=${p}&status=draft${orgQuery}`);',
+        # 取数函数不是 api / authApi：不知道它发什么动词，只判地址、不记入口
+        'const odd = await fetchAllPages(postEach, "/api/followups/overdue");',
+    ])})
+    assert set(out["calls"]) == {("GET", "/api/followups"), ("GET", "/api/accounting/vouchers")}
+    assert len(out["total"]) == 3 and len(out["verb_checked"]) == 2
+    assert out["wrong_verb"] == out["no_route"] == out["unchecked"] == []
 
 
 def test_覆盖面自证():

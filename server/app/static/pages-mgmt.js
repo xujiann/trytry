@@ -330,8 +330,10 @@ async function renderSurgery() {
 
 async function renderFollowups() {
   $("#page-desc").textContent = "慢病 / 出院 / 术后 / 妇幼四类随访统一任务；出院与手术结案自动派生";
+  // 待随访续页取全（P2-1546，同 P2-1333 / P2-456「待办按状态取全」）：清单缺省一页 100 条，原先只取第一页——同一机构待随访
+  // 过 100 条，应随访日排在后面的那些页面上没有行、「完成」「取消」够不着，标题还印「待随访任务（100）」，与同页统计卡对不上
   const [pending, overdue, stats] = await Promise.all([
-    api("/api/followups?status=pending"), api("/api/followups/overdue"), api("/api/followups/stats")]);
+    fetchAllPages(api, "/api/followups?status=pending"), api("/api/followups/overdue"), api("/api/followups/stats")]);
   // 超期清单是全县的，完成却以任务机构的名义写（P2-1313）：原先每行都摆「完成随访」，别家的点了必 403。
   // `can_handle` 由后端按完成接口的同一判据现算，只给能办的行摆，标题写明其中几条能办
   const handleable = overdue.filter((t) => t.can_handle).length;
