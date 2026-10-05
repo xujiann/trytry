@@ -61,7 +61,7 @@ class PurchaseIn(BaseModel):
     reason: str = Field(default="", max_length=512)
 
 
-def _purchase_out(p: MaterialPurchase) -> dict:
+def _purchase_out(p: MaterialPurchase, user: User) -> dict:
     return {
         "id": p.id,
         "org_id": p.org_id,
@@ -76,6 +76,8 @@ def _purchase_out(p: MaterialPurchase) -> dict:
         "contract_no": p.contract_no,
         "contract_amount": p.contract_amount,
         "received_quantity": p.received_quantity,
+        "requested_by": p.requested_by,
+        "requested_by_me": p.requested_by == user.id,   # 与 approve_purchase 的「不得审批本人」同一判据（P2-1506）
     }
 
 
@@ -102,6 +104,11 @@ class MaterialPurchaseOut(BaseModel):
     contract_no: str
     contract_amount: int | float
     received_quantity: int
+    # 以下两项只在末尾增、原有键与次序不动（P2-1506）：申请人账号 id，与「申请人是不是当前账号」。审批接口对申请人本人 403
+    # 「不得审批本人提出的采购申请」，页面原先照样在本人提的申请上摆「审批 / 驳回」、点了必 403；页面不知道自己是谁（登录回执
+    # 只给角色），由后端按审批接口同一判据现算（同 P2-799 的 `claimable`），页面据此不摆
+    requested_by: int
+    requested_by_me: bool
 
 
 class PurchaseStatusOut(BaseModel):
@@ -164,7 +171,7 @@ def create_purchase(
     db.add(purchase)
     db.commit()
     db.refresh(purchase)
-    return _purchase_out(purchase)
+    return _purchase_out(purchase, user)
 
 
 @router.get("/purchases", response_model=list[MaterialPurchaseOut])
@@ -181,7 +188,7 @@ def list_purchases(
     if status:
         query = query.filter(MaterialPurchase.status == status)
     return [
-        _purchase_out(p)
+        _purchase_out(p, user)
         for p in paginate(query.order_by(MaterialPurchase.id.desc()), response, offset, limit)
     ]
 

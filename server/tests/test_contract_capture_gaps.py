@@ -95,9 +95,11 @@ def test_有数据时这些列表的键集合(client, auth):
                                  "reason": "更新换代"})
     assert purchase.status_code == 201, purchase.text[:300]
     rows = client.get("/api/materials/purchases", headers=headers).json()
+    # 末尾的 requested_by / requested_by_me 是 P2-1506 补的（申请人与「是不是本人」，页面据此不在本人的申请上摆审批）
     assert set(rows[0]) == {"id", "org_id", "dept_id", "item_name", "spec", "unit",
                             "quantity", "estimated_price", "status", "supplier_id",
-                            "contract_no", "contract_amount", "received_quantity"}
+                            "contract_no", "contract_amount", "received_quantity",
+                            "requested_by", "requested_by_me"}
     # Money 列：整数预算价仍是 int，不是 50000.0
     assert rows[0]["estimated_price"] == 50000
     assert isinstance(rows[0]["estimated_price"], int)

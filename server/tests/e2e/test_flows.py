@@ -5250,6 +5250,28 @@ def test_物资采购的审批按钮只给管理层(page, base_url, materials_se
     expect(page.locator(f'button[data-approve="{pid}"], button[data-reject="{pid}"]')).to_have_count(0)
 
 
+def test_物资采购本人提的申请不摆审批按钮(page, base_url, materials_seed, admin_call):
+    """P2-1506：审批接口对申请人本人 403「不得审批本人提出的采购申请」，页面原先只按状态与角色摆「审批 / 驳回」——管理员
+    本人提的申请照样摆，点下去 403。清单行末尾补了 `requested_by_me`，本人的行写明「本人提出，待其他管理层审批」，别人提的照旧摆。"""
+    import json
+    from urllib.request import Request
+
+    org_id = materials_seed["purchase"]["org_id"]
+    mine = admin_call("POST", "/api/materials/purchases", {"org_id": org_id, "item_name": "E2E本人申请的监护仪",
+                                                          "quantity": 1})
+    op_token = admin_call("POST", "/api/auth/login", {"username": "e2e_mat_op", "password": "passw0rd1"})["access_token"]
+    req = Request(f"{base_url}/api/materials/purchases", method="POST",
+                  data=json.dumps({"org_id": org_id, "item_name": "E2E经办申请的输液泵", "quantity": 1}).encode(),
+                  headers={"Content-Type": "application/json", "Authorization": f"Bearer {op_token}"})
+    with urlopen(req, timeout=10) as resp:
+        other = json.loads(resp.read())["id"]
+    _login(page, base_url)
+    _open_page(page, "materials", "物资采购与耗材")
+    expect(page.locator("tr", has_text="E2E本人申请的监护仪")).to_contain_text("本人提出，待其他管理层审批")
+    expect(page.locator(f'button[data-approve="{mine["id"]}"], button[data-reject="{mine["id"]}"]')).to_have_count(0)
+    expect(page.locator(f'button[data-approve="{other}"], button[data-reject="{other}"]')).to_have_count(2)
+
+
 @pytest.fixture(scope="session")
 def inpatient_seed(base_url, seed):
     """住院页用例的前置数据：一个病区两张床、一位住在第一张床上的患者（第二张空着，供转床）。"""

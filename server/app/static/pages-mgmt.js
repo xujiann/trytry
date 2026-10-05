@@ -726,11 +726,22 @@ function materialPurchaseAmounts(p) {
 async function renderMaterials() {
   $("#page-desc").textContent = "非药品物资：申请 → 审批 → 合同 → 验收（自动入库流水）；高值耗材一物一码正反向追溯";
   // 在库耗材按状态续页取全、排在台账最前（P2-1358，同 P2-456 的 actionableFirst）：台账只取最新一页（100 件、按登记倒序），
-  // 「使用登记」只挂在这一页上——更早入库、先到效期的在库耗材被后登记的挤出窗口，页面上就登记不了
-  const [purchases, recentConsumables, inStock] = await Promise.all([
-    api("/api/materials/purchases"), api("/api/materials/consumables"),
+  // 「使用登记」只挂在这一页上——更早入库、先到效期的在库耗材被后登记的挤出窗口，页面上就登记不了。
+  // 采购流程同一写法（P2-1506）：待审批、已审批（待签合同）、已签合同（待验收）三态按状态续页取全、排在最前——清单缺省只回
+  // 最新 50 张（按编号倒序），审批、签合同、验收三个按钮只挂在这张表上，第 51 张起最早那批没办完的单子被挤出窗口，页面上就
+  // 办不了。已验收 / 已取消的照旧只取最新一页
+  const [recentPurchases, requested, approved, contracted, recentConsumables, inStock] = await Promise.all([
+    api("/api/materials/purchases"), fetchAllPages(api, "/api/materials/purchases?status=requested"),
+    fetchAllPages(api, "/api/materials/purchases?status=approved"),
+    fetchAllPages(api, "/api/materials/purchases?status=contracted"), api("/api/materials/consumables"),
     fetchAllPages(api, "/api/materials/consumables?status=in_stock")]);
+  const purchases = actionableFirst(recentPurchases, requested, approved, contracted);
   const consumables = actionableFirst(recentConsumables, inStock);
+  // 标题写实数（P2-1506，同 P1-250 / P2-1478）：原先写的是这一页的行数「采购流程（50）」——截断后的数，看着像一共只有 50 张。
+  // 最新一页（接口缺省 50 张）没取满，全部单子都在表里；取满了，三种待办是全的，其余只是最新的那几张
+  const openPurchases = requested.length + approved.length + contracted.length;
+  const purchaseCount = recentPurchases.length < 50 ? `${purchases.length}`
+    : `待审批 / 待签合同 / 待验收 ${openPurchases} 张排在最前、其余只列最新 ${purchases.length - openPurchases} 张`;
   // 审批（批准 / 驳回）限管理层（后端 require_roles("director")，管理员放行）：别的角色摆出按钮只会点出一次 403
   const canApprove = ["director", "admin"].includes(currentRole());
   // ADR-0009 第三批：面板外壳改用 `panel()`（定义见 core.js），迁一页、人工过一页。
@@ -743,13 +754,16 @@ async function renderMaterials() {
         <input name="estimated_price" type="number" step="0.01" placeholder="预估单价">
         <input name="reason" placeholder="事由"><button>提交申请</button></form>
       <p class="msg" id="mat-msg"></p>`)}
-    ${panel(`采购流程（${purchases.length}）`,
+    ${panel(`采购流程（${purchaseCount}）`,
       table(["ID", "物资", "规格", "数量", "预估单价", "预估总额", "状态", "合同", "合同金额", "已验收", "操作"], purchases, (p) => {
         let ops = "—";
-        // 驳回原先没有入口（P2-425）：接口收 approved=false 早就置「已取消」，页面只给「审批」，不该买的申请只能一直挂着
-        if (p.status === "requested") ops = canApprove
-          ? `<button class="btn secondary" data-approve="${p.id}">审批</button>
-             <button class="btn danger" data-reject="${p.id}">驳回</button>` : "待管理层审批";
+        // 驳回原先没有入口（P2-425）：接口收 approved=false 早就置「已取消」，页面只给「审批」，不该买的申请只能一直挂着。
+        // 本人提的申请不摆这两个按钮（P2-1506）：审批接口对申请人本人 403「不得审批本人提出的采购申请」，原先照样摆、点了必
+        // 403；是不是本人取清单行的 requested_by_me（页面不知道自己是谁，由后端按同一判据现算）
+        if (p.status === "requested") ops = !canApprove ? "待管理层审批"
+          : p.requested_by_me ? "本人提出，待其他管理层审批"
+          : `<button class="btn secondary" data-approve="${p.id}">审批</button>
+             <button class="btn danger" data-reject="${p.id}">驳回</button>`;
         else if (p.status === "approved") ops = `<button class="btn secondary" data-contract="${p.id}">签合同</button>`;
         else if (p.status === "contracted") ops = `<button class="btn secondary" data-receive="${p.id}">验收</button>`;
         const amt = materialPurchaseAmounts(p);
