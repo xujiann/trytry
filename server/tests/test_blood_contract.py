@@ -12,20 +12,29 @@
 - 四种回执三个形状：库存回执（3 键，插入与累加两条路同形）；申请/审批回执
   （id+status 两键，共用一个模型）；发血回执多一个尾键 `stock_remaining_ml`
   ——键集合不同就分开建模，不互相注入。
-- 列表行 7 键（不含 reason/requested_by 等库里有而出参没有的列），
-  与回执不同形，单独一个模型。
+- 列表行原为 7 键（不含 reason/requested_by 等库里有而出参没有的列）；P2-1469 起末尾补五键（用血原因、申请人姓名、
+  申请时刻、患者姓名、成分文案），原有七键与次序不动。与回执不同形，单独一个模型。
 """
 import pytest
 from fastapi.testclient import TestClient
 
 from conftest import reset_database
 
+from app.database import SessionLocal
 from app.main import app
+from app.models import TransfusionRequest
 
 STOCK_KEYS = ["blood_type", "component", "quantity_ml"]
 RECEIPT_KEYS = ["id", "status"]
 ISSUE_KEYS = ["id", "status", "stock_remaining_ml"]
-REQUEST_ROW_KEYS = ["id", "patient_id", "org_id", "blood_type", "component", "quantity_ml", "status"]
+REQUEST_ROW_KEYS = ["id", "patient_id", "org_id", "blood_type", "component", "quantity_ml", "status",
+                    "reason", "requested_by_name", "created_at", "patient_name", "component_name"]
+
+
+def _created_at(request_id: int) -> str:
+    """申请时刻照库里的值写（isoformat），精确断言不靠猜时间。"""
+    with SessionLocal() as db:
+        return db.get(TransfusionRequest, request_id).created_at.isoformat()
 
 
 @pytest.fixture(scope="module")
@@ -160,20 +169,27 @@ def test_发血回执精确_多一个库存尾键(seed):
 def test_申请列表精确_键序与过滤(client, admin, seed):
     rows = client.get("/api/blood/requests", headers=admin).json()
     assert [list(r.keys()) for r in rows] == [REQUEST_ROW_KEYS] * 3
+    # 末尾五键（P2-1469）：账号建时没填姓名，申请人回落账号；没写原因的是空串
     r3_row = {
         "id": seed["r3"]["id"], "patient_id": seed["patients"][2]["id"],
         "org_id": seed["org"]["id"], "blood_type": "B", "component": "platelet",
         "quantity_ml": 150, "status": "pending",
+        "reason": "血小板减少", "requested_by_name": "blood_doc", "created_at": _created_at(seed["r3"]["id"]),
+        "patient_name": "契约用血患者2", "component_name": "血小板",
     }
     r2_row = {
         "id": seed["r2"]["id"], "patient_id": seed["patients"][1]["id"],
         "org_id": seed["org"]["id"], "blood_type": "O", "component": "plasma",
         "quantity_ml": 100, "status": "rejected",
+        "reason": "", "requested_by_name": "blood_doc", "created_at": _created_at(seed["r2"]["id"]),
+        "patient_name": "契约用血患者1", "component_name": "血浆",
     }
     r1_row = {
         "id": seed["r1"]["id"], "patient_id": seed["patients"][0]["id"],
         "org_id": seed["org"]["id"], "blood_type": "A", "component": "rbc",
         "quantity_ml": 200, "status": "issued",
+        "reason": "术中备血", "requested_by_name": "blood_doc", "created_at": _created_at(seed["r1"]["id"]),
+        "patient_name": "契约用血患者0", "component_name": "红细胞",
     }
     assert rows == [r3_row, r2_row, r1_row]  # id 倒序
     assert client.get("/api/blood/requests?status=issued", headers=admin).json() == [r1_row]

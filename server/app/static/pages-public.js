@@ -234,14 +234,18 @@ async function renderBlood() {
     <p class="msg" id="blood-msg"></p>
     ${panel("血液库存台账", table(["血型", "成分", "库存(ml)"], stocks, (s) =>
       `<tr><td><span class="tag">${esc(s.blood_type)}</span></td><td>${BLOOD_COMPONENTS[s.component] || esc(s.component)}</td><td>${s.quantity_ml}</td></tr>`))}
-    ${panel("用血申请队列", table(["ID", "患者", "机构", "血型/成分", "数量", "状态", "操作"], requests, (r) => {
+    ${panel("用血申请队列", table(["ID", "患者", "机构", "血型/成分", "数量", "申请人", "申请时间", "用血原因", "状态", "操作"], requests, (r) => {
       const actions = r.status === "pending" && ["director", "admin"].includes(role)
         ? `<button class="btn secondary" data-brev="${r.id}" data-ok="true">批准</button>
            <button class="btn danger" data-brev="${r.id}" data-ok="false">驳回</button>`
         : r.status === "approved" && ["operator", "admin"].includes(role)
         ? `<button class="btn secondary" data-bissue="${r.id}">发血</button>` : "—";
-      return `<tr><td>${r.id}</td><td>${r.patient_id}</td><td>${r.org_id}</td>
-        <td>${esc(r.blood_type)} / ${BLOOD_COMPONENTS[r.component] || esc(r.component)}</td><td>${r.quantity_ml}ml</td>
+      // 审批、发血的判断依据摆出来（P2-1469）：原先只印患者号、成分编码查前端表，表单收的用血原因、谁申请的、何时申请的
+      // 都看不到。患者印姓名带编号，成分印后端给的文案（component_name），申请人、申请时间、用血原因取清单出参
+      return `<tr><td>${r.id}</td><td>${esc(r.patient_name || "—")}（#${r.patient_id}）</td><td>${r.org_id}</td>
+        <td>${esc(r.blood_type)} / ${esc(r.component_name)}</td><td>${r.quantity_ml}ml</td>
+        <td>${esc(r.requested_by_name) || "—"}</td><td>${esc(r.created_at.slice(0, 16).replace("T", " "))}</td>
+        <td>${esc(r.reason) || "—"}</td>
         <td>${statusTag(BLOOD_REQ_STATUS, r.status)}</td><td>${actions}</td></tr>`;
     }))}`;
   const bs = $("#bs-form");

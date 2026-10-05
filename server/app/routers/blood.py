@@ -7,13 +7,16 @@ from ..concurrency import add_amount, ensure_present, insert_if_absent, take_amo
 from ..numtypes import INT4_MAX
 from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org_list
 from ..database import get_db
-from ..deps import get_current_user, paginate, require_roles
+from ..deps import get_current_user, paginate, require_roles, rows_by_id
 from ..models import BloodStock, Organization, Patient, TransfusionRequest, User
 
 router = APIRouter(prefix="/api/blood", tags=["血液管理"], dependencies=[Depends(get_current_user)])
 
 _BLOOD_TYPE = "^(A|B|AB|O)$"
 _COMPONENT = "^(rbc|plasma|platelet)$"
+#: 成分文案（P2-1469）：申请清单的 `component_name` 与统一申请单用血行的标题（`workflows.unified_requests`）都取它，
+#: 措辞照模型列注释与页面下拉（`pages-public.js` 的 `BLOOD_COMPONENTS`，test_blood_queue_basis.py 钉住两边一致）
+COMPONENT_NAMES = {"rbc": "红细胞", "plasma": "血浆", "platelet": "血小板"}
 
 
 class BloodStockUpsert(BaseModel):
@@ -56,6 +59,13 @@ class TransfusionRowOut(BaseModel):
     component: str
     quantity_ml: int
     status: str
+    # 以下五项是审批人、发血经办的判断依据（P2-1469），只在末尾增、原有键与次序不动：原先只有上面七个键——表单收了用血
+    # 原因、库里也存了，却没有一个接口返回，审批人只看得到「患者号 / 机构号 / 血型 / 毫升」就要点批准
+    reason: str
+    requested_by_name: str   # 申请人：姓名，没填姓名的回落账号（同仓 `full_name or username`）
+    created_at: str          # 申请时刻：落库时刻的 isoformat，与统一申请单同一写法
+    patient_name: str
+    component_name: str      # 成分文案（`COMPONENT_NAMES`），表外的值原样回显
 
 
 @router.post(
@@ -214,8 +224,15 @@ def list_transfusion_requests(
     q = scope_org_list(db, user, q, TransfusionRequest, org_id)
     if status:
         q = q.filter(TransfusionRequest.status == status)
-    return [
-        {
+    rows = paginate(q.order_by(TransfusionRequest.id.desc()), response, offset, limit)
+    # 申请人、患者的姓名只按本页取、一次 IN（P2-1469；rows_by_id，别逐行 db.get——P2-1157），本页为空就不查，
+    # 与统一申请单给患者名同一个取法（P2-1153）。可见范围仍是上面的 scope_org_list，不另放宽
+    users = rows_by_id(db, User, (r.requested_by for r in rows))
+    patients = rows_by_id(db, Patient, (r.patient_id for r in rows))
+    out = []
+    for r in rows:
+        requester, patient = users.get(r.requested_by), patients.get(r.patient_id)
+        out.append({
             "id": r.id,
             "patient_id": r.patient_id,
             "org_id": r.org_id,
@@ -223,6 +240,10 @@ def list_transfusion_requests(
             "component": r.component,
             "quantity_ml": r.quantity_ml,
             "status": r.status,
-        }
-        for r in paginate(q.order_by(TransfusionRequest.id.desc()), response, offset, limit)
-    ]
+            "reason": r.reason,
+            "requested_by_name": (requester.full_name or requester.username) if requester else "",
+            "created_at": r.created_at.isoformat(),
+            "patient_name": patient.name if patient else "",
+            "component_name": COMPONENT_NAMES.get(r.component, r.component),
+        })
+    return out

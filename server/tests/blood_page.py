@@ -2,7 +2,7 @@
 
 页面函数与它用到的 `table`、`panel`、`currentRole`、`BLOOD_COMPONENTS`、`BLOOD_REQ_STATUS` 都取自源文件原文，只垫最小的
 DOM：`document.querySelector` 按选择器给一个记得住 innerHTML / onsubmit / onclick 的对象，`currentRole()` 读到的角色由调用方
-给。页面的 GET 按地址回放调用方给的响应（没给的回空表），写请求不发。
+给。页面的 GET 按地址回放调用方给的响应（没给的回空表；`responses()` 按页面原样的地址取一遍真接口），写请求不发。
 """
 import json
 import re
@@ -37,6 +37,21 @@ def function_source(source: str, head: str) -> str:
 def top_const(source: str, name: str) -> str:
     """顶层单行常量的原文（`const NAME = …;`）。"""
     return re.search(rf"^const {name} = .*;$", source, re.M).group(0)
+
+
+def page_paths() -> list[str]:
+    """`renderBlood` 里写死的 GET 地址（`api("…")`，不带插值的那几个：库存、最新一页申请、待审批、待发血）。"""
+    return re.findall(r'\bapi\("([^"]+)"\)', function_source(_read("pages-public.js"), "async function renderBlood("))
+
+
+def responses(client, headers) -> dict:
+    """按页面原样的地址、以 `headers` 的身份取一遍真接口，留给 node 里的 `api` 回放（P2-1469 起用）。"""
+    out = {}
+    for path in page_paths():
+        resp = client.get(path, headers=headers)
+        assert resp.status_code == 200, (path, resp.text)
+        out[path] = resp.json()
+    return out
 
 
 def render(role: str, responses: dict | None = None) -> str:

@@ -36,6 +36,7 @@ from ..visibility import (
 )
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_admin, row_dict, rows_by_id
+from .blood import COMPONENT_NAMES
 from ..models import (
     Appointment,
     AppointmentSlot,
@@ -724,9 +725,11 @@ def unified_requests(
 
     blood_q = narrowed("blood", db.query(TransfusionRequest), TransfusionRequest)
     for req in blood_q.all() if blood_q is not None else []:
+        # 标题里的成分写中文（P2-1469 / 第四十三批扫描 AG4-7）：原先印编码「A rbc 400ml」；文案表与用血清单同一份
+        component = COMPONENT_NAMES.get(req.component, req.component)
         items.append(
             _unified("blood", req.id, req.patient_id, req.org_id,
-                     f"{req.blood_type} {req.component} {req.quantity_ml}ml", req.status, req.created_at)
+                     f"{req.blood_type} {component} {req.quantity_ml}ml", req.status, req.created_at)
         )
 
     surg_q = narrowed("surgery", db.query(SurgeryRequest), SurgeryRequest)
