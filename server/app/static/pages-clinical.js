@@ -2375,6 +2375,18 @@ async function renderResources() {
   const [resources, catalog, slotMatch] = await Promise.all([
     api("/api/resources"), api("/api/resources/catalog"), api("/api/resources/match/slots"),
   ]);
+  // 统一资源视图每类各列前 20 行（P2-1507）：原先 `catalog.items.slice(0, 100)`——接口按号源、检查资源、手术间、血制品、通用
+  // 资源的次序拼、每类最多 500 行，号源排最前：一个门诊每天 8 个时段 × 14 天就是 112 个号源，表里 100 行全是号源，计数卡写着
+  // 「手术间 2/2」「通用资源 1/1」，表里一行都没有、也不说截断。接口 docstring 定的是「五类资源一处看全」，每类都得露面；合计
+  // 仍不超过原先的 100 行，没列全的类别写明共几个、列了几个（计数卡照旧取全量的 by_kind），某一类要看全到它自己的模块
+  const CATALOG_PER_KIND = 20;
+  const catalogRows = [];
+  const catalogCut = [];
+  for (const [kind, stat] of Object.entries(catalog.by_kind)) {
+    const shown = catalog.items.filter((i) => i.kind === kind).slice(0, CATALOG_PER_KIND);
+    catalogRows.push(...shown);
+    if (stat.total > shown.length) catalogCut.push(`${stat.name}共 ${stat.total} 个，列前 ${shown.length} 个`);
+  }
   $("#page-body").innerHTML = `
     <div class="cards">
       ${Object.values(catalog.by_kind).map((v) =>
@@ -2405,10 +2417,12 @@ async function renderResources() {
     `)}
     ${panel("统一资源视图", `
       <p class="hint">${esc(catalog.caliber)}</p>
-      ${table(["类别", "名称", "详情", "可用量", "状态"], catalog.items.slice(0, 100), (i) =>
+      ${table(["类别", "名称", "详情", "可用量", "状态"], catalogRows, (i) =>
         `<tr><td>${esc(i.kind_name)}</td><td>${esc(i.name)}</td><td>${esc(i.detail || "—")}</td>` +
         `<td>${i.available === null ? "—" : i.available + esc(i.unit)}</td>` +
         `<td>${i.usable ? '<span class="tag ok">可用</span>' : "不可用"}</td></tr>`)}
+      ${catalogCut.length ? `<p class="desc">每类最多列前 ${CATALOG_PER_KIND} 行，以下几类没列全：${esc(catalogCut.join("；"))}。
+        完整清单请到各自的模块查询。</p>` : ""}
     `)}
     ${panel("号源撮合（未来 14 天）", `
       <p class="hint">${esc(slotMatch.caliber)}</p>
