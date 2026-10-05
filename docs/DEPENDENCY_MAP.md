@@ -77,27 +77,85 @@ spd/reporting.py:211 from .routers.assess import collect_metrics      (报告层
 
 ### 3.4 路由互相 import
 
-**模块顶层（14 处）**：
+（2026-10-05 按 82dbc09 重列：对 `server/app/routers/*.py` 做 AST 扫描，取 `from .<兄弟路由> import …`。此前写的「模块顶层 14 处 / 函数体内延迟 import 40 处、路由↔路由 3 处」是更早的快照，没写日期与 commit。）
+
+**模块顶层（61 处）**：
 ```
-access_logs.py:25   from .portal import current_resident_patient
-esb.py:30-31        from .integration import parse_fhir_patient, parse_hl7v2_patient
-                    from .patients import create_patient_idempotent
-fund.py:44          from .performance import org_scorecards
-integration.py:26   from .chronic import _evaluate_level        # ← import 私有函数
-portal.py:72-74     from .appointments import book_slot, release_appointment
-                    from .chronic import guidance_for
-publichealth.py:19  from .chronic import guidance_for
-reports.py:34       from .performance import org_scorecards
+access_logs.py:27      from .portal import current_resident, current_resident_patient
+analytics.py:40        from .dispense import prescription_not_reversed
+analytics.py:41        from .organizations import ORG_LEVEL_NAMES
+certs.py:20            from .printing import CERT_DATE_LABELS
+certs.py:21            from .reports import _csv_response
+consents.py:49         from .prescriptions import CHILD_AGE_LIMIT, _age_of
+cost.py:36             from .admin_mgmt import DEPT_CATEGORY_NAMES
+dataquality.py:42      from .exams import CRITICAL_STATUS_NAMES
+dispense.py:45         from .prescriptions import PRESCRIPTION_STATUS_NAMES
+encounters.py:22       from .checkups import _abnormal_item_names, abnormal_text as checkup_abnormal_text
+encounters.py:23       from .dispense import prescription_not_reversed
+encounters.py:24       from .patients import find_by_ehc_no
+encounters.py:25       from .prescriptions import PRESCRIPTION_STATUS_NAMES
+esb.py:41              from .integration import parse_fhir_patient, parse_hl7v2_patient
+esb.py:42              from .patients import create_patient_idempotent
+fund.py:47             from .performance import DEFAULT_VOLUME_CAP, org_scorecards
+infectious.py:15       from .reports import _csv_response
+insurance.py:28        from .referrals import STATUS_LABELS as REFERRAL_STATUS_LABELS
+integration.py:66      from .chronic import FIELD_DISEASE, _evaluate_level
+integration.py:67      from .encounters import create_encounter
+integration.py:68      from .dataquality import id_card_invalid_reason
+integration.py:69      from .exams import EXAM_REQUEST_STATUS_NAMES, submit_report
+integration.py:70      from .inpatient import AdmissionCreate, _mark_discharged, _release_bed, create_admission, spawn_discharge_followup
+integration.py:72      from .patients import create_patient_idempotent, id_card_match
+medication.py:16       from .dispense import prescription_not_reversed, q_dispensable_shortage
+metrics.py:33          from .dispense import q_dispensable_shortage
+metrics.py:34          from .encounters import ENCOUNTER_TYPE_NAMES
+metrics.py:35          from .exams import CRITICAL_STATUS_NAMES, EXAM_REQUEST_STATUS_NAMES
+metrics.py:36          from .infectious import INFECTIOUS_CATEGORY_NAMES
+metrics.py:37          from .medwaste import WASTE_STATUS_NAMES, WASTE_TYPES
+metrics.py:38          from .medwaste import overdue_condition as medwaste_overdue_condition
+metrics.py:39          from .prescriptions import PRESCRIPTION_STATUS_NAMES
+metrics.py:40          from .printing import CENTER_NAMES, REFERRAL_DIRECTION_NAMES
+metrics.py:41          from .referrals import STATUS_LABELS as REFERRAL_STATUS_NAMES
+org_groups.py:18       from .organizations import ORG_LEVEL_NAMES
+pathology.py:29        from .exams import EXAM_REQUEST_STATUS_NAMES
+pharmacy.py:64         from .dispense import _claim_batch, _fefo_batches, _required_quantity, batch_available, batch_dispensable, broadcast_if_crossed, broadcast_shortage, dispensable_by_drug, prescription_not_reversed, q_dispensable_shortage, q_stock_dispensable
+portal.py:102          from .appointments import book_slot, release_appointment
+portal.py:103          from .auth import record_login_event
+portal.py:106          from .billing import CHARGE_CATEGORY_NAMES, DEPOSIT_METHODS, DEPOSIT_TYPES, deposit_balance, self_pay_outstanding
+portal.py:107          from .consents import SCENE_PATTERN, ConsentOut, CorrectionOut, active_text_version, consent_out, correction_out, has_active_delegate_consent, require_guardian_for_minor, validate_correction_changes
+portal.py:118          from .notifications import NotificationOut, UnreadCountOut, notification_out
+portal.py:119          from .chronic import guidance_for
+portal.py:120          from .education import ARTICLE_CATEGORY_NAMES
+portal.py:121          from .surgery import room_labels
+printing.py:106        from .referrals import STATUS_LABELS as REFERRAL_STATUS_NAMES
+printing.py:110        from .exams import EXAM_REQUEST_STATUS_NAMES, EXAM_SAMPLE_STATUS_NAMES
+printing.py:111        from .prescriptions import PRESCRIPTION_STATUS_NAMES
+printing.py:112        from .consents import GUARDIAN_RELATION_NAMES
+printing.py:113        from .checkups import abnormal_text as checkup_abnormal_text
+printing.py:114        from .drgs import drg_label
+publichealth.py:22     from .chronic import guidance_for
+publichealth.py:23     from .vaccination import _effective_contraindications
+quality.py:55          from .surgery import operation_day
+reports.py:36          from .performance import DEFAULT_VOLUME_CAP, org_scorecards
+resources.py:44        from .surgery import room_occupancy
+surgery.py:29          from .followups import FOLLOWUP_TITLE_MAX
+telemedicine.py:15     from .dispense import prescription_not_reversed
+telemedicine.py:16     from .prescriptions import PRESCRIPTION_STATUS_NAMES
+todos.py:21            from .dispense import q_dispensable_shortage
+workflows.py:39        from .blood import COMPONENT_NAMES
 ```
 
-**函数体内延迟 import（循环规避标记，40 处，路由↔路由 3 处）**：
+多数是同一口径只在一处定义的取值表与判定帮手（状态中文名、`prescription_not_reversed`、`q_dispensable_shortage` 等，修「前后端 / 多处各维护一份」时收拢过来的）；被引最多的是 `dispense`、`prescriptions`、`exams`。import 下划线开头私有名字的 8 处：certs.py ← reports._csv_response；consents.py ← prescriptions._age_of；encounters.py ← checkups._abnormal_item_names；infectious.py ← reports._csv_response；integration.py ← chronic._evaluate_level；integration.py ← inpatient._mark_discharged/_release_bed；pharmacy.py ← dispense._claim_batch/_fefo_batches/_required_quantity；publichealth.py ← vaccination._effective_contraindications。
+
+**函数体内延迟 import（routers 目录共 13 处，路由↔路由 5 处，都在 `inpatient.py`）**：
 ```
-inpatient.py:292    from .drgs import assign_drg_group        ┐
-inpatient.py:339    from .followups import create_task        ├ discharge() 一个函数
-inpatient.py:379    from .billing import unsettled_amount     ┘ 延迟 import 3 个兄弟路由
+inpatient.py:165       from .followups import DISCHARGE_FOLLOWUP_DAYS, create_task # spawn_discharge_followup()
+inpatient.py:551       from .drgs import assign_drg_group                   # create_case_summary()
+inpatient.py:570       from .drgs import drg_label                          # get_case_summary()
+inpatient.py:629       from .followups import DISCHARGE_FOLLOWUP_DAYS       # discharge_admission()
+inpatient.py:660       from .billing import unsettled_amount                # _assert_billing_settled()
 ```
 
-**唯一做对的解耦**：`events.py` 事件总线（`inpatient.py:364`/`encounters.py:40` publish，spd subscribers 订阅，单向）——但全库只用了 2 次。
+**唯一做对的解耦**：`events.py` 事件总线（`encounters.py:53` / `inpatient.py:317` 发 `ENCOUNTER_CREATED`，`inpatient.py:643` / `integration.py:1002` 发 `ADMISSION_DISCHARGED`，spd subscribers 订阅，单向）——全库只有这 4 处发布。
 
 ## 4. 主 app ↔ spd 子系统耦合
 
