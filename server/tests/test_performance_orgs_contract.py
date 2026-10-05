@@ -131,7 +131,8 @@ def _card(payload, org_id):
 def test_顶层三段_period必须回给前端(client, admin, seeded):
     """分数从"累计"改成"周期内"之后，不标周期的数字没法解读，故 period 必须回传。"""
     payload = client.get("/api/performance/orgs", headers=admin).json()
-    assert set(payload) == {"period", "weights", "scorecards"}
+    # 原有三段键与次序不动，末尾只增各维度名称与归一化权重（P2-1510，见 test_performance_dimension_headers）
+    assert list(payload) == ["period", "weights", "scorecards", "dimensions"]
     assert payload["period"] == str(date.today().year), "缺省为当年"
 
 

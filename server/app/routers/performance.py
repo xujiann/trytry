@@ -87,6 +87,18 @@ def _normalized_weights(db: Session) -> dict[str, float]:
     return {k: round(w / total * 100, 2) for k, w in raw.items()}
 
 
+def _dimensions(db: Session, weights: dict[str, float]) -> list[dict[str, Any]]:
+    """各计分维度的名称与归一化权重（P2-1510），供考核页的维度表头用。
+
+    名称取指标目录（「绩效指标调权」页可改名；表里没有的退回 `DEFAULT_INDICATORS` 的名称），权重取 `weights`——停用或权重为 0
+    的维度不在其中，记 0.0、不计分（`weights` 里舍入成 0.0 的同样一分不贡献）。顺序同 `DEFAULT_INDICATORS`，表里多出来的键按
+    编号排在后面。
+    """
+    names = {key: str(meta["name"]) for key, meta in DEFAULT_INDICATORS.items()}
+    names.update({row.key: row.name for row in db.query(PerformanceIndicator).order_by(PerformanceIndicator.id)})
+    return [{"key": key, "name": name, "weight": weights.get(key, 0.0)} for key, name in names.items()]
+
+
 class IndicatorPatch(BaseModel):
     weight: FiniteFloat | None = Field(default=None, ge=0)
     # 列长（P1-91 第四层：按指标键查出来再改，原先判据看不见）；给了就不能是空白（P2-472：页面补了「改名」，
@@ -200,6 +212,15 @@ class OrgScorecard(BaseModel):
     detail: ScorecardDetail
 
 
+class ScoringDimension(BaseModel):
+    """一个计分维度的名称与归一化权重（P2-1510，见 `_dimensions`）。"""
+
+    key: str
+    name: str
+    #: 与 `weights` 同值；停用或权重为 0 的维度不进 `weights`，这里是 0.0——不计分
+    weight: float
+
+
 class OrgScorecardsOut(BaseModel):
     #: 本次计分覆盖的考核周期（YYYY 或 YYYY-MM）。**必须回给前端**——
     #: 分数从"开天辟地累计"改成"周期内"之后，不标周期的数字是没法解读的。
@@ -208,6 +229,9 @@ class OrgScorecardsOut(BaseModel):
     #: 只能写 dict[str, float]，不能逐个字段写死。
     weights: dict[str, float]
     scorecards: list[OrgScorecard]
+    #: 各维度的名称与归一化权重（P2-1510，只增键、排在最后）：考核页的维度表头原先写死，「绩效指标调权」页改的名字到不了
+    #: 考核页，停用或权重为 0 的维度照样占一列、看不出它不计分
+    dimensions: list[ScoringDimension]
 
 
 #: 量类维度的缺省封顶次数（L-1）：绩效页、运营月报导出、基金池的计分口径都以它为缺省，只写这一处
@@ -420,7 +444,7 @@ def org_scorecards(
             }
         )
     results.sort(key=lambda r: float(r["score"]), reverse=True)
-    return {"period": period, "weights": weights, "scorecards": results}
+    return {"period": period, "weights": weights, "scorecards": results, "dimensions": _dimensions(db, weights)}
 
 
 # ===========================================================================

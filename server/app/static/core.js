@@ -950,6 +950,11 @@ async function renderPerformance() {
   // 口径变更后分数只统计考核周期内的业务量，页面必须说清是哪一期
   $("#page-desc").textContent =
     `${$("#page-desc").textContent}｜当前评分周期：${data.period}`;
+  // 维度表头取后端的名称与归一化权重（P2-1510）：原先写死五个名字，「绩效指标调权」页改的名到不了这里，停用或权重为 0 的维度
+  // 照样占一列、看不出它不计分。列照旧五列（明细照常列出），不计分的在表头标出来
+  const dims = Object.fromEntries(data.dimensions.map((x) => [x.key, x]));
+  const dimHead = (key, note = "") =>
+    `${dims[key].name}${note}${dims[key].weight ? `（权重 ${dims[key].weight}%）` : "（不计分）"}`;
   $("#page-body").innerHTML = `
     ${panel("上报报表导出（管理层）", `
       <p style="margin-bottom:8px">
@@ -976,7 +981,8 @@ async function renderPerformance() {
         「期末综合绩效报告」走的是自定义公式，<b>两者不可比</b>。${PERF_FILTER.group_id
           ? "选了分组时，<b>排名是分组内的排名</b>。" : ""}</p>
       ${data.scorecards.length ? barChart(data.scorecards.map((c) => [c.org_name, c.score]), { unit: " 分" }) : "暂无数据"}`)}
-    ${panel("", table(["排名", "机构", "层级", "总分", "转诊结案", "共享诊断(申请/出报告)", "慢病随访", "处方合格(可审)", "家医履约"],
+    ${panel("", table(["排名", "机构", "层级", "总分", dimHead("referral"), dimHead("remote_exam", "(申请/出报告)"),
+      dimHead("chronic"), dimHead("rx", "(可审)"), dimHead("contract")],
       data.scorecards, (c, i) => {
         const d = c.detail;
         return `<tr><td>${data.scorecards.indexOf(c) + 1}</td><td>${esc(c.org_name)}</td><td>${esc(LEVELS[c.level] || c.level)}</td>
