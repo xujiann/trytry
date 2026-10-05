@@ -208,23 +208,26 @@ async function renderBlood() {
   const actionableIds = new Set([...pending, ...approved].map((r) => r.id));
   const requests = [...pending, ...approved, ...recent.filter((r) => !actionableIds.has(r.id))];
   const role = currentRole();
-  const typeOpts = ["A", "B", "AB", "O"].map((t) => `<option>${t}</option>`).join("");
-  const compOpts = Object.entries(BLOOD_COMPONENTS).map(([v, t]) => `<option value="${v}">${t}</option>`).join("");
+  // 血型、成分首项为空、必选（P2-1468，同消毒供应申领机构 P2-1443）：原先两个下拉不给空项，不动它交上去就是「A」「红细胞」，
+  // 后端照收——医师忘了改，申请就成了 A 型；血库经办忘了改，B 型血记进 A 型的账。入库、申请两张表单共用这两串选项
+  const typeOpts = `<option value="">请选择血型</option>${["A", "B", "AB", "O"].map((t) => `<option>${t}</option>`).join("")}`;
+  const compOpts = `<option value="">请选择成分</option>${
+    Object.entries(BLOOD_COMPONENTS).map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}`;
   // ADR-0009 第四批：面板外壳改用 `panel()`（定义见 core.js），迁一页、人工过一页。
   // 两个表单面板按角色条件渲染，条件仍留在调用点。
   $("#page-body").innerHTML = `
     ${["operator", "admin"].includes(role) ? panel("血库入库登记（经办）", `
       <form class="inline" id="bs-form">
-        <select name="blood_type">${typeOpts}</select>
-        <select name="component">${compOpts}</select>
+        <select name="blood_type" required>${typeOpts}</select>
+        <select name="component" required>${compOpts}</select>
         <input name="quantity_ml" type="number" min="1" placeholder="数量(ml)" required>
         <button>入库</button></form>`) : ""}
     ${["doctor", "admin"].includes(role) ? panel("临床用血申请（医师）", `
       <form class="inline" id="br-form">
         <input name="patient_id" type="number" placeholder="患者ID" required>
         <input name="org_id" type="number" placeholder="用血机构ID" required>
-        <select name="blood_type">${typeOpts}</select>
-        <select name="component">${compOpts}</select>
+        <select name="blood_type" required>${typeOpts}</select>
+        <select name="component" required>${compOpts}</select>
         <input name="quantity_ml" type="number" min="1" placeholder="数量(ml)" required>
         <input name="reason" placeholder="用血原因">
         <button>申请</button></form>`) : ""}
