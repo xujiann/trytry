@@ -1171,9 +1171,13 @@ async function renderEducation() {
           ? `<button class="btn secondary" data-liverec="${s.id}">${s.recording_url ? "换回放" : "上传回放"}</button>
              <button class="btn secondary" data-livefb="${s.id}">评价</button>
              <button class="btn secondary" data-livefbs="${s.id}">看评价</button>` : "";
+        // 回放只给 http(s) 地址画链接（P2-1429）：原先非空即放进 href——CSP 放行了 'unsafe-inline'，javascript: 链接点了会在
+        // 本站执行，只做 esc() 挡不住。存量的非 http(s) 地址照原样转义成文字、不做 href
+        const replay = isHttpUrl(s.recording_url)
+          ? `<a href="${esc(s.recording_url)}" target="_blank" rel="noopener">回放</a>` : esc(s.recording_url) || "—";
         return `<tr><td>${s.id}</td><td>${esc(s.title)}</td><td>${esc(s.speaker) || "—"}</td><td>${esc(s.planned_at) || "—"}</td>
           <td>${statusTag(LS, s.status)}</td><td>${esc(s.review_comment) || "—"}</td>
-          <td>${s.recording_url ? `<a href="${esc(s.recording_url)}" target="_blank" rel="noopener">回放</a>` : "—"}</td>
+          <td>${replay}</td>
           <td>${actions + after || "—"}</td></tr>`;
       })}
       <div id="live-detail"></div>`)}
@@ -3458,7 +3462,7 @@ async function renderBilling() {
         // 受理成功也报「支付失败：」后面跟个空原因，付款链接 / 二维码串（只在这张回执里带回来）一并丢掉
         setMsg("#pay-msg", `已受理，待网关回调确认到账（流水号 ${order.trade_no || "—"}）${
           order.qr_code ? `；二维码串 ${order.qr_code}` : ""}`);
-        if (/^https?:\/\//i.test(order.pay_url || "")) {   // 只认 http(s)，别让网关应答里的 javascript: 链接进页面
+        if (isHttpUrl(order.pay_url)) {   // 只认 http(s)，别让网关应答里的 javascript: 链接进页面
           const link = document.createElement("a");
           link.href = order.pay_url;
           link.target = "_blank";

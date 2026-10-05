@@ -185,6 +185,7 @@ def _run(responses: dict, course_id: int) -> dict:
         "globalThis.FormData = class { constructor(form) { this.form = form; } get(name) { return this.form[name]; } };\n"
         + _src("shared.js")
         + _function(core, "function table(") + _function(core, "function panel(") + _function(core, "function setMsg(")
+        + _optional_function(core, "function isHttpUrl(")   # P2-1429 把三处 http(s) 判据收成了它
         + _function(clinical, "async function drawAttachments(")
         + re.search(r"^const MATERIAL_TYPES = .*;$", public, re.M).group(0) + "\n"
         + _optional_function(public, "function playMaterial(")

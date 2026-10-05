@@ -42,10 +42,10 @@ router = APIRouter(prefix="/api/education", tags=["远程医学教育"], depende
 
 PASS_SCORE = 60
 
-#: 外链地址只认 http(s)（P2-1428）：页面把课件外链画成可点的链接、「点播」直接开它——`javascript:` / `data:` 链接点开是在本站
-#: 执行脚本（main.py 的 CSP 为免构建的内联脚本放行了 'unsafe-inline'，页面只做 esc() 挡不住），相对路径、ftp: 打不开或开出来
-#: 的是本站别的页面。与页面的 /^https?:\/\//i（收银页 pay_url，P2-1021）同一判据：前缀、不分大小写、只认 ASCII 字母
-#: （re.ASCII：不让 Python 把 ſ 也当成 s）
+#: 外链地址只认 http(s)（P2-1428 课件外链、P2-1429 直播回放）：页面把它们画成可点的链接、「点播」直接开它——`javascript:` /
+#: `data:` 链接点开是在本站执行脚本（main.py 的 CSP 为免构建的内联脚本放行了 'unsafe-inline'，页面只做 esc() 挡不住），
+#: 相对路径、ftp: 打不开或开出来的是本站别的页面。与页面 core.js 的 isHttpUrl（收银页 pay_url 的 P2-1021 口径）同一判据：
+#: 前缀、不分大小写、只认 ASCII 字母（re.ASCII：不让 Python 把 ſ 也当成 s）
 _HTTP_URL = re.compile(r"^https?://", re.IGNORECASE | re.ASCII)
 
 
@@ -288,7 +288,13 @@ def finish_live(session_id: int, db: Session = Depends(get_db)):
 
 
 class LiveRecording(BaseModel):
+    # 回放地址只收 http(s)（P2-1429）：原先只判非空，`javascript:` / `data:` / 相对路径 / ftp: 一律 200，直播表原样放进 href
     recording_url: str = Field(min_length=1, max_length=512, pattern=NON_BLANK)
+
+    @field_validator("recording_url")
+    @classmethod
+    def _recording_url(cls, value: str) -> str:
+        return _check_http_url(value, "回放地址")
 
 
 class LiveRecordingOut(BaseModel):

@@ -1105,10 +1105,10 @@ async function drawCssdCosts() {
 const MATERIAL_TYPES = { slide: "课件", video: "视频", doc: "文档", link: "外链" };
 
 /* 课件「点播」= 打开并计一次（P2-1428）：有 http(s) 外链的先开外链、再发计数。开窗必须在点击手势里同步做（await 之后再开
- * 会被弹窗拦截，与 openPrintPage 同一口径），所以单列成函数、window.open 写在发请求之前。只认 http(s)（同收银页 pay_url，
- * P2-1021）——javascript: 链接打开是在本站执行；noopener：外链页拿不到本页的 window.opener */
+ * 会被弹窗拦截，与 openPrintPage 同一口径），所以单列成函数、window.open 写在发请求之前。只认 http(s)（isHttpUrl，同收银页
+ * pay_url）——javascript: 链接打开是在本站执行；noopener：外链页拿不到本页的 window.opener */
 function playMaterial(id, url) {
-  if (/^https?:\/\//i.test(url || "")) window.open(url, "_blank", "noopener");
+  if (isHttpUrl(url)) window.open(url, "_blank", "noopener");
   return api(`/api/education/materials/${id}/play`, { method: "POST" });
 }
 
@@ -1155,7 +1155,7 @@ async function drawEduGaps() {
     holder.querySelector("#cm-list").innerHTML = table(["ID", "标题", "类型", "外链", "附件", "点播", "操作"], list, (m) => {
       // 外链只给 http(s) 画成链接（P2-1428）：原先清单根本不读 m.url——视频、PPT 只能填外链（附件只收图片与 PDF），填进去
       // 哪儿都看不到。存量里别的协议照原样转义成文字、不做 href：CSP 放行了 'unsafe-inline'，javascript: 链接点了会在本站执行
-      const link = /^https?:\/\//i.test(m.url || "");
+      const link = isHttpUrl(m.url);
       // 「点播」= 打开并计一次：有外链的开外链，没有外链但有附件的展开附件清单；两样都没有，没有可点播的
       const play = link || m.attachments
         ? `<button class="btn secondary" data-play="${m.id}"${link ? ` data-url="${esc(m.url)}"` : ""}>点播</button>` : "—";
