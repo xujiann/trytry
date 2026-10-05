@@ -7,8 +7,8 @@
 http(s)」（P2-1021）的口径不一致。
 
 修后：接口只收 http(s)（不分大小写），其余 422、中文报错；存量的照原样读出。「回放」列只给 http(s) 画链接，存量的非 http(s)
-地址照原样转义成文字、不做 href。页面上判 http(s) 收成 core.js 的 `isHttpUrl` 一处（收银页付款链接、课件外链、直播回放
-三处共用）。直播的归属与权限（谁能审、谁能挂回放）不在这一条。
+地址照原样转义成文字、不做 href。页面上判 http(s) 收成一处 `isHttpUrl`（收银页付款链接、课件外链、直播回放三处共用；P2-1465
+居民端宣教资料链接也要判，从 core.js 挪到了三端都加载的 shared.js）。直播的归属与权限（谁能审、谁能挂回放）不在这一条。
 """
 import json
 import re
@@ -141,7 +141,7 @@ def live_rows(client, admin, staff):
         "globalThis.document = { addEventListener() {}, querySelector: el, cookie: '' };\n"
         + _src("shared.js")
         + _function(core, "function table(") + _function(core, "function panel(")
-        + _optional_function(core, "function isHttpUrl(")   # 修前没有
+        + _optional_function(core, "function isHttpUrl(")   # 修前没有；P2-1465 起在上面整份加载的 shared.js 里，这里取成空串
         + "function currentRole() { return 'director'; }\n"
         + _function(_src("pages-clinical.js"), "async function renderEducation(")
         + "const RESPONSES = JSON.parse(process.argv[1]);\n"
@@ -180,14 +180,17 @@ def test_存量的非http_s回放地址转义成文字_不做href(live_rows):
         assert replay[ids[key]] == _esc(url), (key, replay[ids[key]])   # 修前 <a href="javascript:…">回放</a>
 
 
-def test_页面判http_s只有core_js一处_收银页付款链接也走它():
-    """三处（收银页付款链接 P2-1021、课件外链 P2-1428、直播回放 P2-1429）共用 core.js 的 isHttpUrl；正则只写在它里面。"""
-    core = strip_comments(_src("core.js"))
-    helper = _function(core, "function isHttpUrl(")
+def test_页面判http_s只有shared_js一处_收银页付款链接也走它():
+    """收银页付款链接 P2-1021、课件外链 P2-1428、直播回放 P2-1429 与居民端宣教资料链接 P2-1465 共用一个 isHttpUrl；正则只写在
+    它里面。它原先在 core.js（只有管理端用），居民端也要判之后挪到了三端都加载的 shared.js。"""
+    shared = strip_comments(_src("shared.js"))
+    helper = _function(shared, "function isHttpUrl(")
     assert "return /^https?:\\/\\//i.test(url || \"\");" in helper
-    defined = [p.name for p in sorted(STATIC.rglob("*.js")) if "function isHttpUrl(" in p.read_text(encoding="utf-8")]
-    assert defined == ["core.js"], defined
-    for name in ("pages-clinical.js", "pages-public.js", "shared.js"):
+    defined = [str(p.relative_to(STATIC)) for p in sorted(STATIC.rglob("*.js"))
+               if "function isHttpUrl(" in p.read_text(encoding="utf-8")]
+    assert defined == ["shared.js"], defined
+    assert shared.count("/^https?:\\/\\//i") == 1, "shared.js 里在 isHttpUrl 之外又写了一份 http(s) 判据"
+    for name in ("core.js", "pages-clinical.js", "pages-public.js", "pages-mgmt.js", "pages-spd.js", "m/m.js", "m/doctor.js"):
         assert "/^https?:\\/\\//i" not in strip_comments(_src(name)), f"{name} 里又自己写了一份 http(s) 判据"
     clinical = strip_comments(_src("pages-clinical.js"))
     assert "if (isHttpUrl(order.pay_url)) {" in clinical   # 收银页只换调用、不改行为

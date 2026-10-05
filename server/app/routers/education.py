@@ -1,5 +1,4 @@
 """⑳远程医学教育（含㉑适宜技术培训考核）：课程、学习/考核记录。"""
-import re
 from typing import cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -35,27 +34,12 @@ from ..models import (
 )
 from sqlalchemy.exc import IntegrityError
 from ..datetypes import DateStr, OptionalDateTimeStr
-from ..texttypes import NON_BLANK
+from ..texttypes import NON_BLANK, check_http_url
 from ..visibility import assert_obj_org_writable, assert_org_visible, assert_org_writable
 
 router = APIRouter(prefix="/api/education", tags=["远程医学教育"], dependencies=[Depends(get_current_user)])
 
 PASS_SCORE = 60
-
-#: 外链地址只认 http(s)（P2-1428 课件外链、P2-1429 直播回放）：页面把它们画成可点的链接、「点播」直接开它——`javascript:` /
-#: `data:` 链接点开是在本站执行脚本（main.py 的 CSP 为免构建的内联脚本放行了 'unsafe-inline'，页面只做 esc() 挡不住），
-#: 相对路径、ftp: 打不开或开出来的是本站别的页面。与页面 core.js 的 isHttpUrl（收银页 pay_url 的 P2-1021 口径）同一判据：
-#: 前缀、不分大小写、只认 ASCII 字母（re.ASCII：不让 Python 把 ſ 也当成 s）
-_HTTP_URL = re.compile(r"^https?://", re.IGNORECASE | re.ASCII)
-
-
-def _check_http_url(value: str, label: str) -> str:
-    """外链地址收空串或 http(s) 开头的（判据见 `_HTTP_URL`），其余 422。空串放过——必不必填由字段自己的约束定。
-    只挂在入参上：存量的非 http(s) 地址出参照原样读出，不让清单 500。"""
-    if value and not _HTTP_URL.match(value):
-        raise ValueError(f"{label}须以 http:// 或 https:// 开头")
-    return value
-
 
 class CourseCreate(BaseModel):
     title: str = Field(min_length=1, max_length=256, pattern=NON_BLANK)
@@ -294,7 +278,7 @@ class LiveRecording(BaseModel):
     @field_validator("recording_url")
     @classmethod
     def _recording_url(cls, value: str) -> str:
-        return _check_http_url(value, "回放地址")
+        return check_http_url(value, "回放地址")   # 判据见 texttypes.HTTP_URL
 
 
 class LiveRecordingOut(BaseModel):
@@ -445,7 +429,7 @@ class MaterialCreate(BaseModel):
     @field_validator("url")
     @classmethod
     def _url(cls, value: str) -> str:
-        return _check_http_url(value, "外链地址")
+        return check_http_url(value, "外链地址")   # 判据见 texttypes.HTTP_URL
 
 
 def _material_out(m: CourseMaterial, attachments: int = 0) -> dict:

@@ -37,9 +37,9 @@ def test_回执分三态_受理写待回调_链接只认http():
     failed = body.index("`支付失败：${order.fail_reason}`")
     assert pending < failed   # 修前没有 pending 这一支，受理成功落进「支付失败」
     assert "已受理，待网关回调确认到账" in body and "order.qr_code" in body
-    # 判据收进了 core.js 的 isHttpUrl（P2-1429：课件外链、直播回放与这里共用一处），只换调用、不改判据
+    # 判据收进了 isHttpUrl（P2-1429：课件外链、直播回放与这里共用一处；P2-1465 居民端也要判，挪到 shared.js），只换调用、不改判据
     assert "if (isHttpUrl(order.pay_url)) {" in body
-    core = (Path(__file__).resolve().parents[1] / "app" / "static" / "core.js").read_text(encoding="utf-8")
-    helper = core[core.index("function isHttpUrl(url) {"):]
+    shared = (Path(__file__).resolve().parents[1] / "app" / "static" / "shared.js").read_text(encoding="utf-8")
+    helper = shared[shared.index("function isHttpUrl(url) {"):]
     assert helper[:helper.index("\n}\n")].endswith('return /^https?:\\/\\//i.test(url || "");')
     assert "innerHTML" not in body   # 网关应答里的串一律按文本 / DOM 节点放，不拼 HTML

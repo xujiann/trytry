@@ -1628,14 +1628,20 @@ async function renderSpdRevisits(box) {
 
 async function renderSpdEdu(box) {
   const rows = await authApi(`/api/portal/spd/edu${spdQuery()}`);
-  box.innerHTML = rows.map((p) => `<div class="m-card">
+  box.innerHTML = rows.map((p) => {
+    // 资料链接只给 http(s) 画成可点的（P2-1465）：原先非空即放进 href——CSP 放行了 'unsafe-inline'，javascript: 链接点了
+    // 会在居民端执行，只做 esc() 挡不住。存量的非 http(s) 地址照原样转义成文字、不做 href
+    const media = isHttpUrl(p.media_url)
+      ? `<a href="${esc(p.media_url)}" target="_blank" rel="noopener">${esc(p.media_type_name || "查看")}</a>` : esc(p.media_url);
+    return `<div class="m-card">
     ${kv("标题", esc(p.title || "（素材已删除）"))}
     ${p.content ? kv("内容", esc(p.content)) : ""}
-    ${p.media_url ? kv("资料", `<a href="${esc(p.media_url)}" target="_blank" rel="noopener">${esc(p.media_type_name || "查看")}</a>`) : ""}
+    ${p.media_url ? kv("资料", media) : ""}
     ${kv("推送时间", esc((p.created_at || "").slice(0, 16).replace("T", " ")))}
     ${kv("状态", p.status === "read" ? '<span class="tag green">已读</span>' : '<span class="tag orange">未读</span>')}
     ${p.status === "read" ? "" : `<button type="button" class="ghost-btn" data-spd-edu-read="${p.id}">标记已读</button>`}
-  </div>`).join("") || '<p class="empty">暂无宣教推送</p>';
+  </div>`;
+  }).join("") || '<p class="empty">暂无宣教推送</p>';
   box.querySelectorAll("[data-spd-edu-read]").forEach((btn) => {
     btn.addEventListener("click", async () => {
       try {

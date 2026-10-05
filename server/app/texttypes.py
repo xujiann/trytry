@@ -48,6 +48,22 @@ def split_list(value: str | None) -> list[str]:
     return [part.strip() for part in _LIST_SEPARATORS.split(value or "") if part.strip()]
 
 
+#: 外链地址只认 http(s)（P2-1428 课件外链、P2-1429 直播回放、P2-1465 慢专病宣教资料）：页面把它们画成可点的链接——
+#: `javascript:` / `data:` 链接点开是在本站执行脚本（main.py 的 CSP 为免构建的内联脚本放行了 'unsafe-inline'，页面只做
+#: esc() 挡不住），相对路径、ftp: 打不开或开出来的是本站别的页面。与前端 shared.js 的 isHttpUrl（收银页 pay_url 的 P2-1021
+#: 口径）同一判据：前缀、不分大小写、只认 ASCII 字母（re.ASCII：不让 Python 把 ſ 也当成 s）。放这里而不是某个路由里：平台的
+#: 远程教育与慢专病子系统都要用，子系统只许依赖白名单里的平台模块（tests/test_spd_boundary.py），本模块在白名单上
+HTTP_URL = re.compile(r"^https?://", re.IGNORECASE | re.ASCII)
+
+
+def check_http_url(value: str, label: str) -> str:
+    """外链地址收空串或 http(s) 开头的（判据见 `HTTP_URL`），其余抛 ValueError——挂在 pydantic 校验器里即 422 中文报错。
+    空串放过：必不必填由字段自己的约束定。只挂在入参上：存量的非 http(s) 地址出参照原样读出，不让清单 500。"""
+    if value and not HTTP_URL.match(value):
+        raise ValueError(f"{label}须以 http:// 或 https:// 开头")
+    return value
+
+
 def _drop_format_chars(value: str) -> str:
     """去掉 Unicode 类别为 Cf（格式字符）的码点：零宽空格 U+200B、零宽（不）连字 U+200C / U+200D、左右向标记与嵌入
     U+200E / U+200F / U+202A–U+202E、词连接符等 U+2060–U+2064、BOM U+FEFF、软连字符 U+00AD……（P2-1145）。

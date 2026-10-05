@@ -182,21 +182,6 @@ function setMsg(id, text, ok = true) {
   if (el) { el.textContent = text; el.className = `msg ${ok ? "ok" : "err"}`; }
 }
 
-/**
- * 接口给的地址是不是 http(s)：画成链接（href）、`window.open` 之前先过这一道（P2-1429）。
- *
- * main.py 的 CSP 为免构建的内联脚本放行了 'unsafe-inline'，`javascript:` 链接点了会在本站执行——只做 `esc()` 挡不住
- * （它转的是引号与尖括号，不管协议）；`data:`、相对路径也不该当外链开。判据是前缀、不分大小写，原样取自收银页付款链接
- * （P2-1021），与后端 `education._HTTP_URL` 同一口径。收银页付款链接、课件外链（P2-1428）、直播回放（P2-1429）三处共用，
- * 一处判据、一处审查点。
- *
- * 放 core.js 不放 shared.js：用它的三处都在管理端；shared.js 只放三端真的都在用的（判据见 `statusTag` 的注释）。
- * 居民端 / 医生端哪天也要判（例如居民端的宣教资料链接），再挪过去。
- */
-function isHttpUrl(url) {
-  return /^https?:\/\//i.test(url || "");
-}
-
 /* ---------------- 页面定义 ---------------- */
 
 const ROLE_NAMES = { admin: "平台管理员", director: "管理层", doctor: "医师", pharmacist: "药师", public_health: "公卫人员", operator: "经办人员" };

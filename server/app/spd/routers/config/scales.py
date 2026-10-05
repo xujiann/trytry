@@ -7,7 +7,7 @@ from typing import Any
 from secrets import token_urlsafe
 
 from fastapi import Depends, HTTPException, Request, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -15,7 +15,7 @@ from ....database import get_db
 from ....patchtypes import UNSET
 from ....deps import paginate, require_roles, keyword_like
 from ....numtypes import INT4_MAX, INT4_MIN, MONEY_MAX, MoneyFloat
-from ....texttypes import NON_BLANK
+from ....texttypes import NON_BLANK, check_http_url
 from ...models import (
     SpdEduMaterial,
     SpdScale,
@@ -285,8 +285,15 @@ class EduIn(BaseModel):
     program_code: str = Field(default="", max_length=32)
     media_type: str = Field(default="text", pattern="^(text|audio|video)$")
     content: str = Field(default="", max_length=8192)
+    # 资料地址只收空串或 http(s)（P2-1465）：居民端「我的宣教」把它原样画成可点的链接，原先什么都收——`javascript:` 链接点开
+    # 是在居民端执行脚本（CSP 放行了 'unsafe-inline'），相对路径开出来的是本站别的页面。判据与课件外链、直播回放同一处
     media_url: str = Field(default="", max_length=256)
     dept: str = Field(default="", max_length=64)
+
+    @field_validator("media_url")
+    @classmethod
+    def _media_url(cls, value: str) -> str:
+        return check_http_url(value, "资料地址")   # 判据见 texttypes.HTTP_URL
 
 
 @router.post("/edu-materials", response_model=EduMaterialOut, status_code=201,
@@ -345,6 +352,12 @@ class EduPatch(BaseModel):
     dept: str = Field(default=UNSET, max_length=64)
     active: bool = Field(default=UNSET)
     program_code: str = Field(default=UNSET, max_length=32)
+
+    @field_validator("media_url")
+    @classmethod
+    def _media_url(cls, value: str) -> str:
+        """改档同建档（P2-1465）：不传即不改（缺省的 UNSET 不过校验器），传了就只收空串或 http(s)。"""
+        return check_http_url(value, "资料地址")
 
 
 @router.patch("/edu-materials/{material_id}", response_model=EduMaterialOut,

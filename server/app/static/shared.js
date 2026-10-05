@@ -84,6 +84,21 @@ function statusTag(map, key) {
 }
 
 /**
+ * 接口给的地址是不是 http(s)：画成链接（href）、`window.open` 之前先过这一道（P2-1429）。
+ *
+ * main.py 的 CSP 为免构建的内联脚本放行了 'unsafe-inline'，`javascript:` 链接点了会在本站执行——只做 `esc()` 挡不住
+ * （它转的是引号与尖括号，不管协议）；`data:`、相对路径也不该当外链开。判据是前缀、不分大小写，原样取自收银页付款链接
+ * （P2-1021），与后端 `texttypes.HTTP_URL` 同一口径。管理端的收银页付款链接、课件外链（P2-1428）、直播回放（P2-1429）
+ * 与居民端「我的宣教」的资料链接（P2-1465）共用，一处判据、一处审查点。
+ *
+ * 原先放在 core.js（用它的三处都在管理端），注释里写明了「居民端哪天也要判，再挪过来」——居民端的宣教资料链接就是那一天。
+ * 医生端眼下不画接口给的外链；它也加载本文件，哪天要画直接用，别再抄一份正则。
+ */
+function isHttpUrl(url) {
+  return /^https?:\/\//i.test(url || "");
+}
+
+/**
  * 读取一个**非 HttpOnly** Cookie 的值（G3 令牌 Cookie 化）。
  *
  * 三套前端都要用它取双提交 CSRF token（medplat_csrf / medplat_portal_csrf），
