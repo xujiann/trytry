@@ -14,6 +14,7 @@ from ..models import ChildRecord, MedicalCert, Organization, Patient, User
 from ..datetypes import DateStr, before_birth_problem
 from ..texttypes import NON_BLANK
 from ..privacy import mask_id_card, mask_phone
+from .printing import CERT_DATE_LABELS
 from .reports import _csv_response
 
 router = APIRouter(prefix="/api/certs", tags=["法定医学证明"], dependencies=[Depends(get_current_user)])
@@ -74,9 +75,17 @@ def issue_cert(
     patient = db.get(Patient, body.patient_id) if body.patient_id is not None else None
     if body.patient_id is not None and patient is None:
         raise HTTPException(status_code=404, detail="患者不存在")
-    # 死亡日期早于出生日期的不签（P2-940）：原先 1940 年生的人签发 1930 年死亡照收，死因报告卡照导出去网报
-    if body.cert_type == "death" and patient is not None:
-        before_birth = before_birth_problem(body.event_date, patient.birth_date, "死亡日期")
+    # 三类证明的日期都不得晚于今天（P2-1538，与发病日期 P2-454 / 接种日期 P2-1304 / 分娩日期 P2-1305 同一句）：记的都是
+    # 已经发生的出生、死亡、缺陷，原先只查格式——2027 年的出生证明、死亡证明、缺陷登记都签得出；死亡日期敲成明年，按死亡
+    # 日期筛的死因报告卡月度导出本月导不到，到那个月才冒出来，等于漏报。日期的叫法与打印件同一套（P2-1242）
+    date_label = CERT_DATE_LABELS.get(body.cert_type, "事件日期")
+    if body.event_date > clock.today().isoformat():
+        raise HTTPException(status_code=422, detail=f"{date_label}（{body.event_date}）不得晚于今天")
+    # 死亡日期早于出生日期的不签（P2-940）：原先 1940 年生的人签发 1930 年死亡照收，死因报告卡照导出去网报。
+    # 缺陷登记挂了患者同样拿出生日期当下界（P2-1538）：原先 2026-09-20 出生的孩子挂一张 2026-01-01 的缺陷登记照收。
+    # 出生证明与所挂档案出生日期的核对随 P2-1330 / P2-435 待裁定，不在这里
+    if body.cert_type in ("death", "defect") and patient is not None:
+        before_birth = before_birth_problem(body.event_date, patient.birth_date, date_label)
         if before_birth:
             raise HTTPException(status_code=422, detail=before_birth)
     if body.cert_type == "death" and not body.detail.strip():   # 一串空格不算填了（P2-309）
