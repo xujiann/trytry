@@ -35,7 +35,7 @@ from ..visibility import (
     visible_patient_ids,
 )
 from ..database import get_db
-from ..deps import get_current_user, paginate, require_admin, row_dict
+from ..deps import get_current_user, paginate, require_admin, row_dict, rows_by_id
 from ..models import (
     Appointment,
     AppointmentSlot,
@@ -127,6 +127,13 @@ class WorkflowInstanceOut(BaseModel):
     current_node_role: str
     status: str
     updated_at: str
+    # 以下三键只补在末尾（P2-1474）：页面实例面板不再只看流转中，要印状态文案、谁发起的、何时发起的——
+    # 发起这一步不进流转记录（补一行会改历史接口的输出），发起人与发起时刻原先哪个接口都不出。
+    # 状态文案取自 INSTANCE_STATUS_NAMES，前端不另立一份
+    status_name: str
+    # 发起人 full_name or username（开通账号时姓名非必填，同 printing._user_name）；账号不在了折成空串
+    created_by_name: str
+    created_at: str
 
 
 class WorkflowInstanceStatusOut(BaseModel):
@@ -255,7 +262,8 @@ def _scope_instances(db: Session, user: User, query):
     return query.filter(or_(WorkflowInstance.org_id.in_(allowed), WorkflowInstance.org_id.is_(None)))
 
 
-def _instance_out(i: WorkflowInstance, node: dict | None = None) -> dict:
+def _instance_out(i: WorkflowInstance, node: dict | None, creator: User | None) -> dict:
+    """`creator` 是发起人账号（P2-1474）：清单按本页的 created_by 用 `rows_by_id` 一次取回，别逐行查。"""
     return {
         "id": i.id,
         "definition_key": i.definition_key,
@@ -268,6 +276,9 @@ def _instance_out(i: WorkflowInstance, node: dict | None = None) -> dict:
         "current_node_role": (node or {}).get("role", ""),
         "status": i.status,
         "updated_at": i.updated_at.isoformat(),
+        "status_name": INSTANCE_STATUS_NAMES.get(i.status, i.status),
+        "created_by_name": (creator.full_name or creator.username) if creator else "",
+        "created_at": i.created_at.isoformat(),
     }
 
 
@@ -293,7 +304,7 @@ def start_instance(
     db.add(instance)
     db.commit()
     db.refresh(instance)
-    return _instance_out(instance, first)
+    return _instance_out(instance, first, user)
 
 
 class AdvanceIn(BaseModel):
@@ -399,7 +410,7 @@ def advance_instance(
     )
     db.commit()
     db.refresh(instance)
-    return _instance_out(instance, _node(definition, instance.current_node))
+    return _instance_out(instance, _node(definition, instance.current_node), db.get(User, instance.created_by))
 
 
 @router.post("/instances/{instance_id}/cancel",
@@ -442,11 +453,17 @@ def list_instances(
     definition_key: str | None = None,
     status: str | None = None,
     business_type: str | None = None,
+    mine: bool = False,
     offset: int = 0,
     limit: int = 50,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """流程实例清单。
+
+    `mine=true` 只看本人发起的（P2-1474）：页面原先只取流转中的，办完、被终止的单子整个消失，发起人查不到自己的单子
+    批没批。它在 `_scope_instances` 的可见范围之内再收窄、不放宽；不带它时原有参数与可见范围一字不变。
+    """
     query = _scope_instances(db, user, db.query(WorkflowInstance))
     if definition_key:
         query = query.filter(WorkflowInstance.definition_key == definition_key)
@@ -454,12 +471,16 @@ def list_instances(
         query = query.filter(WorkflowInstance.status == status)
     if business_type:
         query = query.filter(WorkflowInstance.business_type == business_type)
+    if mine:
+        query = query.filter(WorkflowInstance.created_by == user.id)
     rows = paginate(query.order_by(WorkflowInstance.id.desc()), response, offset, limit)
     definitions = {d.key: d for d in db.query(WorkflowDefinition).all()}
+    creators = rows_by_id(db, User, (i.created_by for i in rows))
     return [
         _instance_out(
             i, _node(definitions[i.definition_key], i.current_node)
-            if i.definition_key in definitions else None
+            if i.definition_key in definitions else None,
+            creators.get(i.created_by),
         )
         for i in rows
     ]
@@ -529,10 +550,12 @@ def my_tasks(
         if others_nodes:
             query = query.filter(~or_(*others_nodes))
     rows = paginate(query.order_by(WorkflowInstance.id.desc()), response, offset, limit)
+    creators = rows_by_id(db, User, (i.created_by for i in rows))
     tasks = []
     for instance in rows:
         found = definitions.get(instance.definition_key)
-        tasks.append(_instance_out(instance, _node(found, instance.current_node) if found else None))
+        tasks.append(_instance_out(instance, _node(found, instance.current_node) if found else None,
+                                   creators.get(instance.created_by)))
     # 计数与响应头同一个数：paginate 刚按同一个查询数过
     return {"count": int(response.headers["X-Total-Count"]), "tasks": tasks}
 

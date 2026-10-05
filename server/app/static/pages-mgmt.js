@@ -1018,10 +1018,32 @@ async function renderRules() {
 
 /* ---------------- 流程引擎与统一申请单中心 ---------------- */
 
+/* 流程实例面板的筛选（P2-1474）：原先只取 status=running——办完或被终止的单子整个从页面消失，谁批的、意见、终止原因都
+   打不开（引擎不回写业务表，这一页是唯一看审批结论的地方），发起人也查不到自己的单子批没批。状态缺省仍是「流转中」（与原先
+   一致），可换已完成 / 已终止 / 全部；「只看我发起的」送接口的 mine=true。改筛选只重画实例表、不整页 route()——画布上没存的
+   节点、表单里填了一半的不会被冲掉。筛选只留在内存里、不进存储（同 JOB_RUN_FILTER）。 */
+const WF_INSTANCE_FILTER = { status: "running", mine: "" };
+
+function wfInstanceQuery() {
+  const query = new URLSearchParams(Object.entries(WF_INSTANCE_FILTER).filter(([, v]) => v));
+  return query.toString() ? `?${query}` : "";
+}
+
+/* 实例表：每一行都给「流转记录」；状态文案取后端的 status_name，发起人、发起时间是 P2-1474 补的三键里的另两个 */
+function wfInstanceTable(instances) {
+  return `<p class="desc">列出 ${instances.length} 条（新的在前）</p>`
+    + table(["ID", "流程", "事项", "发起人", "发起时间", "当前节点", "状态", "更新时间", "操作"], instances, (i) =>
+      `<tr><td>${i.id}</td><td>${esc(i.definition_key)}</td><td>${esc(i.title)}</td>
+       <td>${esc(i.created_by_name)}</td><td>${esc(i.created_at.slice(0, 16).replace("T", " "))}</td>
+       <td>${esc(i.current_node_name || i.current_node)}</td><td>${esc(i.status_name)}</td>
+       <td>${esc(i.updated_at.slice(0, 16).replace("T", " "))}</td>
+       <td><button class="btn" data-history="${i.id}">流转记录</button></td></tr>`);
+}
+
 async function renderWorkflows() {
   $("#page-desc").textContent = "流程定义 JSON 化、节点角色守卫、流转留痕；我的待办按角色过滤";
   const [definitions, instances, tasks] = await Promise.all([
-    api("/api/workflows/definitions"), api("/api/workflows/instances?status=running"),
+    api("/api/workflows/definitions"), api(`/api/workflows/instances${wfInstanceQuery()}`),
     api("/api/workflows/my-tasks")]);
   $("#page-body").innerHTML = `
     ${panel(`我的待办（${tasks.count}）`, `${
@@ -1065,10 +1087,14 @@ async function renderWorkflows() {
         <input name="business_type" placeholder="业务类型" required><input name="business_id" type="number" placeholder="业务ID">
         <input name="title" placeholder="事项标题" style="min-width:220px">
         <input name="org_id" type="number" placeholder="机构ID"><button>发起</button></form>`)}
-    ${panel(`流转中实例（${instances.length}）`, table(["ID", "流程", "事项", "当前节点", "更新时间", "操作"], instances, (i) =>
-        `<tr><td>${i.id}</td><td>${esc(i.definition_key)}</td><td>${esc(i.title)}</td>
-         <td>${esc(i.current_node_name || i.current_node)}</td><td>${esc(i.updated_at.slice(0, 16).replace("T", " "))}</td>
-         <td><button class="btn" data-history="${i.id}">流转记录</button></td></tr>`))}
+    ${panel("流程实例", `
+      <form class="inline" id="wf-inst-filter">
+        <select name="status">${[["running", "流转中"], ["completed", "已完成"], ["cancelled", "已终止"], ["", "全部状态"]].map(([v, t]) =>
+          `<option value="${v}"${v === WF_INSTANCE_FILTER.status ? " selected" : ""}>${t}</option>`).join("")}</select>
+        <label style="font-size:13px"><input type="checkbox" name="mine" value="true"${
+          WF_INSTANCE_FILTER.mine ? " checked" : ""}> 只看我发起的</label></form>
+      <p class="msg" id="wf-inst-msg"></p>
+      <div id="wf-inst-list">${wfInstanceTable(instances)}</div>`)}
     <div class="panel hidden" id="wf-history"><h3>流转记录</h3><div id="wf-history-body"></div></div>`;
   wfCanvasInit(definitions);
   $("#def-form").onsubmit = async (e) => {
@@ -1081,6 +1107,13 @@ async function renderWorkflows() {
   };
   $("#inst-form").onsubmit = (e) => { e.preventDefault();
     postAction("/api/workflows/instances", formJson(e.target, ["business_id", "org_id"]), "#wf-msg"); };
+  $("#wf-inst-filter").onchange = async (e) => {
+    WF_INSTANCE_FILTER[e.target.name] = e.target.type === "checkbox" ? (e.target.checked ? "true" : "") : e.target.value;
+    try {
+      $("#wf-inst-list").innerHTML = wfInstanceTable(await api(`/api/workflows/instances${wfInstanceQuery()}`));
+      setMsg("#wf-inst-msg", "");
+    } catch (err) { setMsg("#wf-inst-msg", err.message, false); }
+  };
   $("#page-body").onclick = async (e) => {
     const d = e.target.dataset;
     try {
