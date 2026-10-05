@@ -1706,7 +1706,8 @@ async function renderVaccineSupply() {
         <input name="expire_date" placeholder="效期 YYYY-MM-DD" required><input name="org_id" type="number" placeholder="机构ID" required>
         <input name="quantity" type="number" placeholder="数量" value="0"><button>登记</button></form>
       <p class="msg" id="vb-msg"></p>
-      <div id="vb-list"></div>`)}
+      <div id="vb-list"></div>
+      <div id="vb-recipients"></div>`)}
     ${panel("临期与过期批次", `
       <form class="inline" id="vx-form">
         <label style="font-size:13px">未来
@@ -1834,12 +1835,20 @@ async function renderVaccineSupply() {
       return;
     }
     if (d.recipients) {
+      // 受种者整表列在页内（P2-1501）：原先 alert 只列最近 20 位——25 人次的批次，最早接种的 5 位只体现在「共接种 25 人次」
+      // 这个数里，召回时界面上无从知道是谁，也不给记录号；药品「发给了谁」早就整表列出。接口最多回 1000 行（放开它要先解决
+      // 这个端点的收口，P1-49），截断时标题写明「已列 N / 共 total」
+      $("#vb-recipients").innerHTML = "";
       let r;   // 查失败要说出来（P2-378）：原先 api() 抛错没人接，点了没反应
       try { r = await api(`/api/vaccine-supply/batches/${d.recipients}/recipients`); }
       catch (err) { return setMsg("#vb-msg", err.message, false); }
       // total 是这一批的接种人次（同一人打两剂记两次，后端 docstring 原话），原先写成「名受种者」（P2-780）
-      alert(`批号 ${r.batch_no}（${r.vaccine_name}）共接种 ${r.total} 人次\n` +
-            r.recipients.slice(0, 20).map((x) => `${x.patient_name}(#${x.patient_id}) 第${x.dose_no}剂 ${x.vaccinated_date}`).join("\n"));
+      const listed = r.recipients.length;
+      const title = `批号 ${r.batch_no}（${r.vaccine_name}）共接种 ${r.total} 人次`
+        + (listed < r.total ? `，已列 ${listed} / 共 ${r.total}` : "");
+      $("#vb-recipients").innerHTML = panel(title, table(["记录号", "受种者", "剂次", "接种日期"], r.recipients, (x) =>
+        `<tr><td>${esc(x.record_id)}</td><td>${esc(x.patient_name) || "—"}（${esc(x.patient_id)}）</td>` +
+        `<td>第${esc(x.dose_no)}剂</td><td>${esc(x.vaccinated_date)}</td></tr>`));
     }
   };
   // 取数放最后：监听已与 innerHTML 同一同步块挂好，窗口为零（P2-31 根修，样板见 pages-spd.js renderSpdPath）

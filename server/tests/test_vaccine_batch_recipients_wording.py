@@ -3,6 +3,8 @@
 
 实测：同一婴儿用同一批次打两剂，接口 `total=2`，弹窗显示「共 2 名受种者」。后端 docstring 早写明 total 是「实际接种了多少
 人次」；召回时要通知的人数会被剂次数虚高。要不要另出去重后的人数（这个端点的收口还等 P1-49）不在此列。
+
+P2-1501 起弹窗换成页内受种者面板（整表列出，见 test_vaccine_batch_recipients_panel.py），判据照旧看写给人看的那句：面板标题。
 """
 import inspect
 from pathlib import Path
@@ -12,9 +14,9 @@ from app.routers import vaccine_supply
 CLINICAL_JS = Path(__file__).resolve().parent.parent / "app" / "static" / "pages-clinical.js"
 
 
-def test_弹窗按人次说_与后端的口径同一个():
+def test_受种者面板按人次说_与后端的口径同一个():
     assert "人次" in inspect.getsource(vaccine_supply.batch_recipients)   # 判据自证：后端 total 数的是接种记录
     js = CLINICAL_JS.read_text(encoding="utf-8")
-    popup = js[js.index("/api/vaccine-supply/batches/${d.recipients}/recipients"):]
-    popup = popup[popup.index("alert("):popup.index("\n    }\n")]   # 只看弹给人看的那句，不看注释
-    assert "共接种 ${r.total} 人次" in popup and "名受种者" not in popup   # 修前「共 N 名受种者」
+    shown = js[js.index("/api/vaccine-supply/batches/${d.recipients}/recipients"):]
+    shown = shown[shown.index("const title = "):shown.index("\n    }\n")]   # 只看写给人看的标题与表格，不看注释
+    assert "共接种 ${r.total} 人次" in shown and "名受种者" not in shown   # 修前「共 N 名受种者」
