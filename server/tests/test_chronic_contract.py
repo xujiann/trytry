@@ -16,7 +16,7 @@
   产地（Float 列、metrics JSON）也因此恒 float → `list[float]`。
 - **`risk.score` 恒 int**：基础分表 + 修正值全是 int 字面量，max/min 不改型；
   声明成 float 会把 `95` 印成 `95.0`。
-- 随访回执的 6 键与 risk 的 9 键**全部恒在**（无条件键），不需要 exclude_unset；
+- 随访回执的 7 键（P2-1541 起末尾多一个 `others`，没拆是空列表）与 risk 的 9 键**全部恒在**（无条件键），不需要 exclude_unset；
   `followup.glucose` 是「键恒在值可空」→ 沿用 FollowUpOut 的 `float | None`。
 """
 from datetime import date, timedelta
@@ -34,6 +34,7 @@ DISEASE_TYPE_KEYS = [
 FOLLOWUP_KEYS = ["sbp", "dbp", "glucose", "metrics", "guidance", "next_due", "id", "chronic_id"]
 FOLLOWUP_RESULT_KEYS = [
     "followup", "level", "guidance_points", "next_due", "next_due_suggested", "refer_up_suggested",
+    "others",   # P2-1541：末尾只增拆到同一患者另几份档案的随访，没拆是空列表
 ]
 RISK_KEYS = [
     "chronic_id", "disease", "level", "metric", "recent_values",
@@ -255,6 +256,7 @@ def test_随访回执精确_键序与自动建议到期日(seed):
         "next_due": seed["expected_due"],
         "next_due_suggested": True,
         "refer_up_suggested": True,
+        "others": [],
     }
     # Float 列与 dict[str, float] 校验：整数入参 170/4 读回都是 float（170.0/4.0）
     assert type(body["followup"]["sbp"]) is float
@@ -280,6 +282,7 @@ def test_随访回执精确_显式到期日不再建议(seed):
         "next_due": "2027-01-01",
         "next_due_suggested": False,
         "refer_up_suggested": False,
+        "others": [],
     }
 
 

@@ -2511,7 +2511,16 @@ async function renderChronic() {
         // 本次指导原先录不了（P2-862）：随访记录的「指导」列恒为空
         body: JSON.stringify({ sbp: num("sbp"), dbp: num("dbp"), glucose: num("glucose"), metrics, next_due: f.get("next_due"),
                                guidance: String(f.get("guidance") || "").trim() }) });
-      alert(`分级：${result.level} 级${result.refer_up_suggested ? "（建议上转！）" : ""}\n下次随访：${result.next_due}${result.next_due_suggested ? "（按病种周期自动建议）" : ""}\n指导要点：${result.guidance_points}`);
+      // 一人两病：另一病种的读数拆进了那份档案、按那份档案定级（P2-1541），回执 others 逐条说出记到了哪份、定了几级。
+      // 会拆的只有血压、空腹血糖（后端 chronic.FIELD_DISEASE），读数照随访记录表的写法；弹窗是纯文本、不进 DOM
+      const others = (result.others || []).map((o) => {
+        const disease = DISEASES[o.disease] || o.disease;
+        const v = o.values;
+        const readings = [v.sbp != null || v.dbp != null ? `血压 ${v.sbp ?? "—"}/${v.dbp ?? "—"}` : "",
+          v.glucose != null ? `空腹血糖 ${v.glucose}` : ""].filter(Boolean).join("，");
+        return `\n另记入档案 ${o.chronic_id}（${disease}）：${readings}，分级 ${o.level} 级${o.level === 3 ? "（建议上转！）" : ""}`;
+      }).join("");
+      alert(`分级：${result.level} 级${result.refer_up_suggested ? "（建议上转！）" : ""}\n下次随访：${result.next_due}${result.next_due_suggested ? "（按病种周期自动建议）" : ""}\n指导要点：${result.guidance_points}${others}`);
       route();
     } catch (err) { setMsg("#chronic-msg", err.message, false); }
   };

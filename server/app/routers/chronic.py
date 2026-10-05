@@ -107,6 +107,9 @@ def level_rules_problem(rules: dict) -> str:
 
 #: 分级取值时「列为空就取 metrics 同名键」的那三列（`_metric_value`）
 _VITAL_COLUMNS = ("sbp", "dbp", "glucose")
+#: 标准指标 → 慢病病种：一次随访里的这几项该记进哪个病种的档案。FHIR 入站按它归档（P2-848），桌面端录随访按它把另一病种的
+#: 读数拆过去（P2-1541）——唯一一份，`integration` 引用这里，别另写
+FIELD_DISEASE = {"sbp": "hypertension", "dbp": "hypertension", "glucose": "diabetes"}
 
 
 def _metrics_column_problem(body: FollowUpCreate) -> str:
@@ -181,6 +184,48 @@ def _evaluate_level(db: Session, disease: str, body: FollowUpCreate) -> int | No
                                 detail=f"分级指标「{metric.get('name') or key}」（{key}）不能是负数（收到 {value:g}）")
         levels.append(_metric_level(metric, value))
     return max(levels) if levels else None
+
+
+def _split_by_disease(
+    db: Session, chronic: ChronicPatient, body: FollowUpCreate
+) -> tuple[FollowUpCreate, list[tuple[ChronicPatient, FollowUpCreate, dict[str, float]]]]:
+    """一次随访里属于同一患者另一份档案的标准指标拆出去（P2-1541，照 P2-848 FHIR 入站的拆法）。
+
+    桌面端随访表单对任何档案都摆收缩压、舒张压、空腹血糖三格：一人两病在高血压档案上一次录了血压和血糖，血糖原先记进
+    高血压那条随访，糖尿病档案不记也不定级、照样超期。按 `FIELD_DISEASE` 归病种：属于另一病种、且本档案分级规则用不到的
+    指标，该患者有那个病种的档案就拆给那份档案；没有的照旧留在本条，不报错。列与 metrics 里的同名键一并挪（分级取值「列为
+    空就取 metrics 同名键」，`_metric_value`）；本次指导是同一次随访说的，两边都记。
+    返回（留给本档案的请求，[(另一份档案, 拆给它的请求, 挪过去的值)]）。
+    """
+    disease_type = get_disease_type(db, chronic.disease)
+    metrics = ((disease_type.level_rules if disease_type else None) or {}).get("metrics")
+    # 规则写坏了的（P1-125）照样取得出用到的键，判错留给 `_evaluate_level` 说清楚
+    used = {m.get("key") for m in metrics if isinstance(m, dict)} if isinstance(metrics, list) else set()
+    moved: dict[str, dict[str, float]] = {}
+    for key, disease in FIELD_DISEASE.items():
+        value = _metric_value(body, key)
+        if value is not None and disease != chronic.disease and key not in used:
+            moved.setdefault(disease, {})[key] = value
+    kept = body
+    splits: list[tuple[ChronicPatient, FollowUpCreate, dict[str, float]]] = []
+    for disease, values in moved.items():
+        other = (
+            db.query(ChronicPatient)
+            .filter(ChronicPatient.patient_id == chronic.patient_id, ChronicPatient.disease == disease)
+            .order_by(ChronicPatient.id)
+            .first()
+        )
+        if other is None:
+            continue
+        split = FollowUpCreate.model_validate({
+            **{key: getattr(body, key) for key in values},
+            "metrics": {key: body.metrics[key] for key in values if key in body.metrics},
+            "guidance": body.guidance,
+        })
+        splits.append((other, split, values))
+        kept = kept.model_copy(update={**{key: None for key in values},
+                                       "metrics": {k: v for k, v in kept.metrics.items() if k not in values}})
+    return kept, splits
 
 
 def _suggest_next_due(db: Session, disease: str, today: str | None = None) -> str:
@@ -379,8 +424,21 @@ def list_overdue(today: str | None = None, db: Session = Depends(get_db)):
     )
 
 
+class FollowupSplitOut(BaseModel):
+    """拆到同一患者另一份档案的那一条随访（P2-1541）：档案号、病种、记过去的指标（`_metric_value` 取到的值，恒 float）、
+    那份档案记完之后的级别。"""
+
+    chronic_id: int
+    disease: str
+    values: dict[str, float]
+    level: int
+
+
 class FollowupResultOut(BaseModel):
-    """随访提交回执：随访单 + 智能分级 + 指导要点 + 下次到期日（六键恒在，无条件键）。"""
+    """随访提交回执：随访单 + 智能分级 + 指导要点 + 下次到期日（七键恒在，无条件键）。
+
+    末尾的 `others` 是拆到同一患者另几份档案的随访（P2-1541，`_split_by_disease`），没拆是空列表；前六键与修前一字不差。
+    """
 
     followup: FollowUpOut
     level: int
@@ -388,6 +446,7 @@ class FollowupResultOut(BaseModel):
     next_due: str
     next_due_suggested: bool
     refer_up_suggested: bool
+    others: list[FollowupSplitOut]
 
 
 @router.post(
@@ -412,17 +471,29 @@ def add_followup(
     problem = _metrics_column_problem(body) or bp_order_problem(_metric_value(body, "sbp"), _metric_value(body, "dbp"))
     if problem:
         raise HTTPException(status_code=422, detail=problem)
-    payload = body.model_dump()
+    # 另一病种的读数拆进那份档案（P2-1541）：`own` 是留给本档案的那部分
+    own, splits = _split_by_disease(db, chronic, body)
+    payload = own.model_dump()
     # 未填下次到期日时按病种随访周期自动建议
-    suggested = "" if body.next_due else _suggest_next_due(db, chronic.disease)
-    payload["next_due"] = body.next_due or suggested
+    suggested = "" if own.next_due else _suggest_next_due(db, chronic.disease)
+    payload["next_due"] = own.next_due or suggested
     followup = FollowUp(chronic_id=chronic_id, **payload)
-    new_level = _evaluate_level(db, chronic.disease, body)
+    new_level = _evaluate_level(db, chronic.disease, own)
     if new_level is not None:
         chronic.level = new_level
     chronic.next_due = payload["next_due"]
     db.add(followup)
-    db.commit()
+    others: list[dict] = []
+    for other, split, values in splits:
+        # 按那份档案的规则定级；下次到期按那份档案的病种周期自动建议——手填的到期日是给所选档案定的，不套过去
+        other_due = _suggest_next_due(db, other.disease)
+        db.add(FollowUp(chronic_id=other.id, **{**split.model_dump(), "next_due": other_due}))
+        other_level = _evaluate_level(db, other.disease, split)
+        if other_level is not None:
+            other.level = other_level
+        other.next_due = other_due
+        others.append({"chronic_id": other.id, "disease": other.disease, "values": values, "level": other.level})
+    db.commit()   # 拆出去的与本条同一事务
     db.refresh(followup)
     return {
         "followup": FollowUpOut.model_validate(followup).model_dump(),
@@ -431,6 +502,7 @@ def add_followup(
         "next_due": chronic.next_due,
         "next_due_suggested": bool(suggested),
         "refer_up_suggested": chronic.level == 3,
+        "others": others,
     }
 
 

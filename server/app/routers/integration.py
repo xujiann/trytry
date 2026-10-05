@@ -63,7 +63,7 @@ from ..privacy import desensitize, mask_id_card, mask_phone
 from ..schemas import EncounterCreate, ExamReportCreate, FollowUpCreate, PatientOut
 from ..texttypes import NON_BLANK, normalize_gender
 from ..vitals import bp_order_problem
-from .chronic import _evaluate_level
+from .chronic import FIELD_DISEASE, _evaluate_level
 from .encounters import create_encounter
 from .dataquality import id_card_invalid_reason
 from .exams import EXAM_REQUEST_STATUS_NAMES, submit_report
@@ -503,8 +503,7 @@ def _do_fhir_patient(resource: dict, db: Session, user: User):
 _LOINC_FIELDS = {"8480-6": "sbp", "8462-4": "dbp", "2339-0": "glucose", "15074-8": "glucose", "14749-6": "glucose"}
 #: 血糖单位（UCUM，`valueQuantity.code`，没有再看 `unit`）→ 折成 mmol/L 的除数（P2-639）
 _GLUCOSE_UNIT_DIVISOR = {"mmol/l": 1.0, "mg/dl": 18.0}
-# 指标 → 慢病病种（用于定位随访归属档案）
-_FIELD_DISEASE = {"sbp": "hypertension", "dbp": "hypertension", "glucose": "diabetes"}
+# 指标 → 慢病病种（用于定位随访归属档案）：挪进 `chronic.FIELD_DISEASE` 作唯一一份，桌面端录随访按同一份拆（P2-1541）
 
 
 class FhirObservationFiledOut(BaseModel):
@@ -600,12 +599,12 @@ def _do_fhir_observation(resource: dict, db: Session):
     if not values:
         raise HTTPException(status_code=422, detail="未识别到支持的观测指标（血压/血糖 LOINC）")
 
-    # 按指标归病种、各归各的档案（P2-848，`_FIELD_DISEASE` 本来就是「指标 → 随访归属档案」）：原先整条挂到第一个分量的
+    # 按指标归病种、各归各的档案（P2-848，`FIELD_DISEASE` 本来就是「指标 → 随访归属档案」）：原先整条挂到第一个分量的
     # 病种——血压 + 血糖一起报，血糖记进高血压档案、糖尿病档案不记也不分级（分量顺序反过来就反过来）；只有糖尿病档案的
     # 患者连血糖一起 404。缺档案的那部分在回执里点名，不连累其余；一个都归不了的照旧 404
     groups: dict[str, dict[str, float]] = {}
     for field_name, value in values.items():
-        groups.setdefault(_FIELD_DISEASE[field_name], {})[field_name] = value
+        groups.setdefault(FIELD_DISEASE[field_name], {})[field_name] = value
     chronics = {
         disease: db.query(ChronicPatient)
         .filter(ChronicPatient.patient_id == patient.id, ChronicPatient.disease == disease)
