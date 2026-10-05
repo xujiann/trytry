@@ -17,7 +17,7 @@ from ..concurrency import (
     upsert_unique,
 )
 from ..database import get_db
-from ..deps import get_current_user, require_admin, require_roles, row_dict
+from ..deps import get_current_user, require_admin, require_roles, row_dict, rows_by_id
 from ..models import (
     Attachment,
     Course,
@@ -570,7 +570,7 @@ PLAN_STATUS_NAMES = {"open": "报名中", "closed": "已截止", "finished": "�
 ENROLLMENT_STATUS_NAMES = {"enrolled": "已报名", "cancelled": "已取消"}
 
 
-def _plan_out(p: TrainingPlan, enrolled: int = 0) -> dict:
+def _plan_out(p: TrainingPlan, enrolled: int = 0, technique_name: str | None = None) -> dict:
     return {
         "id": p.id,
         "title": p.title,
@@ -583,7 +583,13 @@ def _plan_out(p: TrainingPlan, enrolled: int = 0) -> dict:
         "status_name": PLAN_STATUS_NAMES.get(p.status, p.status),
         "enrolled": enrolled,
         "remaining": max(p.capacity - enrolled, 0),
+        "technique_name": technique_name,
     }
+
+
+def _technique_names(db: Session, plans: list[TrainingPlan]) -> dict[int | None, str]:
+    """计划挂的适宜技术 → 名称，一次 IN 取回（P2-1430）。按计划的 technique_id（可空）取：没挂的、查不到的都取成 None。"""
+    return {tid: t.name for tid, t in rows_by_id(db, TcmTechnique, (p.technique_id for p in plans)).items()}
 
 
 class TrainingPlanOut(BaseModel):
@@ -601,6 +607,9 @@ class TrainingPlanOut(BaseModel):
     status_name: str
     enrolled: int
     remaining: int
+    #: 挂的适宜技术名称（P2-1430，只加在末尾、原有键与次序不动）：原先只回编号，而技术库页面不显示编号，计划挂的是哪项技术
+    #: 页面上看不出来。没挂或查不到为 null
+    technique_name: str | None
 
 
 @router.post(
@@ -620,7 +629,7 @@ def create_plan(body: PlanCreate, db: Session = Depends(get_db), user: User = De
     db.add(plan)
     db.commit()
     db.refresh(plan)
-    return _plan_out(plan)
+    return _plan_out(plan, technique_name=_technique_names(db, [plan]).get(plan.technique_id))
 
 
 @router.get("/training-plans", response_model=list[TrainingPlanOut])
@@ -629,7 +638,8 @@ def list_plans(status: str | None = None, db: Session = Depends(get_db)):
     if status:
         query = query.filter(TrainingPlan.status == status)
     plans = query.order_by(TrainingPlan.id.desc()).limit(200).all()
-    return [_plan_out(p, p.enrolled_count) for p in plans]
+    names = _technique_names(db, plans)
+    return [_plan_out(p, p.enrolled_count, names.get(p.technique_id)) for p in plans]
 
 
 class EnrollmentReceiptOut(BaseModel):

@@ -32,6 +32,7 @@ MATERIAL_KEY_ORDER = [
 PLAN_KEY_ORDER = [
     "id", "title", "technique_id", "org_id", "plan_date", "capacity",
     "trainer", "status", "status_name", "enrolled", "remaining",
+    "technique_name",   # P2-1430：只加在末尾，没挂适宜技术为 null
 ]
 LIVE_ROW_KEY_ORDER = [
     "id", "title", "speaker", "planned_at", "status", "review_comment", "recording_url",
@@ -408,6 +409,7 @@ def test_实训计划回执精确形状与键序(base, plans):
         "status_name": "报名中",  # P2-72：状态文案取自后端
         "enrolled": 0,
         "remaining": 2,
+        "technique_name": None,   # P2-1430
     }
     # 缺省分支：capacity 默认 30、trainer 空串
     assert plans["p2"] == {
@@ -422,6 +424,7 @@ def test_实训计划回执精确形状与键序(base, plans):
         "status_name": "报名中",
         "enrolled": 0,
         "remaining": 30,
+        "technique_name": None,
     }
 
 

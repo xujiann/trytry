@@ -1241,6 +1241,24 @@ def test_实训考核在页内表单里录_学员从报名名单里选_取消即
     assert (item["score"], item["passed"]) == (86.5, True), item
 
 
+def test_实训计划的适宜技术从下拉里选_计划表写技术名称(page, base_url, seed, admin_call, admin_read):
+    """P2-1430：发布实训计划原先要手填「适宜技术ID」，而技术库页面不显示编号——填一个别的、但确实存在的编号照样 201，计划挂到
+    另一项技术上；计划表也没有技术这一列。修后从技术库下拉里选（首项「不挂适宜技术」），计划表写技术名称。"""
+    tech = admin_call("POST", "/api/tcm/techniques", {"name": "E2E实训用刮痧", "category": "外治"})
+    _login(page, base_url)
+    _open_page(page, "education", "远程医学教育")
+    form = page.locator("#tp-plan-form")
+    expect(form.locator('[name="technique_id"] option').first).to_have_text("不挂适宜技术")
+    form.locator('[name="title"]').fill("E2E挂技术的实训")
+    form.locator('[name="org_id"]').fill(str(seed["org"]["id"]))
+    form.locator('[name="technique_id"]').select_option(label="E2E实训用刮痧")   # 修前是手填编号的数字框
+    form.locator('[name="plan_date"]').fill("2026-10-30")
+    _submit(page, "#tp-plan-form button")
+    expect(page.locator("tr", has_text="E2E挂技术的实训")).to_contain_text("E2E实训用刮痧")   # 修前计划表没有这一列
+    (plan,) = [p for p in admin_read("/api/education/training-plans") if p["title"] == "E2E挂技术的实训"]
+    assert (plan["technique_id"], plan["technique_name"]) == (tech["id"], "E2E实训用刮痧"), plan
+
+
 @pytest.fixture(scope="session")
 def staffing_seed(base_url, seed):
     """人员下沉调度的前置：一名员工、一条派驻记录（台账里才有「维护」职称等级的按钮）。"""

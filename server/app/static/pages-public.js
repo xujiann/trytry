@@ -1113,8 +1113,11 @@ function playMaterial(id, url) {
 }
 
 async function drawEduGaps() {
-  const [mstats, plans] = await Promise.all([
-    api("/api/education/material-stats"), api("/api/education/training-plans")]);
+  // 实训计划的适宜技术从技术库里选（P2-1430）：原先手填编号，而技术库页面不显示编号——填一个别的、但确实存在的编号照样
+  // 201，计划挂到了另一项技术上。技术库只要登录就能读；万一没取到，下拉只剩「不挂适宜技术」并说一句，别把整页掀掉
+  const [mstats, plans, techniques] = await Promise.all([
+    api("/api/education/material-stats"), api("/api/education/training-plans"),
+    api("/api/tcm/techniques").catch(() => null)]);
   const holder = appendSection(`
     ${panel(`⑳ 课件资源管理（点播总量 ${mstats.total_plays}，课件 ${mstats.total_materials} 个）`, `
       <form class="inline" id="cm-form">
@@ -1136,14 +1139,18 @@ async function drawEduGaps() {
       <form class="inline" id="tp-plan-form">
         <input name="title" placeholder="实训主题" required style="min-width:180px">
         <input name="org_id" type="number" placeholder="承办机构ID" required>
-        <input name="technique_id" type="number" placeholder="适宜技术ID（可空）">
+        <select name="technique_id"><option value="">不挂适宜技术</option>${(techniques || []).map((t) =>
+          `<option value="${t.id}">${esc(t.name)}</option>`).join("")}</select>${
+          techniques ? "" : '<span class="desc">适宜技术库没取到，本次只能不挂适宜技术</span>'}
         <input name="plan_date" placeholder="实训日期 YYYY-MM-DD" required pattern="\\d{4}-\\d{2}-\\d{2}">
         <input name="capacity" type="number" value="30" min="1" style="min-width:80px">
         <input name="trainer" placeholder="带教老师">
         <button>发布计划</button></form>
       <p class="msg" id="tplan-msg"></p>
-      ${table(["ID", "主题", "日期", "带教", "名额", "已报", "余额", "状态", "操作"], plans, (p) =>
-        `<tr><td>${p.id}</td><td>${esc(p.title)}</td><td>${esc(p.plan_date)}</td><td>${esc(p.trainer) || "—"}</td>
+      ${table(["ID", "主题", "适宜技术", "日期", "带教", "名额", "已报", "余额", "状态", "操作"], plans, (p) =>
+        // 挂的适宜技术写名称（P2-1430，取出参的 technique_name）：原先表里没有这一列，挂没挂、挂的是哪项都看不出
+        `<tr><td>${p.id}</td><td>${esc(p.title)}</td><td>${esc(p.technique_name) || "—"}</td><td>${esc(p.plan_date)}</td>
+         <td>${esc(p.trainer) || "—"}</td>
          <td>${p.capacity}</td><td>${p.enrolled}</td><td>${p.remaining}</td><td>${esc(p.status_name)}</td>
          <td><button class="btn secondary" data-enroll="${p.id}">报名</button>
              <button class="btn secondary" data-unenroll="${p.id}">退报</button>
