@@ -611,7 +611,10 @@ class QcOut(QcCreate):
 def add_qc(body: QcCreate, db: Session = Depends(get_db)):
     if body.center_type not in _CENTERS:
         raise HTTPException(status_code=422, detail="未知中心类型")
-    record = QcRecord(**body.model_dump())
+    # 没填日期的按登记那天（P2-1596，「没填日期按录入那天算」同 P2-660 的口径，取本地业务日）：原先照存空串，质控表上看不出
+    # 是哪天的不合格。写了日期的照存
+    record = QcRecord(**body.model_dump(exclude={"record_date"}),
+                      record_date=body.record_date or resolve_business_date(None).isoformat())
     db.add(record)
     db.commit()
     db.refresh(record)

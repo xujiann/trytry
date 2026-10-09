@@ -3083,7 +3083,7 @@ async function renderOaQc() {
         <input name="duty_date" placeholder="值班日期 YYYY-MM-DD" required><input name="shift" placeholder="班次" value="全天"><input name="doctor_name" placeholder="医师" required><button>排班</button></form>
       <form class="inline" id="qc-form"><select name="center_type">${Object.entries(CN).map(([v, t]) => `<option value="${v}">${t}中心</option>`).join("")}</select>
         <input name="item" placeholder="质控项目" required><select name="result"><option value="pass">合格</option><option value="fail">不合格</option></select>
-        <input name="note" placeholder="备注"><input name="record_date" placeholder="日期"><button>登记质控</button></form>
+        <input name="note" placeholder="备注"><input name="record_date" placeholder="日期 YYYY-MM-DD（留空为今天）"><button>登记质控</button></form>
       <p class="msg" id="oa-msg"></p>`)}
     ${panel("公文", table(["ID", "标题", "类型", "发文单位", "状态", "操作"], docs, (d) =>
       `<tr><td>${d.id}</td><td>${esc(d.title)}${d.body ? `<details><summary>查看正文</summary>
@@ -3092,8 +3092,9 @@ async function renderOaQc() {
        <td>${d.status === "draft" ? `<button class="btn secondary" data-pub="${d.id}">发布</button>` : "—"}</td></tr>`))}
     ${panel("排班", table(["中心", "日期", "班次", "医师"], rosters, (r) =>
       `<tr><td>${esc(CN[r.center_type] || r.center_type)}</td><td>${esc(r.duty_date)}</td><td>${esc(r.shift)}</td><td>${esc(r.doctor_name)}</td></tr>`))}
-    ${panel("质控记录", table(["中心", "项目", "结果", "备注"], qc, (q) =>
-      `<tr><td>${esc(CN[q.center_type] || q.center_type)}</td><td>${esc(q.item)}</td>
+    ${panel("质控记录", table(["日期", "中心", "项目", "结果", "备注"], qc, (q) =>
+      // 日期列（P2-1596）：原先只有中心、项目、结果、备注，看不出是哪天的不合格；出参本来就带 record_date
+      `<tr><td>${esc(q.record_date) || "—"}</td><td>${esc(CN[q.center_type] || q.center_type)}</td><td>${esc(q.item)}</td>
        <td><span class="tag ${q.result === "pass" ? "green" : "red"}">${q.result === "pass" ? "合格" : "不合格"}</span></td><td>${esc(q.note)}</td></tr>`))}`;
   $("#doc-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/mgmt/docs", formJson(e.target), "#oa-msg"); };
   $("#roster-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/mgmt/rosters", formJson(e.target), "#oa-msg"); };
