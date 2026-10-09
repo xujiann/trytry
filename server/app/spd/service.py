@@ -412,22 +412,31 @@ def measure_program_for(db: Session, patient_id: int, program_code: str, metric:
 
     先取配了**有界**目标的病种（与判级同一句 `target_for`，P2-1640）：原先先建档的病种这个指标只配了定性目标，就挂到
     它下面、永远判「正常」，后建档的病种配的量化目标用不上。几个病种都只配了定性目标的，照旧挂第一个（判不了界，判
-    「正常」与原先一样）。"""
+    「正常」与原先一样）。
+
+    在管档案里找不到的，再按同一规则在**脱管 / 召回中**（`ENROLLMENT_PAUSED_STATUSES`）的档案里找（P2-1675）：原先只认
+    在管的，召回登记一落，居民自报（及医护单条录入）不写病种的推断不出、挂空串一律判「正常」——收缩压 185 召回前判
+    high、召回后判 normal，同一个值显式写上病种又判 high（显式病种走 `enrollment_for`，召回中的本来就算）。P2-1050 定过
+    这两种档案「还在、等着恢复，不是没有签约」。已结束的（死亡、迁出、排除、结案）仍不取。只管判级挂哪个病种：召回中
+    的异常值派不派处置任务另有「在管」闸门（`care._managed_enrollment_of`），不在这里动。"""
     if program_code:
         return program_code
-    enrolled = (
-        db.query(SpdEnrollment.program_code)
-        .filter(SpdEnrollment.patient_id == patient_id, SpdEnrollment.status == "active")
-        .order_by(SpdEnrollment.id)
-        .all()
-    )
-    fallback = ""
-    for (code,) in enrolled:
-        if target_for(db, code, "", metric) is not None:
-            return code
-        if not fallback and target_for(db, code, "", metric, bounded=False) is not None:
-            fallback = code
-    return fallback
+    for statuses in (("active",), ENROLLMENT_PAUSED_STATUSES):
+        enrolled = (
+            db.query(SpdEnrollment.program_code)
+            .filter(SpdEnrollment.patient_id == patient_id, SpdEnrollment.status.in_(statuses))
+            .order_by(SpdEnrollment.id)
+            .all()
+        )
+        fallback = ""
+        for (code,) in enrolled:
+            if target_for(db, code, "", metric) is not None:
+                return code
+            if not fallback and target_for(db, code, "", metric, bounded=False) is not None:
+                fallback = code
+        if fallback:
+            return fallback
+    return ""
 
 
 def judge_measurement(db: Session, program_code: str, stage: str, metric: str, value) -> str:
