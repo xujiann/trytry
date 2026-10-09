@@ -401,10 +401,30 @@ def _refuse_cipher_prefix(label: str, value: object) -> None:
 
 def _pid13_phone(raw: str) -> str:
     """PID-13（XTN，可重复）优先取像手机号的那一项，没有取第一项（P2-724）。原先整串「座机~手机」落库，按手机号自动绑定对不上。
-    `""` 按没给（P2-1760）。"""
-    numbers = [value for value in (_hl7_unescape(_hl7_null(rep.split("^")[0])).strip() for rep in raw.split("~"))
-               if value]
+    `""` 按没给（P2-1760）；每一项的号码怎么取见 `_xtn_number`（P2-1761）。"""
+    numbers = [number for number in (_xtn_number(rep) for rep in raw.split("~")) if number]
     return next((n for n in numbers if re.fullmatch(r"1[0-9]{10}", n)), numbers[0] if numbers else "")
+
+
+#: XTN-2 用途（HL7 表 0201）/ XTN-3 设备类型（表 0202）里表示电子邮件的取值——这类重复不是电话（P2-1761）
+_XTN_EMAIL_USES = {"NET"}
+_XTN_EMAIL_EQUIPMENT = {"INTERNET", "X.400"}
+
+
+def _xtn_number(rep: str) -> str:
+    """PID-13 的一个重复（XTN）里的电话号码（P2-1761，第五十二批扫描 AP2-9）。
+
+    XTN-1 是旧写法，v2.5 起号码多放在 XTN-12（未格式化号码）或 XTN-6 区号 + XTN-7 本地号码：`^PRN^CP^^86^^13987654321`、
+    `^PRN^CP^^^^^^^^^13987654321`。原先只取 XTN-1（P2-724），这两种写法建档电话为空、A08 也改不了。XTN-1 为空时依次取
+    XTN-12、XTN-7（前面拼上 XTN-6 区号，写成「区号-号码」）；XTN-5 国家码不拼。邮件类的重复（XTN-2 为 NET 或 XTN-3 为
+    Internet / X.400）不是电话，返回空串。各组件先拆、再按没给处理 `""`、再还原转义（P2-724 / P2-1760）。
+    """
+    parts = [_hl7_unescape(_hl7_null(part)).strip() for part in rep.split("^")] + [""] * 12
+    if parts[1].upper() in _XTN_EMAIL_USES or parts[2].upper() in _XTN_EMAIL_EQUIPMENT:
+        return ""
+    if parts[0] or parts[11]:
+        return parts[0] or parts[11]
+    return "-".join(part for part in (parts[5], parts[6]) if part) if parts[6] else ""
 
 
 #: 身份证那一项的标识类型码：HL7 表 0203 的 NI（国家统一个人标识）/ NNCHN（中国国民身份号），与国内常见写法 ID
