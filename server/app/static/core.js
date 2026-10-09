@@ -1704,6 +1704,10 @@ async function renderExams() {
     api("/api/exams"), fetchAllPages(api, "/api/exams?status=pending"), fetchAllPages(api, "/api/exams?status=diagnosing"),
     api("/api/exams/critical"), api("/api/exams/templates")]);
   const requests = actionableFirst(recent, pending, diagnosing);
+  // 危急值面板标题只数未处置的、表里加闭环状态（P2-1713）：清单不过滤已处置的（排在后面），标题原先直接写 critical.length，
+  // 已处置的与待确认的同样是红标签——全县出过一条危急值，「⚠ 危急值」就永远挂着。状态文案取危急值操作台同一张 CRIT_STATUS，
+  // 已处置的结论标签不再标红。这一页的清单仍是缺省那一页（未处置的排最前、封顶 100 条，P2-1711 只改了两个危急值页）
+  const openCritical = critical.filter((r) => r.critical_status !== "resolved").length;
   $("#page-body").innerHTML = `
     ${panel("开单（先查互认）", `
       <form class="inline" id="exam-form">
@@ -1715,9 +1719,11 @@ async function renderExams() {
         <input name="clinical_info" placeholder="临床信息">
         <button>提交申请</button>
       </form><p class="msg" id="exam-msg"></p>`)}
-    ${critical.length ? panel(`⚠ 危急值（${critical.length}）`,
-      table(["报告ID", "申请单", "结论", "操作"], critical, (r) =>
-        `<tr><td>${r.id}</td><td>${r.request_id}</td><td><span class="tag red">${esc(r.conclusion)}</span></td>
+    ${critical.length ? panel(`${openCritical ? "⚠ " : ""}危急值（未处置 ${openCritical}）`,
+      table(["报告ID", "申请单", "结论", "闭环状态", "操作"], critical, (r) =>
+        `<tr><td>${r.id}</td><td>${r.request_id}</td>
+         <td><span class="tag${r.critical_status === "resolved" ? "" : " red"}">${esc(r.conclusion)}</span></td>
+         <td>${statusTag(CRIT_STATUS, r.critical_status)}</td>
          <td><button class="btn secondary" data-printreport="${r.id}">打印报告</button>
              <button class="btn secondary" data-amend="${r.id}" data-conclusion="${esc(r.conclusion)}">修订</button>
              <button class="btn secondary" data-revs="${r.id}">修订史</button></td></tr>`)) : ""}
