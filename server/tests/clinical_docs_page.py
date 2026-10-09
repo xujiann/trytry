@@ -114,8 +114,9 @@ def const_source(source: str, name: str) -> str:
     return source[start:source.index(";\n", start) + 2]
 
 
-#: 本页的模块级常量（pages-mgmt.js）：页面函数读写它们
-PAGE_CONSTS = ("HANDOVER_FILTER",)
+#: 本页的模块级常量（pages-mgmt.js）：页面函数读写它们（`DOC_DISCHARGED` 是 P2-1768 的只读查看）。源码里有才带上——撤掉修复
+#: 做变异检查时，用例红在页面行为上，而不是夹具取不到常量
+PAGE_CONSTS = ("HANDOVER_FILTER", "DOC_DISCHARGED")
 
 
 def script(steps: str) -> str:
@@ -126,7 +127,7 @@ def script(steps: str) -> str:
         + function_source(clinical, "function formJson(") + function_source(clinical, "async function postAction(")
         + "".join(const_source(public, name) for name in
                   ("NOTE_TYPES", "PROGRESS_NOTE_DEFAULT", "NURSING_LEVELS", "INPATIENT_NURSING_DEFAULT"))
-        + "".join(const_source(mgmt, name) for name in PAGE_CONSTS)
+        + "".join(const_source(mgmt, name) for name in PAGE_CONSTS if f"const {name} = " in mgmt)
         + function_source(mgmt, "function vitalTimeMs(") + function_source(mgmt, "async function renderClinicalDocs(")
         + f"\n(async () => {{\n{steps}\n}})().then((r) => {{ process.stdout.write(JSON.stringify({{ result: r }}) + '\\n');"
         + " rl.close(); }, (e) => { console.error(e); process.exit(1); });\n"

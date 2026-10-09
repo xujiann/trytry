@@ -20,6 +20,10 @@ const UNIFIED_STATUS = { pending: ["待处理", "orange"], processing: ["处理�
 /** 交接班清单的筛选（P2-476）：只留在内存里、不进存储——病区 / 日期是这一次查看的条件。 */
 const HANDOVER_FILTER = { ward_id: "", handover_date: "" };
 
+/** 只读查看的那一次已出院住院（P2-1768）：同样只留在内存里、不进存储——是这一次翻阅的条件，进了存储就成了下次进页面的
+    缺省，在院患者的写入视图被它盖住。 */
+const DOC_DISCHARGED = { admission_id: "" };
+
 /** 体温单测量时刻 → 毫秒数，给折线图按时间比例摆点（P2-1336）。形状照后端 `datetypes.DATETIME_SHAPE`（日期后可跟时刻，
     空格或 `T` 分隔，秒可选）；按墙上时间算（`Date.UTC` 只当算术用，不涉时区）。形状不对的（P1-100 之前的存量自由文本）
     回 NaN，折线图整张回落成按条目等距 */
@@ -32,24 +36,35 @@ async function renderClinicalDocs() {
   $("#page-desc").textContent = "病程记录 / 护理记录 / 体温单 / 交接班；出院前可做文书完整性自查";
   // 只取在院的（P2-154）：原先不带条件取「最新 200 条住院」再在页面上挑在院的——住得久的患者被新入院的挤出前 200 条，
   // 从这张选择框里消失，病程、护理、体温单都写不了；最新 200 条碰巧都出院了，页面就说「暂无在院患者」。
-  // 续页取全（P2-1333）：一页最多 500 条，原先只取第一页，在院过 500 人时住得最久的那几位照样不在框里
-  const admissions = await fetchAllPages(api, "/api/inpatient/admissions?status=admitted");
+  // 续页取全（P2-1333）：一页最多 500 条，原先只取第一页，在院过 500 人时住得最久的那几位照样不在框里。
+  // 已出院的只读查看（P2-1768）：出院后这次住院就不在在院清单里了，病程、护理、体温单、完整性四个读接口照常给数据，可原先
+  // 在任何页面都看不到——终末质控、病案归档、再入院时看上次的病程都无处可看。另取一页最近出院的（清单缺省 200 条、按住院号
+  // 倒序，列不全时下拉首项写明共几次），选了就把下面四块画成那一次的：取数照旧走那四个读接口（可见性与留痕不变），不画写入
+  // 表单（出院后病程、护理、体征都 409）。放在本页、不在住院页另画一份：四块与在院的走同一段渲染，表头与体温单只有一份
+  const [admissions, discharged] = await Promise.all([
+    fetchAllPages(api, "/api/inpatient/admissions?status=admitted"),
+    api("/api/inpatient/admissions?status=discharged", { withTotal: true }),
+  ]);
   const inHospital = admissions.filter((a) => a.status === "admitted");
+  const readOnly = discharged.rows.find((a) => String(a.id) === DOC_DISCHARGED.admission_id) || null;
   // 存量选择必须落在**这张在院列表里**：出院之后 `inHospital` 不再包含它，
   // 而下面的 <select> 只列在院记录——于是没有一个 option 带 selected，浏览器
   // 显示第一条，四个面板和三个写入表单却仍然指向那条已出院的记录。
   const current = pickedId("medplat_doc_adm", inHospital)
     || (inHospital[0] && inHospital[0].id) || 0;
+  // 四块画哪一次：选了已出院的就画那一次（只读），否则画在院的这一次
+  const shown = readOnly ? readOnly.id : current;
   // 在用医嘱给护理记录的「关联医嘱」下拉（P2-863）：执行某条医嘱产生的护理记录挂到那条医嘱上，医嘱执行视图的
   // 「关联护理记录 N 条」才数得到——原先表单没有这一项，按界面用法恒为 0。续页取全（P2-1693，照 P2-1333）：原先只取缺省一页
-  // 200 条（按医嘱号倒序），临时医嘱执行过也一直「执行中」（P2-281），住得久的患者入院当天开的长期医嘱被挤出去、选不到
-  const [notes, nursing, vitals, completeness, activeOrders] = current
+  // 200 条（按医嘱号倒序），临时医嘱执行过也一直「执行中」（P2-281），住得久的患者入院当天开的长期医嘱被挤出去、选不到。
+  // 只读查看不画护理表单，也就不取医嘱
+  const [notes, nursing, vitals, completeness, activeOrders] = shown
     ? await Promise.all([
-        api(`/api/inpatient/admissions/${current}/progress-notes`),
-        api(`/api/inpatient/admissions/${current}/nursing-records`),
-        api(`/api/inpatient/admissions/${current}/vitals`),
-        api(`/api/inpatient/admissions/${current}/document-completeness`),
-        fetchAllPages(api, `/api/inpatient/orders?admission_id=${current}&status=active`),
+        api(`/api/inpatient/admissions/${shown}/progress-notes`),
+        api(`/api/inpatient/admissions/${shown}/nursing-records`),
+        api(`/api/inpatient/admissions/${shown}/vitals`),
+        api(`/api/inpatient/admissions/${shown}/document-completeness`),
+        readOnly ? [] : fetchAllPages(api, `/api/inpatient/orders?admission_id=${current}&status=active`),
       ])
     : [[], [], [], null, []];
   // 交接班清单（P2-476）：原先只记得进、没有一个页面看得见——接班的人无从读起。交接班按病区、不挂某次住院，
@@ -82,24 +97,32 @@ async function renderClinicalDocs() {
       <form class="inline" id="doc-pick"><select name="admission_id">${
         inHospital.map((a) => `<option value="${a.id}" ${a.id === current ? "selected" : ""}>${esc(a.ward_name)} ${esc(a.bed_no)} ${esc(a.patient_name)} · ${esc(a.diagnosis_name || "住院")}（住院号 ${a.id}）</option>`).join("")
       }</select><button>切换</button></form>
+      <form class="inline" id="doc-discharged"><select name="admission_id"><option value="">已出院的住院（只读查看）${
+        discharged.total !== null && discharged.rows.length < discharged.total
+          ? `：列住院号最近的 ${discharged.rows.length} 次，共 ${discharged.total} 次` : ""}</option>${
+        discharged.rows.map((a) => `<option value="${a.id}"${readOnly && a.id === readOnly.id ? " selected" : ""}>${esc(a.ward_name)} ${esc(a.bed_no)} ${esc(a.patient_name)} · ${esc(a.diagnosis_name || "住院")}（住院号 ${a.id}）</option>`).join("")
+      }</select><button>查看</button></form>
+      ${readOnly ? `<p class="desc" id="doc-readonly">正在只读查看已出院的 <b>${esc(readOnly.ward_name)} ${esc(readOnly.bed_no)} ${
+        esc(readOnly.patient_name)}</b>（住院号 ${readOnly.id}）：出院后病程、护理、体征都不能再写，不摆写入表单；选回首项回到在院患者</p>`
+        : ""}
       ${completeness ? `<p class="msg ${completeness.complete ? "ok" : "err"}">${
         completeness.complete ? "文书完整" : "缺项：" + completeness.missing.join("、")}</p>` : '<p class="msg">暂无在院患者</p>'}
     `)}
-    ${current ? `
+    ${shown ? `
     ${panel(`病程记录（${notes.length}）`, `
-      <form class="inline" id="note-form">
+      ${readOnly ? "" : `<form class="inline" id="note-form">
         <select name="note_type">${Object.entries(NOTE_TYPES).map(([k, v]) =>
           `<option value="${k}"${k === PROGRESS_NOTE_DEFAULT ? " selected" : ""}>${v}</option>`).join("")}</select>
         <input name="doctor_name" placeholder="记录医师">
         <input name="content" placeholder="病程内容" required style="min-width:320px">
         <label style="font-size:13px">记录时间（留空按此刻） <input name="recorded_at" type="datetime-local"></label>
         <button>书写</button></form>
-      <p class="msg" id="doc-msg"></p>
+      <p class="msg" id="doc-msg"></p>`}
       ${table(["时间", "类型", "医师", "内容"], notes, (n) =>
         `<tr><td>${esc(n.recorded_at)}</td><td>${esc(NOTE_TYPES[n.note_type] || n.note_type)}</td>
          <td>${esc(n.doctor_name)}</td><td>${esc(n.content)}</td></tr>`)}`)}
     ${panel(`护理记录（${nursing.length}）`, `
-      <form class="inline" id="nursing-form">
+      ${readOnly ? "" : `<form class="inline" id="nursing-form">
         <select name="nursing_level">${Object.entries(NURSING_LEVELS).map(([k, v]) =>
           `<option value="${k}"${k === INPATIENT_NURSING_DEFAULT ? " selected" : ""}>${v}</option>`).join("")}</select>
         <input name="nurse_name" placeholder="护士">
@@ -108,19 +131,19 @@ async function renderClinicalDocs() {
             esc(o.content.slice(0, 30))}</option>`).join("")}</select>
         <input name="content" placeholder="护理内容" required style="min-width:280px">
         <label style="font-size:13px">记录时间（留空按此刻） <input name="recorded_at" type="datetime-local"></label>
-        <button>记录</button></form>
+        <button>记录</button></form>`}
       ${table(["时间", "级别", "护士", "内容"], nursing, (r) =>
         `<tr><td>${esc(r.recorded_at)}</td><td>${esc(NURSING_LEVELS[r.nursing_level] || r.nursing_level)}</td>
          <td>${esc(r.nurse_name)}</td><td>${esc(r.content)}</td></tr>`)}`)}
     ${panel(`体温单（${vitals.length}）`, `
-      <form class="inline" id="vital-form">
+      ${readOnly ? "" : `<form class="inline" id="vital-form">
         <label style="font-size:13px">测量时刻 <input name="measured_at" type="datetime-local" required></label>
         <input name="temperature" type="number" step="0.1" placeholder="体温℃">
         <input name="pulse" type="number" placeholder="脉搏"><input name="respiration" type="number" placeholder="呼吸">
         <input name="sbp" type="number" placeholder="收缩压"><input name="dbp" type="number" placeholder="舒张压">
         <input name="intake_ml" type="number" min="0" placeholder="入量 ml"><input name="output_ml" type="number" min="0" placeholder="出量 ml">
         <input name="weight_kg" type="number" step="any" min="0" placeholder="体重 kg">
-        <button>录入</button></form>
+        <button>录入</button></form>`}
       ${vitals.length ? lineChart(vitals.map((v) => v.measured_at.slice(5, 10)),
         // 未测的给 null、不给 0（P2-158）：接口的注释与用户手册都说「未测项留空不要填 0，填 0 会污染体温单趋势曲线」
         { "体温": vitals.map((v) => v.temperature ?? null), "脉搏": vitals.map((v) => v.pulse ?? null) },
@@ -157,7 +180,8 @@ async function renderClinicalDocs() {
          <td>${esc(h.critical_count)}</td><td>${esc(h.content)}</td></tr>`)}
       ${handovers.length >= 50 ? '<p class="desc"><b>只列最新 50 条</b>，按病区 / 日期筛看更早的。</p>' : ""}`)}`;
 
-  const pickAdmission = (admissionId) => { localStorage.setItem("medplat_doc_adm", admissionId); route(); };
+  // 选在院的即回到在院患者的写入视图（P2-1768：只读查看的那一次一并放下）
+  const pickAdmission = (admissionId) => { DOC_DISCHARGED.admission_id = ""; localStorage.setItem("medplat_doc_adm", admissionId); route(); };
   $("#doc-pick").onsubmit = (e) => {
     e.preventDefault();
     pickAdmission(new FormData(e.target).get("admission_id"));
@@ -165,6 +189,13 @@ async function renderClinicalDocs() {
   // 下拉一改就切换（P1-231）：原先只有点「切换」才记住——下拉显示乙、没点切换，下面的病程 / 护理 / 体温单
   // 照旧按甲写，回执照样「已记录」（core.js `pickedId` 注释里要防的「屏幕上写着甲，病程记录写进了乙」同一种坏法）
   $("#doc-pick select").onchange = (e) => pickAdmission(e.target.value);
+  // 已出院的只读查看（P2-1768）：下拉一改就切换（同上，P1-231）；选回首项（空值）回到在院患者
+  const viewDischarged = (admissionId) => { DOC_DISCHARGED.admission_id = String(admissionId || ""); route(); };
+  $("#doc-discharged").onsubmit = (e) => {
+    e.preventDefault();
+    viewDischarged(new FormData(e.target).get("admission_id"));
+  };
+  $("#doc-discharged select").onchange = (e) => viewDischarged(e.target.value);
   $("#handover-form").onsubmit = (e) => { e.preventDefault();
     postAction("/api/inpatient/handovers", formJson(e.target, ["ward_id", "critical_count"]), "#handover-msg"); };
   $("#handover-filter").onsubmit = (e) => {
@@ -175,6 +206,7 @@ async function renderClinicalDocs() {
   };
   if (handoverError) setMsg("#handover-msg", `${handoverError}（已回到全部病区）`, false);
   if (!current) return;
+  if (readOnly) return;   // 只读查看没画写入表单（P2-1768），没有提交处理要挂
   $("#note-form").onsubmit = (e) => { e.preventDefault();
     postAction(`/api/inpatient/admissions/${current}/progress-notes`, formJson(e.target), "#doc-msg"); };
   $("#nursing-form").onsubmit = (e) => { e.preventDefault();
