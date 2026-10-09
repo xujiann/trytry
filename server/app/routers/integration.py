@@ -338,8 +338,8 @@ def parse_hl7v2_patient(message: str, *, any_event: bool = False) -> tuple[dict,
         raise HTTPException(status_code=422, detail="PID-3 身份证号缺失或格式不正确")
     if not name:
         raise HTTPException(status_code=422, detail="PID-5 患者姓名缺失")
-    _refuse_ciphertext("PID-3 身份证号", id_card)   # 解析即拒、早于任何写库（P2-1723）
-    _refuse_ciphertext("PID-13 联系电话", phone)
+    _refuse_cipher_prefix("PID-3 身份证号", id_card)   # 解析即拒、早于任何写库（P2-1723）
+    _refuse_cipher_prefix("PID-13 联系电话", phone)
 
     birth_date = ""
     if len(birth_raw) >= 8 and birth_raw[:8].isdigit():
@@ -375,7 +375,7 @@ def _pid5_name(raw: str) -> str:
     return _hl7_unescape("".join(part.strip() for part in parts[:3])).strip()
 
 
-def _refuse_ciphertext(label: str, value: object) -> None:
+def _refuse_cipher_prefix(label: str, value: object) -> None:
     """入站的证件号 / 电话以密文前缀 `pii1$` 开头的，按解析失败 422 拒收（P2-1723）。
 
     两列都是加密列（`EncryptedPII`），见前缀就当密文：写入直通、读出解密，解不开就抛。原先 A08 拿 PID-13 的 `pii1$x`
@@ -496,8 +496,8 @@ def parse_fhir_patient(resource: dict) -> dict:
         if telecom.get("system") == "phone" and telecom.get("value"):
             phone = telecom["value"]
             break
-    _refuse_ciphertext("identifier 身份证号", id_card)   # 同 PID-3 / PID-13，解析即拒（P2-1723）
-    _refuse_ciphertext("telecom 电话", phone)
+    _refuse_cipher_prefix("identifier 身份证号", id_card)   # 同 PID-3 / PID-13，解析即拒（P2-1723）
+    _refuse_cipher_prefix("telecom 电话", phone)
 
     # 性别同 PID-8（P2-1078）：原先只认全小写的 male / female，Male、FEMALE 都成了「未知」
     raw_gender = resource.get("gender")
