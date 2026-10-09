@@ -5,6 +5,7 @@
 - 出院前置：病案首页已填写（M8 计费上线后另加"费用已结清"校验）；
 - 病案首页含出院诊断/手术/费用汇总/转归（WS 445 最小集），为 DRGs（M12）数据底座。
 """
+from collections.abc import Iterable
 from datetime import datetime, timezone
 from typing import cast
 
@@ -78,8 +79,16 @@ def create_ward(body: WardCreate, db: Session = Depends(get_db), user: User = De
     assert_org_writable(db, user, body.org_id)
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="机构不存在")
-    if db.query(Ward).filter(Ward.org_id == body.org_id, Ward.name == body.name).first():
+    # 同机构病区名按比对键 `text_key` 查重（P2-1698）：原先按字面，「外科病区 」（尾空格，从别处复制来的）与「外科病区」、全角空格、
+    # 大小写不同的各建一份，病区又改不了名、撤不掉（P2-1357）。写法不同的点名已有写法；字面完全相同的照旧原文案。存量不动
+    key = text_key(body.name)
+    same = [name for (name,) in db.query(Ward.name).filter(Ward.org_id == body.org_id).order_by(Ward.id)
+            if text_key(name) == key]
+    if body.name in same:
         raise HTTPException(status_code=409, detail="该机构下病区已存在")
+    if same:
+        raise HTTPException(status_code=409, detail=f"该机构下已有病区「{same[0]}」，与填写的「{body.name}」只差空白、"
+                                                    "全半角或大小写，疑似同一病区：请沿用已有病区")
     ward = insert_or_conflict(db, Ward(**body.model_dump()), "该机构下病区已存在")
     return {"id": ward.id, "org_id": ward.org_id, "name": ward.name}
 
@@ -113,12 +122,35 @@ class BedOut(BaseModel):
     status: str
 
 
+def bed_numbers_of(beds: Iterable[tuple[int, str]]) -> dict[tuple[int, int], str]:
+    """（病区, 床号）里的纯数字床号按（病区, 数值）记下已有的写法，给 `bed_twin` 查（P2-1125）。"""
+    return {(ward_id, int(no)): no for ward_id, no in beds if no.isascii() and no.isdigit()}
+
+
+def bed_twin(bed_numbers: dict[tuple[int, int], str], ward_id: int, bed_no: str) -> str | None:
+    """同一病区里写法不同、数值相同的纯数字床号（`01` 与 `1`）：有就返回已有的那种写法（P2-1125）。
+
+    存量导入（`scripts/import_legacy.py`）与手工建床（`create_bed`，P2-1698）共用这一个判据（原先只在导入脚本里）：两张床
+    「01」「1」并存，「在院不可同床」就拦不住两位患者分住进去。`bed_numbers` 由 `bed_numbers_of` 建。
+    """
+    if not (bed_no.isascii() and bed_no.isdigit()):
+        return None
+    other = bed_numbers.get((ward_id, int(bed_no)))
+    return other if other is not None and other != bed_no else None
+
+
 @router.post("/beds", response_model=BedOut, status_code=201, dependencies=[Depends(require_admin)])
 def create_bed(body: BedCreate, db: Session = Depends(get_db)):
     if db.get(Ward, body.ward_id) is None:
         raise HTTPException(status_code=404, detail="病区不存在")
     if db.query(Bed).filter(Bed.ward_id == body.ward_id, Bed.bed_no == body.bed_no).first():
         raise HTTPException(status_code=409, detail="该病区下床号已存在")
+    # 同病区数值相同、写法不同的纯数字床号不另建（P2-1698，与存量导入的 P2-1125 同一个判据），点名已有写法。存量不动
+    same_ward = db.query(Bed.ward_id, Bed.bed_no).filter(Bed.ward_id == body.ward_id).order_by(Bed.id).all()
+    twin = bed_twin(bed_numbers_of((ward_id, no) for ward_id, no in same_ward), body.ward_id, body.bed_no)
+    if twin is not None:
+        raise HTTPException(status_code=409, detail=f"床号「{body.bed_no}」与本病区已有的床号「{twin}」数值相同、"
+                                                    "疑似同一张床：请按已有写法使用，不另建")
     bed = insert_or_conflict(db, Bed(**body.model_dump()), "该病区下床号已存在")
     return {"id": bed.id, "ward_id": bed.ward_id, "bed_no": bed.bed_no, "status": bed.status}
 

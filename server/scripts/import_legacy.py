@@ -98,6 +98,8 @@ from app.models import (  # noqa: E402
     Ward,
 )
 from app.routers.chronic import _suggest_next_due  # noqa: E402
+# 床号孪生判据（P2-1125）与手工建床共用一份（P2-1698），挪到了住院路由里
+from app.routers.inpatient import bed_numbers_of, bed_twin  # noqa: E402
 from app.routers.organizations import parent_level_problem  # noqa: E402
 from app.routers.patients import id_card_variants  # noqa: E402
 from app.schemas import OrganizationCreate  # noqa: E402
@@ -293,14 +295,6 @@ def _sci_notation(row: dict, line_no: int, report: ImportReport, *cols: str) -> 
         report.error(line_no, f"疑似被表格软件改成科学计数法: {'；'.join(bad)}（把这一列设成文本格式、改回原值后重导）", row)
         return True
     return False
-
-
-def _bed_twin(bed_numbers: dict[tuple[int, int], str], ward_id: int, bed_no: str) -> str | None:
-    """同一病区里写法不同、数值相同的纯数字床号（`01` 与 `1`）：有就返回已有的那种写法（P2-1125）。"""
-    if not (bed_no.isascii() and bed_no.isdigit()):
-        return None
-    other = bed_numbers.get((ward_id, int(bed_no)))
-    return other if other is not None and other != bed_no else None
 
 
 def _check_utf8(path: Path) -> None:
@@ -970,7 +964,7 @@ def import_admissions(db, rows, report: ImportReport, ctx: ImportContext) -> Non
         for bid, wid, no, status in db.query(Bed.id, Bed.ward_id, Bed.bed_no, Bed.status).all()
     }
     # 纯数字床号按（病区, 数值）记下已有的写法（P2-1125）：errors.csv 经 Excel 一开一存，「01」成了「1」
-    bed_numbers = {(wid, int(no)): no for (wid, no) in beds if no.isascii() and no.isdigit()}
+    bed_numbers = bed_numbers_of(beds)
     existing = {
         (pid, oid, _date_key(admitted))
         for pid, oid, admitted in db.query(
@@ -1023,7 +1017,7 @@ def import_admissions(db, rows, report: ImportReport, ctx: ImportContext) -> Non
         if bed_entry is None:
             # 按字面找不到就建床之前，先看同病区有没有数值相同的另一种写法（P2-1125）：原先「1」另建一张床与「01」并存，
             # 「在院不可同床」就此拦不住——01 床已有人在院，再导进来的 1 床照收
-            twin = _bed_twin(bed_numbers, ward_id, bed_no)
+            twin = bed_twin(bed_numbers, ward_id, bed_no)
             if twin is not None:
                 report.error(line_no, f"床号 {bed_no} 与本病区已有的床号 {twin} 数值相同、疑似同一张床"
                                       "（表格软件会吃掉前导零）：请按已有写法填", row)
@@ -1032,8 +1026,7 @@ def import_admissions(db, rows, report: ImportReport, ctx: ImportContext) -> Non
             db.add(bed)
             db.flush()
             bed_entry = beds[(ward_id, bed_no)] = (bed.id, "free")
-            if bed_no.isascii() and bed_no.isdigit():
-                bed_numbers[(ward_id, int(bed_no))] = bed_no
+            bed_numbers.update(bed_numbers_of([(ward_id, bed_no)]))   # 纯数字的才记（同 `bed_numbers_of`）
         bed_id, bed_status = bed_entry
         if in_hospital:
             if bed_status == "occupied":
