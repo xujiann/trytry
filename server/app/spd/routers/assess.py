@@ -1659,6 +1659,31 @@ class RedeemIn(BaseModel):
     goods_id: int
 
 
+#: 出核销码最多抽几次（P2-1578）。6 位码一百万个，同时有 N 张待核销单时一抽撞上的概率约 N/10⁶：常驻一百来张时连撞 8 次
+#: 是 10⁻³² 量级、等于不会发生；真连撞 8 次说明待核销单已堆到码空间的大半，宁可 409 让人重试，也不发一个与别人同码的单
+VERIFY_CODE_ATTEMPTS = 8
+
+
+def _fresh_verify_code(db: Session) -> str | None:
+    """抽一个与现有待核销单都不同的 6 位核销码；连抽 `VERIFY_CODE_ATTEMPTS` 次都撞上返回 None（P2-1578）。
+
+    原先随手一抽、不判重：两张待核销单撞上同一个码时，核销只认码，同一个码核得了两次——第二次核掉的是别人的单，兑换人
+    再去只剩「核销码无效或已核销」，积分已扣、也没有退回入口。核销只认待核销的单，所以只跟待核销的比，已核销 / 已取消的
+    码可以再发。判重与插入不在一个临界区：两笔兑换同一瞬间抽中同一个码的概率还要再乘百万分之一，不另加锁；要根除得给待
+    核销的码建部分唯一索引（迁移与存量撞码的处置），不在本条。
+    """
+    for _ in range(VERIFY_CODE_ATTEMPTS):
+        code = f"{randbelow(1000000):06d}"
+        taken = (
+            db.query(SpdRedeem.id)
+            .filter(SpdRedeem.verify_code == code, SpdRedeem.status == "pending")
+            .first()
+        )
+        if taken is None:
+            return code
+    return None
+
+
 @router.post("/redeems", response_model=RedeemCreatedOut, status_code=201)
 def redeem(
     body: RedeemIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
@@ -1675,6 +1700,10 @@ def redeem(
     account = db.query(SpdPointAccount).filter(SpdPointAccount.user_id == user.id).first()
     if account is None:
         raise HTTPException(status_code=409, detail="积分余额不足")
+    # 先出码、后扣减（P2-1578）：码在待核销单里判过重；抽不出不撞的码时库存与积分都还没动
+    verify_code = _fresh_verify_code(db)
+    if verify_code is None:
+        raise HTTPException(status_code=409, detail="核销码连续撞上未核销的兑换单，请重试（库存与积分未扣）")
     if not take_amount(db, SpdGoods, goods.id, "stock", 1):
         db.rollback()
         raise HTTPException(status_code=409, detail="商品库存不足")
@@ -1689,7 +1718,7 @@ def redeem(
     account.updated_at = now_naive()
     record = SpdRedeem(
         account_id=account.id, goods_id=goods.id, points=goods.points,
-        verify_code=f"{randbelow(1000000):06d}", status="pending",
+        verify_code=verify_code, status="pending",
     )
     db.add(record)
     # 同样落在事件键之外：direction='out' 且不带 ref_id，同一账户多次兑换本就合法。
@@ -1744,6 +1773,9 @@ def verify_redeem(
     record = (
         db.query(SpdRedeem)
         .filter(SpdRedeem.verify_code == body.verify_code, SpdRedeem.status == "pending")
+        # 按兑换先后取（P2-1578）：出码已在待核销单里判重，但修前存下的待核销单里可能已有同码的——原先不排序，PG 上
+        # 取到哪张看堆里的物理顺序，后兑换的人先来核销时两人的奖品直接对调；按单号先后核，结果确定
+        .order_by(SpdRedeem.id)
         .first()
     )
     if record is None:
