@@ -583,10 +583,11 @@ def resolve_critical(
     if not report.critical:
         raise HTTPException(status_code=422, detail="非危急值报告，无需处置反馈")
     if report.critical_status != "acknowledged":
-        raise HTTPException(status_code=409, detail="须先确认接收后方可处置反馈")
+        raise HTTPException(status_code=409, detail=_resolve_refused(report.critical_status))
     if not _move_critical(db, report.id, ("acknowledged",), "resolved"):
         db.rollback()
-        raise HTTPException(status_code=409, detail="须先确认接收后方可处置反馈")
+        db.refresh(report)   # 按库里此刻的状态说（P2-1712），同 acknowledge_critical
+        raise HTTPException(status_code=409, detail=_resolve_refused(report.critical_status))
     db.add(
         CriticalAction(
             report_id=report.id,
@@ -598,6 +599,16 @@ def resolve_critical(
     db.commit()
     db.refresh(report)
     return report
+
+
+def _resolve_refused(status: str) -> str:
+    """处置反馈被拒的说法按当前状态（P2-1712）：还没确认接收的（含存量空串）照旧说「须先确认接收」，别的报当前状态。
+
+    原先两处 409 都是这句固定文案——已处置的危急值再点「处置反馈」（页面没刷新、别人已先处置），框里写着「须先确认接收后方可
+    处置反馈」，把医生引去找根本不存在的「确认接收」按钮。措辞同 `acknowledge_critical` 取 `CRITICAL_STATUS_NAMES`。"""
+    if status in ("notified", ""):
+        return "须先确认接收后方可处置反馈"
+    return f"当前状态 {CRITICAL_STATUS_NAMES.get(status, status)} 不可处置反馈"
 
 
 def _move_critical(db: Session, report_id: int, expect: tuple[str, ...], to: str) -> bool:
