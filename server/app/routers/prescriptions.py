@@ -137,13 +137,16 @@ def _rule_state(rule: DrugRule) -> dict:
     return {field: getattr(rule, field) for field in RULE_FIELD_NAMES}
 
 
-def _log_rule_change(db: Session, action: str, before: dict | None, rule: DrugRule, user: User) -> None:
-    """记一条规则改动（P2-578）。前后一模一样的不记：导入同样的值、恢复本就生效的，都不算改过。"""
+def _log_rule_change(db: Session, action: str, before: dict | None, rule: DrugRule, user: User) -> bool:
+    """记一条规则改动（P2-578）。前后一模一样的不记：导入同样的值、恢复本就生效的，都不算改过。
+
+    返回记没记（即算不算改过）：导入回执的「覆盖更新」按它数（P2-1665），与改动记录同一个判法、不另写一份。"""
     after = _rule_state(rule)
     if before == after:
-        return
+        return False
     db.add(DrugRuleChange(drug_code=rule.drug_code, action=action, before=before, after=after,
                           changed_by=user.id))
+    return True
 
 
 @router.post("/rules", response_model=DrugRuleOut, status_code=201, dependencies=[Depends(require_admin)])
@@ -157,7 +160,10 @@ def create_rule(body: DrugRuleCreate, db: Session = Depends(get_db), user: User 
 
 class RuleImportOut(BaseModel):
     imported: int
+    #: 已有编码、且确实改了值的条数（P2-1665 之前一字未改的也算在这里）
     updated: int
+    #: 已有编码、导入的值与现行规则一模一样的条数（P2-1665 加的，只在末尾加键）
+    unchanged: int
 
 
 class RuleActiveOut(BaseModel):
@@ -182,7 +188,7 @@ def import_rules(body: list[DrugRuleCreate], db: Session = Depends(get_db), user
     if duplicated:
         raise HTTPException(status_code=422, detail=f"同一批里药品编码重复：{'、'.join(duplicated[:20])}"
                                                     "（每个编码只能有一行，核对哪一行作数后再导）")
-    imported, updated = 0, 0
+    imported, updated, unchanged = 0, 0, 0
     for entry in body:
         rule = db.query(DrugRule).filter(DrugRule.drug_code == entry.drug_code).first()
         # 先试插；撞了说明有人并发导入了同一个 drug_code，取回来按更新处理。
@@ -200,10 +206,14 @@ def import_rules(body: list[DrugRuleCreate], db: Session = Depends(get_db), user
         before = _rule_state(rule)
         for field, value in entry.model_dump().items():
             setattr(rule, field, value)
-        _log_rule_change(db, "import", before, rule, user)
-        updated += 1
+        # 只有前后不同的才算「覆盖更新」（P2-1665）：原先不管改没改都计数，同值重导整套 50 条回执报「覆盖更新 50 条」，
+        # 改动记录却按「前后一模一样的不记」一条没记——回执与记录对不上，看不出真正改了哪几条
+        if _log_rule_change(db, "import", before, rule, user):
+            updated += 1
+        else:
+            unchanged += 1
     db.commit()
-    return {"imported": imported, "updated": updated}
+    return {"imported": imported, "updated": updated, "unchanged": unchanged}
 
 
 @router.get("/rules", response_model=list[DrugRuleOut], dependencies=[Depends(get_current_user)])

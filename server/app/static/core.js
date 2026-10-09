@@ -2019,7 +2019,7 @@ async function renderRx() {
           <textarea name="payload" rows="5" style="width:100%;font-family:monospace"
             placeholder='[{"drug_code":"AMOX","max_daily_dose":3000,"dose_unit":"mg","interactions":"","contraindicated_diagnoses":"","special_groups":"","renal_hepatic_note":"","review_points":"","antibiotic":true,"ddd":1500}]'></textarea>
           <p class="desc">一个 JSON 数组，每项一条规则；只有 drug_code 与 max_daily_dose 必填，其余留空走默认。
-            <b>同 drug_code 的既有规则会被整条覆盖</b>（不是合并字段），回执报出新建与更新各几条；覆盖前的值记在该规则的「改动记录」里。</p>
+            <b>同 drug_code 的既有规则会被整条覆盖</b>（不是合并字段），回执报出新建、覆盖更新、未改（值一模一样）各几条；覆盖前的值记在该规则的「改动记录」里。</p>
           <button class="btn">导入</button>
         </form></details>` : ""}
       ${table(["药品编码", "日剂量上限", "相互作用", "禁忌诊断", "特殊人群", "肝肾功能提示", "抗菌/DDD", "状态"]
@@ -2109,7 +2109,8 @@ async function renderRx() {
     try {
       const r = await api("/api/prescriptions/rules/import", { method: "POST", body: JSON.stringify(rows) });
       await route();   // 先重画再写回执（P2-1013）：原先写完即被重画冲掉
-      setMsg("#rx-msg", `导入完成：新建 ${r.imported} 条，覆盖更新 ${r.updated} 条`, true);
+      // 「未改」是同值重导、一字未改的条数（P2-1665）：覆盖更新只数确实改了值的，与各规则的「改动记录」对得上
+      setMsg("#rx-msg", `导入完成：新建 ${r.imported} 条，覆盖更新 ${r.updated} 条，未改 ${r.unchanged} 条`, true);
     } catch (err) { setMsg("#rx-msg", err.message, false); }
   };
   $("#page-body").onclick = async (e) => {

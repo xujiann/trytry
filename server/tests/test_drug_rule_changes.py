@@ -21,10 +21,12 @@ def history(client, admin):
     created = client.post("/api/prescriptions/rules", headers=admin, json={
         "drug_code": CODE, "max_daily_dose": 3, "dose_unit": "g", "antibiotic": True, "ddd": 1.5})
     assert created.status_code == 201, created.text
-    for dose, unit in ((3000, "mg"), (3000, "mg")):
+    # 第二次导入同样的值：回执记「未改」、不算覆盖更新，与改动记录不记它同一个判法（P2-1665，修前两次都报 updated 1）
+    for dose, unit, updated in ((3000, "mg", 1), (3000, "mg", 0)):
         imported = client.post("/api/prescriptions/rules/import", headers=admin, json=[{
             "drug_code": CODE, "max_daily_dose": dose, "dose_unit": unit, "antibiotic": True, "ddd": 1.5}])
-        assert imported.status_code == 200 and imported.json()["updated"] == 1, imported.text
+        assert imported.status_code == 200, imported.text
+        assert (imported.json()["updated"], imported.json()["unchanged"]) == (updated, 1 - updated), imported.text
     assert client.delete(f"/api/prescriptions/rules/{CODE}", headers=admin).status_code == 200
     assert client.post(f"/api/prescriptions/rules/{CODE}/reactivate", headers=admin).status_code == 200
     resp = client.get(f"/api/prescriptions/rules/{CODE}/changes", headers=admin)
@@ -58,7 +60,7 @@ def test_新建列出全部字段(history):
 def test_导入新建也记_撞了唯一约束的新建不留记录(client, admin):
     fresh = client.post("/api/prescriptions/rules/import", headers=admin, json=[{
         "drug_code": "P2578-NEW", "max_daily_dose": 1}])
-    assert fresh.json() == {"imported": 1, "updated": 0}
+    assert fresh.json() == {"imported": 1, "updated": 0, "unchanged": 0}
     rows = client.get("/api/prescriptions/rules/P2578-NEW/changes", headers=admin).json()
     assert [c["action"] for c in rows] == ["import"]
     dup = client.post("/api/prescriptions/rules", headers=admin, json={"drug_code": "P2578-NEW", "max_daily_dose": 2})

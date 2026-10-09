@@ -264,12 +264,12 @@ def test_rules_bulk_import(client, admin, setup):
     ]
     assert client.post("/api/prescriptions/rules/import", json=payload, headers=setup["doctor"]).status_code == 403
     first = client.post("/api/prescriptions/rules/import", json=payload, headers=admin)
-    assert first.status_code == 200 and first.json() == {"imported": 2, "updated": 0}
+    assert first.status_code == 200 and first.json() == {"imported": 2, "updated": 0, "unchanged": 0}
 
-    # 再次导入 → 按 drug_code 整条更新
+    # 再次导入 → 按 drug_code 整条更新；DPX02 一字未改，记「未改」不算覆盖更新（P2-1665，修前报 updated 2）
     payload[0]["special_groups"] = "child"
     again = client.post("/api/prescriptions/rules/import", json=payload, headers=admin)
-    assert again.json() == {"imported": 0, "updated": 2}
+    assert again.json() == {"imported": 0, "updated": 1, "unchanged": 1}
     rules = {r["drug_code"]: r for r in client.get("/api/prescriptions/rules", headers=admin).json()}
     assert rules["DPX01"]["special_groups"] == "child"
     assert rules["DPX01"]["contraindicated_diagnoses"] == "消化性溃疡,出血"

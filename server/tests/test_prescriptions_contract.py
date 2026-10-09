@@ -24,7 +24,8 @@ from conftest import reset_database
 
 from app.main import app
 
-IMPORT_KEYS = ["imported", "updated"]
+# P2-1665 在末尾加了 unchanged（只增不改：一字未改的不再算「覆盖更新」）
+IMPORT_KEYS = ["imported", "updated", "unchanged"]
 RULE_ACTIVE_KEYS = ["drug_code", "active"]
 REVIEW_POINTS_KEYS = [
     "prescription_id", "diagnosis_name", "status", "system_review_comment",
@@ -99,7 +100,7 @@ def seed(client, admin):
         "/api/prescriptions/rules/import",
         json=[
             {"drug_code": "RXCT-B", "max_daily_dose": 8, "dose_unit": "mg"},  # 新建
-            {"drug_code": "RXCT-A", "max_daily_dose": 3, "dose_unit": "g",   # 已有→更新
+            {"drug_code": "RXCT-A", "max_daily_dose": 3, "dose_unit": "g",   # 已有、值一模一样→未改（P2-1665）
              "review_points": "核对疗程与联用", "renal_hepatic_note": "肾功能不全减量"},
         ],
         headers=admin,
@@ -157,7 +158,8 @@ def seed(client, admin):
 def test_规则批量导入回执精确_键序(seed):
     body = seed["import"]
     assert list(body.keys()) == IMPORT_KEYS
-    assert body == {"imported": 1, "updated": 1}
+    # RXCT-A 导入的值与建规则时一模一样：P2-1665 之前算 updated 1，改动记录却一条没记
+    assert body == {"imported": 1, "updated": 0, "unchanged": 1}
     assert type(body["imported"]) is int
 
 
