@@ -121,12 +121,14 @@
     </div>
     <form id="survey-form" class="m-card hidden">
       <p class="hint">对签约服务 / 就诊 / 会诊进行满意度评价</p>
-      <select id="sv-type">
+      <!-- 类型与星级都不预置（P2-1777）：没选的不能当成选了，见 m.js 的满意度提交 -->
+      <select id="sv-type" required>
+        <option value="">请选择评价类型</option>
         <option value="contract">家医签约服务</option>
         <option value="encounter">就诊体验</option>
         <option value="consultation">远程会诊</option>
       </select>
-      <div id="sv-stars" class="stars" data-score="5">
+      <div id="sv-stars" class="stars">
         <span data-v="1">★</span><span data-v="2">★</span><span data-v="3">★</span><span data-v="4">★</span><span data-v="5">★</span>
       </div>
       <textarea id="sv-comment" placeholder="意见与建议（选填）" rows="3"></textarea>

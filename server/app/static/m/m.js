@@ -1067,6 +1067,10 @@ async function renderReferrals(box) {
 
 /* ---------------- 满意度评价 ---------------- */
 
+/* 星级与评价类型都不预置（P2-1777）：原先页面一打开五颗星全亮（index.html 的 data-score="5" 加这里加载时 paintStars(5)）、
+ * 类型默认「家医签约服务」——只写了「家医从不上门」没点星就提交，记成 5 分，带评语的投诉进不了满意度页的差评清单（≤2 分），
+ * 还拉高均分；后端 MySurveyIn.score 本是必填、没有缺省值，P1-136 定过「没答的不能当成答了」。现在没选类型、没点星不发请求，
+ * 在 #survey-msg 说出来；提交成功后星级与类型复位，下一条不沿用上一条的分 */
 const starBox = $("#sv-stars");
 function paintStars(score) {
   starBox.dataset.score = score;
@@ -1076,7 +1080,6 @@ function paintStars(score) {
 starBox.addEventListener("click", (e) => {
   if (e.target.dataset.v) paintStars(Number(e.target.dataset.v));
 });
-paintStars(5);
 
 $("#btn-goto-login").addEventListener("click", () => {
   switchTab("archive");
@@ -1098,17 +1101,22 @@ async function renderSurveyTab() {
 
 $("#survey-form").addEventListener("submit", async (e) => {
   e.preventDefault();
+  const score = Number(starBox.dataset.score || 0);   // 没点过星是空的（P2-1777）
+  if (!$("#sv-type").value) { setMsg("#survey-msg", "请选择评价类型", false); return; }
+  if (!(score >= 1 && score <= 5)) { setMsg("#survey-msg", "请先点星打分（1～5 星）再提交", false); return; }
   try {
     await authApi("/api/portal/me/surveys", {
       method: "POST",
       body: JSON.stringify({
         target_type: $("#sv-type").value,
-        score: Number(starBox.dataset.score),
+        score,
         comment: $("#sv-comment").value.trim(),
       }),
     });
     setMsg("#survey-msg", "评价已提交，感谢您的反馈！", true);
     $("#sv-comment").value = "";
+    $("#sv-type").value = "";
+    paintStars(0);
   } catch (err) {
     setMsg("#survey-msg", err.message, false);
   }

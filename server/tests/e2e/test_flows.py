@@ -6497,6 +6497,33 @@ def test_居民端代管视角_两个页签顶部写明当前是谁_监测回执
     expect(page.locator("#family-switch .chip.on")).to_contain_text(elder["name"])
 
 
+def test_居民端满意度不预置五星_没点星不提交_交了之后复位(page, base_url, admin_call, admin_read):
+    """P2-1777（第五十二批扫描 AP1-2）：满意度页原先一打开五颗星全亮、类型默认「家医签约服务」，只写了意见没点星就提交，
+    记成 5 分，带评语的投诉进不了差评清单（≤2 分）。修后星级与类型都不预置，没点星不发请求、在 #survey-msg 说出来；
+    交了之后星级与类型复位。用自己的手机号（验证码单号冷却 60 秒）。"""
+    person = {"name": "评价E2E居民", "id_card": "320981197302024133", "phone": "13788990132"}
+    admin_call("POST", "/api/patients", {**person, "gender": "女", "birth_date": "1973-02-02"})
+    comment = "E2E家医从不上门"
+
+    _resident_login(page, base_url, person)
+    page.click('[data-tab="survey"]')
+    expect(page.locator("#survey-form")).to_be_visible()
+    expect(page.locator("#sv-stars span.on")).to_have_count(0)   # 修前五星全亮
+    expect(page.locator("#sv-type")).to_have_value("")          # 修前默认「家医签约服务」
+    page.select_option("#sv-type", "contract")
+    page.fill("#sv-comment", comment)
+    page.click('#survey-form button[type="submit"]')
+    expect(page.locator("#survey-msg")).to_have_text("请先点星打分（1～5 星）再提交")   # 修前「评价已提交」、记 5 分
+    assert not [s for s in admin_read("/api/surveys?limit=500") if s["comment"] == comment]
+    page.click('#sv-stars span[data-v="2"]')
+    page.click('#survey-form button[type="submit"]')
+    expect(page.locator("#survey-msg")).to_have_text("评价已提交，感谢您的反馈！")
+    expect(page.locator("#sv-stars span.on")).to_have_count(0)   # 复位：下一条不沿用这一条的分
+    expect(page.locator("#sv-type")).to_have_value("")
+    negative = [s for s in admin_read("/api/surveys?max_score=2&limit=500") if s["comment"] == comment]
+    assert [(s["score"], s["target_type"]) for s in negative] == [(2, "contract")], negative   # 进了差评清单
+
+
 def test_spd_doctor_mobile_todo_and_referral(page, base_url, spd_seed):
     """医生移动端：登录 → 慢专病待办接收 → 转诊复核通过（prompt 应答意见）。
 
