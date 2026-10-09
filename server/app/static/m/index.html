@@ -99,6 +99,8 @@
       <button type="button" id="btn-service-login">去登录</button>
     </div>
     <div id="service-body" class="hidden">
+      <!-- 当前对象（P2-1776）：本页沿用「我的档案」里选中的家人，写明是谁、可换人，见 m.js 的 renderViewingBar -->
+      <div id="service-who" class="account-bar"></div>
       <div class="seg">
         <button class="seg-btn active" data-svc="appointment">预约</button>
         <button class="seg-btn" data-svc="contract">签约</button>
@@ -150,6 +152,8 @@
       <button type="button" id="btn-spd-login">去登录</button>
     </div>
     <div id="spd-body" class="hidden">
+      <!-- 当前对象（P2-1776）：同「在线服务」，见 m.js 的 renderViewingBar -->
+      <div id="spd-who" class="account-bar"></div>
       <div class="seg">
         <button class="seg-btn active" data-spd="home">概览</button>
         <button class="seg-btn" data-spd="measure">监测</button>

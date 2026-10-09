@@ -6454,6 +6454,49 @@ def test_居民端在慢专病页签退出或掉线_本人档案不留在屏幕�
     signed_out()
 
 
+def test_居民端代管视角_两个页签顶部写明当前是谁_监测回执写家人姓名(page, base_url, admin_call, admin_read):
+    """P2-1776（第五十二批扫描 AP1-1）：「在线服务」「慢专病」沿用「我的档案」里选中的家人（viewingPatientId 全页共享），
+    原先页面上不写是谁、回执也不写——看过母亲的档案再去录自己的血压，记进了母亲的监测台账。修后两个页签顶部常驻
+    「当前：姓名（关系 / 本人）」与「换人」（回到「我的档案」的成员切换），监测回执写「已为 某某（父母）保存」。
+
+    老人没登记手机号：窗口核验后登记代管授权（P1-2），居民端才加得进来。用自己的手机号（验证码单号冷却 60 秒）。"""
+    me = {"name": "代管E2E本人", "id_card": "320981197201014131", "phone": "13788990131"}
+    elder = {"name": "代管E2E老母", "id_card": "320981194503034132"}
+    admin_call("POST", "/api/patients", {**me, "gender": "男", "birth_date": "1972-01-01"})
+    old = admin_call("POST", "/api/patients", {**elder, "gender": "女", "birth_date": "1945-03-03"})
+    admin_call("POST", "/api/consents", {"patient_id": old["id"], "scene": "family_delegate", "evidence": "E2E窗口核验"})
+
+    _resident_login(page, base_url, me)
+    page.click("#family-add summary")
+    page.fill("#fm-name", elder["name"])
+    page.fill("#fm-idcard", elder["id_card"])
+    page.select_option("#fm-relation", "parent")
+    page.click('#family-form button[type="submit"]')
+    expect(page.locator("#family-switch .chip", has_text=elder["name"])).to_be_visible()
+    page.click('[data-tab="service"]')
+    expect(page.locator("#service-who")).to_contain_text(f"当前：{me['name']}（本人）")   # 修前页面上没有当前对象
+
+    page.click('[data-tab="archive"]')
+    page.locator("#family-switch .chip", has_text=elder["name"]).click()
+    expect(page.locator("#family-switch .chip.on")).to_contain_text(elder["name"])
+    page.click('[data-tab="service"]')
+    expect(page.locator("#service-who")).to_contain_text(f"当前：{elder['name']}（父母）")
+    page.click('[data-tab="spd"]')
+    expect(page.locator("#spd-who")).to_contain_text(f"当前：{elder['name']}（父母）")
+    expect(page.locator("#spd-who")).to_contain_text(f"记在{elder['name']}名下")
+    page.click('[data-spd="measure"]')
+    page.fill("#spd-value", "126")
+    page.click('#spd-measure-form button[type="submit"]')
+    expect(page.locator("#spd-measure-msg")).to_contain_text(f"已为{elder['name']}（父母）保存")   # 修前「已保存，指标…」
+    # 沿用选择的行为不改：这一条记在老人名下
+    rows = admin_read(f"/api/spd/measurements?patient_id={old['id']}")
+    assert [r["value"] for r in rows] == [126], rows
+    # 「换人」回到「我的档案」的成员切换
+    page.click("#spd-who [data-viewing-switch]")
+    expect(page.locator("#pane-archive")).to_be_visible()
+    expect(page.locator("#family-switch .chip.on")).to_contain_text(elder["name"])
+
+
 def test_spd_doctor_mobile_todo_and_referral(page, base_url, spd_seed):
     """医生移动端：登录 → 慢专病待办接收 → 转诊复核通过（prompt 应答意见）。
 

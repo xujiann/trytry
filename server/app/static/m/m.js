@@ -284,6 +284,8 @@ $("#btn-logout").addEventListener("click", async () => {
 function signOutLocally() {
   clearAuth();
   viewingPatientId = null;
+  familyMembers = [];   // 当前对象的姓名缓存一并清掉（P2-1776）：换一个人登录不沿用上一位的家人
+  selfName = "";
   renderArchiveTab();
   renderServiceTab();
   renderSurveyTab();
@@ -402,6 +404,38 @@ let viewingPatientId = null;
 
 const RELATION_NAMES = { self: "本人", child: "子女", parent: "父母", spouse: "配偶", other: "家人" };
 
+/* 当前对象的姓名（P2-1776）：「在线服务」「慢专病」两个页签沿用这里选中的成员（viewingPatientId 全页共享），顶部要写明是谁、
+ * 写操作的回执要带上姓名。本人的取 /me（renderViewingBar 记下），代管成员的取 renderFamily 已取到的 /me/family，不另发请求 */
+let selfName = "";
+let familyMembers = [];
+
+/** 当前查看与办理的是谁（P2-1776）：`{ name, label }`，label 形如「张三（本人）」「李四（父母）」。纯文本：插进 innerHTML
+ *  要先 esc()，写 textContent / alert 的不用 */
+function viewingWho() {
+  const m = viewingPatientId === null ? null : familyMembers.find((x) => x.patient_id === viewingPatientId);
+  const name = viewingPatientId === null ? selfName || "本人" : m ? m.name : "家庭成员";
+  const relation = viewingPatientId === null ? "本人" : m ? RELATION_NAMES[m.relation] || m.relation : "家人";
+  return { name, label: `${name}（${relation}）` };
+}
+
+/** 「在线服务」「慢专病」顶部常驻的当前对象（P2-1776）：两个页签沿用「我的档案」里选中的家人，原先不写是谁——看过母亲的
+ *  档案再去录自己的血压、做自查、发咨询、约号，全记到母亲名下。这里写明「当前：姓名（关系 / 本人）」；「换人」回到「我的档案」
+ *  的成员切换，不就地另做一套：选人只在那一处（成员被解除后回落本人的判断在 renderFamily），用户手册第七章写的也是在「我的
+ *  档案」页顶部切换查看对象。未登录 / 未实名时清空，姓名不留在页面上（同 P2-1219） */
+function renderViewingBar(sel, me) {
+  const bar = $(sel);
+  if (!me || !me.bound) { bar.innerHTML = ""; return; }
+  selfName = me.name;
+  const who = viewingWho();
+  bar.innerHTML = `<span class="who">当前：${esc(who.label)}</span>
+    ${viewingPatientId === null ? "" : `<span class="sub">本页的查看与办理都记在${esc(who.name)}名下</span>`}
+    <button type="button" class="chip" data-viewing-switch>换人</button>`;
+  bar.querySelector("[data-viewing-switch]").addEventListener("click", () => {
+    switchTab("archive");
+    history.replaceState(null, "", "#archive");
+  });
+}
+
 async function renderFamily() {
   const box = $("#family-switch");
   let members = [];
@@ -411,6 +445,7 @@ async function renderFamily() {
     box.innerHTML = "";
     return;
   }
+  familyMembers = members;   // 两个页签顶部的当前对象与写操作回执取这一份（P2-1776）
   // 代管成员被解除后，当前查看对象可能已失效，回落到本人
   if (viewingPatientId !== null && !members.some((m) => m.patient_id === viewingPatientId)) {
     viewingPatientId = null;
@@ -689,16 +724,18 @@ $("#btn-service-login").addEventListener("click", () => {
 });
 
 async function renderServiceTab() {
-  let bound = false;
+  let me = null;
   if (isAuthed()) {
     try {
-      bound = (await authApi("/api/portal/me")).bound;
+      me = await authApi("/api/portal/me");
     } catch (err) {
-      bound = false;
+      me = null;
     }
   }
+  const bound = Boolean(me && me.bound);
   $("#service-guard").classList.toggle("hidden", bound);
   $("#service-body").classList.toggle("hidden", !bound);
+  renderViewingBar("#service-who", me);   // 当前对象（P2-1776）
   if (bound) await loadService();
 }
 
@@ -762,6 +799,7 @@ async function renderAppointments(box) {
   box.innerHTML = `
     <div class="sec-title">我的预约（${partial ? `已列 ${mine.length} / 共 ${total}` : mine.length}）</div>
     ${partial ? '<p class="hint">待就诊的全部列出、排在最前，其余只列最近约的</p>' : ""}
+    <p id="appt-msg" class="msg"></p>
     ${list || '<p class="empty">暂无预约</p>'}
     <div class="sec-title">可约号源</div>
     <div class="m-card">
@@ -797,7 +835,7 @@ async function renderAppointments(box) {
       ${kv("资源", esc(s.resource_name))}
       ${kv("时间", `${esc(s.slot_date)} ${esc(s.slot_time)}`)}
       ${kv("余号", String(s.remaining))}
-      <button class="book-slot" data-id="${s.id}">为${viewingPatientId === null ? "本人" : "该成员"}预约</button>
+      <button class="book-slot" data-id="${s.id}">为${viewingPatientId === null ? "本人" : esc(viewingWho().name)}预约</button>
     </div>`).join("") || '<p class="empty">暂无可约号源</p>';
     if (slots.length >= SLOT_PAGE) {
       holder.insertAdjacentHTML("beforeend",
@@ -806,12 +844,19 @@ async function renderAppointments(box) {
     holder.querySelectorAll(".book-slot").forEach((btn) => {
       btn.addEventListener("click", async () => {
         btn.disabled = true;
+        // 回执写明约给了谁、约的哪个号（P2-1776）：原先约完只重画清单，代管几位家人时分不清记在谁名下。先重画再写（P2-1013）
+        const who = viewingWho();
+        const s = slots.find((x) => String(x.id) === btn.dataset.id) || {};
         try {
           await authApi("/api/portal/me/appointments", {
             method: "POST",
             body: JSON.stringify({ slot_id: Number(btn.dataset.id), patient_id: viewingPatientId }),
           });
           await loadService();
+          if ($("#appt-msg")) {
+            setMsg("#appt-msg", `已为${who.label}预约：${
+              [s.org_name, s.resource_name, s.slot_date, s.slot_time].filter(Boolean).join(" ")}`, true);
+          }
         } catch (err) {
           btn.disabled = false;
           alert(err.message);
@@ -1240,12 +1285,14 @@ if (spdLoginBtn) {
 }
 
 async function renderSpdTab() {
-  let bound = false;
+  let me = null;
   if (isAuthed()) {
-    try { bound = (await authApi("/api/portal/me")).bound; } catch (err) { bound = false; }
+    try { me = await authApi("/api/portal/me"); } catch (err) { me = null; }
   }
+  const bound = Boolean(me && me.bound);
   $("#spd-guard").classList.toggle("hidden", bound);
   $("#spd-body").classList.toggle("hidden", !bound);
+  renderViewingBar("#spd-who", me);   // 当前对象（P2-1776）
   if (bound) await loadSpd();
 }
 
@@ -1384,6 +1431,7 @@ async function renderSpdMeasure(box, days = 90) {
     ${list}`;
   $("#spd-measure-form").addEventListener("submit", async (e) => {
     e.preventDefault();
+    const who = viewingWho();   // 回执写明记在谁名下（P2-1776）：代管视角下录的是家人的台账
     try {
       // 单位随选项一起送（P2-738）：原先从不送，居民端录的每一条单位都是空串，医护端清单与趋势图的单位也空着
       const body = {
@@ -1397,8 +1445,8 @@ async function renderSpdMeasure(box, days = 90) {
       // 先重画再写回执（P2-1013）：原先写完「指标偏高，请关注」紧跟 loadSpd() 重画同一块，这句提醒当场被冲掉
       await loadSpd();
       const msg = $("#spd-measure-msg");
-      if (msg) msg.textContent =
-        r.level === "normal" ? "已保存，指标正常" : `已保存，指标${r.level === "high" ? "偏高" : "偏低"}，请关注`;
+      if (msg) msg.textContent = `已为${who.label}保存，`
+        + (r.level === "normal" ? "指标正常" : `指标${r.level === "high" ? "偏高" : "偏低"}，请关注`);
     } catch (err) { $("#spd-measure-msg").textContent = err.message; }
   });
   const older = box.querySelector("[data-spd-older]");
@@ -1437,7 +1485,7 @@ async function renderSpdTasks(box) {
   const { rows, total } = await fetchSpdTasks();
   const head = total !== null && rows.length < total
     ? `<p class="hint">最近 ${rows.length} 条（共 ${total} 条），未结束的排在最前</p>` : "";
-  box.innerHTML = head + (rows.map((t) => `<div class="m-card">
+  box.innerHTML = head + '<p id="spd-task-msg" class="msg"></p>' + (rows.map((t) => `<div class="m-card">
     ${kv("任务", esc(t.title))}
     ${kv("截止", esc(t.due_date || "—"))}
     ${kv("状态", esc({ pending: "待办", claimed: "待办", doing: "办理中",
@@ -1450,6 +1498,9 @@ async function renderSpdTasks(box) {
     </div>`).join("") || '<p class="empty">暂无健康任务</p>');
   box.querySelectorAll("[data-spd-task]").forEach((btn) => {
     btn.addEventListener("click", async () => {
+      // 回执写明替谁交了哪一项（P2-1776）：原先交完只重画清单。先重画再写（P2-1013）
+      const who = viewingWho();
+      const task = rows.find((t) => String(t.id) === btn.dataset.spdTask) || {};
       // 请求放进表单的提交回调（P2-1014）：提交失败时原因写在表单里、填的字还在
       const note = await inlineInput(btn.closest(".m-card"), {
         placeholder: "填写完成情况（如：已服药、已测量血压）", submitLabel: "提交",
@@ -1461,11 +1512,14 @@ async function renderSpdTasks(box) {
         } });
       if (note === null) return;
       try { await loadSpd(); } catch (err) { alert(err.message); }
+      const msg = $("#spd-task-msg");
+      if (msg) msg.textContent = `已为${who.label}提交任务「${task.title || ""}」`;
     });
   });
   // 患者端 #15：为自己的任务上传照片 / 报告等凭证。multipart 不能走 api()（它写死 JSON 头）
   box.querySelectorAll("[data-spd-evidence]").forEach((btn) => {
     btn.addEventListener("click", () => {
+      const who = viewingWho();   // 回执写明传给了谁的任务（P2-1776）
       const input = document.createElement("input");
       input.type = "file";
       // 与附件白名单同一串（P2-1083，attachments.ALLOWED_CONTENT_TYPES）：原先 image/* 让手机「高效格式」的 HEIC、扫描仪的
@@ -1475,7 +1529,7 @@ async function renderSpdTasks(box) {
         if (!input.files[0]) return;
         try {
           const r = await spdUploadEvidence(btn.dataset.spdEvidence, input.files[0]);
-          alert(`已上传 ${r.filename}（${Math.round(r.size / 1024)} KB），提交任务时会一并附上`);
+          alert(`已为${who.label}上传 ${r.filename}（${Math.round(r.size / 1024)} KB），提交任务时会一并附上`);
         } catch (err) { alert(err.message); }
       };
       input.click();
@@ -1601,6 +1655,7 @@ async function renderSpdFollowups(box) {
     </div>`).join("") || '<p class="empty">暂无随访计划</p>';
   box.querySelectorAll("[data-spd-self]").forEach((btn) => {
     btn.addEventListener("click", async () => {
+      const who = viewingWho();   // 回执写明替谁答的（P2-1776）
       const card = btn.closest(".m-card");
       const questions = (rows.find((f) => String(f.id) === btn.dataset.spdSelf) || {}).questions || [];
       // 请求放进表单的提交回调（P2-1014）：提交失败（如这条随访已被医护执行，409）时原因写在表单里、逐题作答还在
@@ -1618,8 +1673,8 @@ async function renderSpdFollowups(box) {
           submit: (recovery) => send({ recovery }) });
       if (done === null) return;
       alert(r.abnormal_level && r.abnormal_level !== "none"
-        ? `已提交。系统判定为${r.abnormal_level_name}异常，${r.action || "医护将尽快联系您"}`
-        : "已提交，感谢配合");
+        ? `已为${who.label}提交。系统判定为${r.abnormal_level_name}异常，${r.action || "医护将尽快联系您"}`
+        : `已为${who.label}提交，感谢配合`);
       try { await loadSpd(); } catch (err) { alert(err.message); }
     });
   });
@@ -1639,7 +1694,7 @@ async function renderSpdPlans(box) {
     ${rx.target_note ? kv("管理目标", esc(rx.target_note)) : ""}
     ${kv("开具", `${esc(rx.doctor_name || "—")} · ${esc((rx.created_at || "").slice(0, 10))}`)}
     </div>`).join("");
-  box.innerHTML = rxCards + rows.map((p) => `<div class="m-card">
+  box.innerHTML = '<p id="spd-plan-msg" class="msg"></p>' + (rxCards + rows.map((p) => `<div class="m-card">
     ${kv("干预目标", esc(p.goal || "—"))}
     ${kv("方案内容", esc(p.content))}
     ${p.measures ? kv("具体措施", esc(p.measures)) : ""}
@@ -1647,9 +1702,10 @@ async function renderSpdPlans(box) {
     ${kv("下次执行", esc(p.next_at || "—"))}
     ${kv("状态", esc(p.status_name || p.status))}
     ${p.read || p.status === "removed" ? "" : `<button type="button" class="ghost-btn" data-spd-read="${p.id}">标记已读并反馈</button>`}
-    </div>`).join("") || (rxCards ? "" : '<p class="empty">暂无干预方案</p>');
+    </div>`).join("") || (rxCards ? "" : '<p class="empty">暂无干预方案</p>'));
   box.querySelectorAll("[data-spd-read]").forEach((btn) => {
     btn.addEventListener("click", async () => {
+      const who = viewingWho();   // 回执写明替谁反馈的（P2-1776）。先重画再写（P2-1013）
       // 请求放进表单的提交回调（P2-1014）：提交失败时原因写在表单里、写的反馈还在
       const feedback = await inlineInput(btn.closest(".m-card"), {
         placeholder: "执行情况反馈（可留空）", submitLabel: "标记已读并反馈",
@@ -1661,6 +1717,8 @@ async function renderSpdPlans(box) {
         } });
       if (feedback === null) return;
       try { await loadSpd(); } catch (err) { alert(err.message); }
+      const msg = $("#spd-plan-msg");
+      if (msg) msg.textContent = `已为${who.label}标记已读并反馈`;
     });
   });
 }
@@ -1835,9 +1893,12 @@ async function renderSpdConsults(box) {
   $("#spd-consult-send").addEventListener("click", async () => {
     const content = $("#spd-consult-input").value.trim();
     if (!content) return;
+    const who = viewingWho();   // 回执写明替谁发的（P2-1776）：原先发完只重画清单。先重画再写（P2-1013）
     try {
       await send($("#spd-consult-program").value, content);
       await loadSpd();
+      const msg = $("#spd-consult-msg");
+      if (msg) msg.textContent = `已为${who.label}发出咨询`;
     } catch (err) { $("#spd-consult-msg").textContent = err.message; }
   });
   box.querySelectorAll(".consult-open").forEach((btn) => {
@@ -1866,9 +1927,12 @@ async function showConsultThread(consultId, consult, send) {
   $("#spd-thread-send").addEventListener("click", async () => {
     const content = $("#spd-thread-input").value.trim();
     if (!content) return;
+    const who = viewingWho();   // 同上（P2-1776）：重画后对话区收起，回执写在顶上的消息行
     try {
       await send(consult ? consult.program_code : "", content);
       await loadSpd();
+      const msg = $("#spd-consult-msg");
+      if (msg) msg.textContent = `已为${who.label}发出咨询`;
     } catch (err) { $("#spd-thread-msg").textContent = err.message; }
   });
 }
@@ -1941,16 +2005,17 @@ async function renderSpdScreen(box) {
     // 带上作答的那一版（P2-921）：页面打开后发布了新版，原先按新版评分、结论对不上题目；现在 409 请刷新
     const body = { program_code: scale.program_code, scale_code: scale.code, scale_id: scale.id, answers };
     if (viewingPatientId !== null) body.patient_id = viewingPatientId;
+    const who = viewingWho();   // 结论、申请的确认与回执写明是谁的自查（P2-1776）：代管视角下自查、申请都记在家人名下
     try {
       const r = await authApi("/api/portal/spd/screenings", {
         method: "POST", body: JSON.stringify(body) });
       // 含「极高危」（P2-372）；空串是得分没落进任何分段——未分级，建议栏写着原因（P2-689）
       // 命中病种排除规则的说出是哪条（P2-935）：不提示申请，原先照样提示、受理进了成人管理
       const verdict =
-        `风险等级：${r.risk_level ? (SPD_RISK_TAGS[r.risk_level] || [r.risk_level])[0] : "未分级"}。${r.advice}`
+        `${who.label}的自查——风险等级：${r.risk_level ? (SPD_RISK_TAGS[r.risk_level] || [r.risk_level])[0] : "未分级"}。${r.advice}`
         + (r.excluded_reason ? `${r.excluded_reason}，不纳入本病种专病管理，如有不适请就医。` : "");
       $("#spd-screen-msg").textContent = verdict;
-      if (r.can_apply && confirm("检测到中高风险，是否申请专病管理服务？")) {
+      if (r.can_apply && confirm(`检测到中高风险，是否为${who.label}申请专病管理服务？`)) {
         const applyBody = { program_code: scale.program_code, screening_id: r.id };
         if (viewingPatientId !== null) applyBody.patient_id = viewingPatientId;
         // 结论不被冲掉（P2-1676，P2-1013 的同形漏网）：原先申请完 `await loadSpd()` 整块重画，刚写的风险等级、健康建议、
