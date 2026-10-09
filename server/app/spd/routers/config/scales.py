@@ -327,11 +327,17 @@ def list_edu(
     program_code: str | None = None,
     media_type: str | None = None,
     keyword: str = "",
+    include_inactive: bool = False,
     offset: int = 0,
     limit: int = 100,
     db: Session = Depends(get_db),
 ):
-    query = db.query(SpdEduMaterial).filter(SpdEduMaterial.active.is_(True))
+    """宣教素材清单。缺省只列启用的（修前就是）；`include_inactive` 连停用的一起列（P2-1643，照商品、团队 P2-1580 与随访问卷
+    P2-294）——运行中枢页的宣教素材表原先也只拿得到启用的，停用的当场从表里消失，表里的「状态」列与编辑弹窗里的「启用」
+    永远碰不到它，同编码重建又 409（编码唯一），停了就启不回来。成员端宣教推送选素材的下拉照旧只列启用的（不带这个参数）。"""
+    query = db.query(SpdEduMaterial)
+    if not include_inactive:
+        query = query.filter(SpdEduMaterial.active.is_(True))
     if program_code:
         query = query.filter(SpdEduMaterial.program_code == program_code)
     if media_type:

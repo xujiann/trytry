@@ -351,7 +351,9 @@ async function renderSpdAdmin() {
     api("/api/spd/org-tree"),
     api("/api/spd/scales?limit=100"),
     api("/api/spd/service-packages?limit=100"),
-    api("/api/spd/edu-materials?limit=100"),
+    // 宣教素材连停用的一起取（P2-1643，同团队、商品 P2-1580）：这张表有「状态」列、编辑弹窗能改回启用，原先只取启用的，
+    // 停用一次就从表里消失、再也启用不回来；成员端宣教推送选素材照旧只取启用的
+    api("/api/spd/edu-materials?limit=100&include_inactive=true"),
   ]);
   const a = wb.alerts, cfg = wb.config_health, ds = wb.data_sources;
   const orgTreeHtml = (nodes, depth) => (nodes || []).map((n) =>
