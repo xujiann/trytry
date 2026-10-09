@@ -4194,6 +4194,7 @@ async function renderSpdManager() {
         <input name="drug_advice" placeholder="用药指导" style="min-width:170px">
         <input name="rehab_advice" placeholder="康复训练" style="min-width:170px">
         <input name="life_advice" placeholder="生活方式建议" style="min-width:170px">
+        <input name="target_note" placeholder="目标说明（如血压控制在 140/90 以下）" maxlength="512" style="min-width:170px">
         <button>开具</button>
       </form>
       <form class="inline" id="spd-rx-query" style="margin-top:8px">
@@ -4240,6 +4241,8 @@ async function renderSpdManager() {
         ? await api(`/api/spd/revisits?${params}`) : await openFirstRevisits());
     } catch (err) { $("#spd-revisit-list").innerHTML = `<p class="msg err">${esc(err.message)}</p>`; }
   };
+  // 表单带「目标说明」（P2-1605）：后端 target_note 早就收（最长 512）、下面的处方清单有这一列、居民端显示为「管理目标」，开具表单原先
+  // 没有这一格，从页面开出的处方目标说明一律是空的
   $("#spd-rx-form").onsubmit = (e) => {
     e.preventDefault();
     return postAction("/api/spd/health-prescriptions",
