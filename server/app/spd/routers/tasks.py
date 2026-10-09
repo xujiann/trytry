@@ -659,6 +659,11 @@ def check_node_enter(
     if node is None or instance is None:
         raise HTTPException(status_code=404, detail="节点或路径实例不存在")
     _assert_instance_visible(db, user, instance)
+    # 节点得是这条实例的模板上的（P2-1598），与 `_resume_paused` / `advance_path` 只在 `instance.template_id` 的节点里取
+    # 同一个口径：原先拿别的路径的节点照样判、照样回「满足进入条件」，这条路径永远走不到那个节点。排在可见性之后——
+    # 看不见的实例先 403，别给它当节点归属的神谕
+    if node.template_id != instance.template_id:
+        raise HTTPException(status_code=404, detail="该节点不在这条路径上")
     allowed, matched = node_enter_allowed(db, instance, node)
     return {"allowed": allowed, "matched": matched, "conditions": node.enter_condition or []}
 
