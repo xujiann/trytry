@@ -10,6 +10,7 @@
 """
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..database import get_db
@@ -96,23 +97,32 @@ def survey_stats(target_type: str | None = None, db: Session = Depends(get_db)):
 
     只看均分会把个别差评稀释掉——4.6 分和"20 条里有 3 条 1 分"是两回事，
     所以这里一并给出分布与差评数。
+
+    在库里按评价对象、分数 GROUP BY 取计数（P2-1670）：原先 `q.all()` 把满意度表整表载入 ORM、在内存里逐条分组——满意度页
+    每次渲染都调，居民端每交一次评价就多一行（P2-810），1 万行 0.35 s、13.5 MB，5 万行 3 s、68 MB（扫描实测）。同形的随访
+    中心统计已按 P2-1151 改成库内分组。分数只有 1–5 五档，计数行最多「对象数 × 5」；均分的分子是「分数 × 条数」之和，
+    分布、差评数照旧由同样的计数累加，取整（P2-1001 记过的口径）与出参一字不改。
     """
-    q = db.query(SatisfactionSurvey)
+    q = db.query(SatisfactionSurvey.target_type, SatisfactionSurvey.score, func.count(SatisfactionSurvey.id))
     if target_type:
         q = q.filter(SatisfactionSurvey.target_type == target_type)
-    rows = q.all()
+    rows = (
+        q.group_by(SatisfactionSurvey.target_type, SatisfactionSurvey.score)
+        .order_by(SatisfactionSurvey.target_type, SatisfactionSurvey.score)
+        .all()
+    )
     grouped: dict[str, dict] = {}
-    for s in rows:
+    for kind, score, n in rows:
         entry = grouped.setdefault(
-            s.target_type,
-            {"target_type": s.target_type, "count": 0, "total": 0,
+            kind,
+            {"target_type": kind, "count": 0, "total": 0,
              "distribution": {str(i): 0 for i in range(1, 6)}, "negative": 0},
         )
-        entry["count"] += 1
-        entry["total"] += s.score
-        entry["distribution"][str(s.score)] += 1
-        if s.score <= NEGATIVE_SCORE:
-            entry["negative"] += 1
+        entry["count"] += n
+        entry["total"] += score * n
+        entry["distribution"][str(score)] += n
+        if score <= NEGATIVE_SCORE:
+            entry["negative"] += n
     result = []
     for entry in grouped.values():
         count = entry.pop("count")
