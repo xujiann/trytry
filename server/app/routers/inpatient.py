@@ -745,12 +745,14 @@ def create_order(
     admission = db.get(Admission, body.admission_id)
     if admission is None:
         raise HTTPException(status_code=404, detail="住院记录不存在")
-    if admission.status != "admitted":
-        raise HTTPException(status_code=409, detail="患者已出院，不可开立医嘱")
     # 医嘱写进的是**这次住院所属医院**的医嘱单，由管床医院开立。
     # 实测未修前：乙院 doctor 能给甲院的住院病人开一条长期医嘱（201）。
     # 跨机构的临床协同有专门的入口（远程会诊 / 会诊申请），不是直接写别家的医嘱单。
+    # 归属判定排在状态机之前（P2-1699，同 `stop_order`）：先 403，免得用 409/403 的差别探出别家每次住院在不在院——原先先判
+    # 「已出院」，乙院医生拿甲院的住院号开医嘱，在院 403、已出院 409「患者已出院，不可开立医嘱」
     assert_obj_org_writable(db, user, admission)
+    if admission.status != "admitted":
+        raise HTTPException(status_code=409, detail="患者已出院，不可开立医嘱")
     # 「在院」在住院登记这一行的临界区里、刷新之后再判一次（P2-274）：出院在同一行上做条件 UPDATE 并停掉全部在执行
     # 医嘱，原先只在锁外判——与出院并发时读到的还是「在院」，新医嘱在出院停完医嘱之后才落库，以「执行中」挂在已出院的
     # 住院上，照样能登记执行。
