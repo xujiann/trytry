@@ -335,6 +335,33 @@ function spdCollectAnswers(items, form, prefix) {
  * 1. 平台管理端（运行中枢）
  * ==========================================================*/
 
+/* 病种版本历史（P2-1644）：每行写成「vN → vN+1（修改人：说明）」，表顶是现行版，各版规则可展开。
+ * 接口的每一行（`catalog.program_versions`）存的是**改前**那一版的快照（vN 的规则），修改人、说明、时间却是把它改走、
+ * 升出 vN+1 的那一笔（`update_program` 先存快照再升版）。原先一行只印「版本 / 修改人 / 说明 / 时间」，于是 v2 一行写着
+ * 改出 v3 的人和理由，现行版不在表里，规则内容也看不到——那份快照是为了「半年后要能回答这批人当初按哪版规则纳的管」。
+ * 接口不动：行是新 → 旧，每行的去向取上一行（更新的那一版）的版本号，最新一行的去向是现行版。接口最多回最近 50 版、
+ * 不带总数，取满 50 行就写明只列最近 50 版。条件逐条转成文字经 shared.js 的 `referralEvidenceLines`（与转诊依据同一口径，
+ * 字段与比较符的中文名取 `meta`，取不到照印编码），一切内容 esc()。 */
+const SPD_PROGRAM_VERSION_LIMIT = 50;
+function spdProgramVersionsHtml(cur, rows, meta) {
+  const rules = (list) => referralEvidenceLines({ matched: Array.isArray(list) ? list : [] }, meta).join("；") || "无";
+  const names = (list) => (Array.isArray(list) ? list : [])
+    .map((s) => (s && typeof s === "object" ? referralPlain(s.name || s.key) : "") || referralPlain(s)).join("、") || "无";
+  const rulesHtml = (snap, summary) => `<details><summary>${esc(summary)}</summary>
+    <p class="desc">纳入规则：${esc(rules(snap.include_rules))}</p>
+    <p class="desc">排除规则：${esc(rules(snap.exclude_rules))}</p>
+    <p class="desc">阶段：${esc(names(snap.stages))}；里程碑：${esc(names(snap.milestones))}</p></details>`;
+  const current = cur.version || "—";
+  const step = (v, i) =>
+    `${v.version} → ${i === 0 ? current : rows[i - 1].version}（${v.changed_by || "—"}：${v.note || "—"}）`;
+  return `<p>现行版 <b>${esc(current)}</b></p>${rulesHtml(cur, `展开现行版 ${current} 的规则`)}
+    ${rows.length >= SPD_PROGRAM_VERSION_LIMIT
+      ? `<p class="desc">只列最近 ${SPD_PROGRAM_VERSION_LIMIT} 版，更早的版本不在表里</p>` : ""}
+    ${table(["版本变更（修改人：说明）", "改版时间", "改前那一版的规则"], rows, (v, i) =>
+      `<tr><td>${esc(step(v, i))}</td><td>${esc((v.created_at || "").replace("T", " ").slice(0, 16))}</td>
+       <td>${rulesHtml(v.snapshot || {}, `展开 ${v.version} 的规则`)}</td></tr>`)}`;
+}
+
 async function renderSpdAdmin() {
   $("#page-desc").textContent =
     "运行中枢：超期任务提醒、慢病与专病并行运行状态、配置完备度；病种/量表/服务包/宣教素材/标签/设备/数据源维护与机构树";
@@ -684,12 +711,13 @@ async function renderSpdAdmin() {
       return;
     }
     if (progVersions) {
+      // 现行版取病种详情、各版写成「vN → vN+1」（P2-1644，画法见 spdProgramVersionsHtml）：原先只取版本行、逐行印
+      // 「版本 / 修改人 / 说明」，修改人与说明错位一版、现行版不在表里。中文名取不到照印编码，同转诊依据（P2-1609）
       try {
-        const rows = await api(`/api/spd/programs/${progVersions.dataset.progVersions}/versions`);
-        $("#spd-cfg-detail").innerHTML = panel(`版本历史 · 病种 #${progVersions.dataset.progVersions}`,
-          table(["版本", "修改人", "说明", "时间"], rows, (v) =>
-            `<tr><td>${esc(v.version)}</td><td>${esc(v.changed_by || "—")}</td><td>${esc(v.note || "—")}</td>
-             <td>${esc((v.created_at || "").replace("T", " ").slice(0, 16))}</td></tr>`));
+        const id = progVersions.dataset.progVersions;
+        const [cur, rows, ruleMeta] = await Promise.all([
+          api(`/api/spd/programs/${id}`), api(`/api/spd/programs/${id}/versions`), spdMeta().catch(() => null)]);
+        $("#spd-cfg-detail").innerHTML = panel(`版本历史 · ${cur.name}`, spdProgramVersionsHtml(cur, rows, ruleMeta));
       } catch (err) { setMsg("#spd-program-msg", err.message, false); }
       return;
     }
