@@ -311,13 +311,20 @@ def exclusion_problem(
     return "按病种规则不纳入（" + "；".join(str(m.get("label") or m.get("field")) for m in matched["excluded_by"]) + "）"
 
 
-def target_for(db: Session, program_code: str, stage: str, metric: str) -> SpdTarget | None:
+def target_for(
+    db: Session, program_code: str, stage: str, metric: str, *, bounded: bool = True,
+) -> SpdTarget | None:
     """取某病种某指标的管理目标，三级回落：本阶段 → 不分阶段 → 该病种任一阶段。
 
     第三级回落是刻意的：患者常常停在"筛查""诊断评估"这类前置阶段，而目标通常
     只配在"治疗干预""稳定期"上。没有回落的话，一个收缩压 178 的筛查期患者
     会被判成"正常"——因为他所在的阶段没配目标。**配了目标就该用上**，
     比"这个阶段没配所以不判"更接近临床预期。
+
+    缺省（`bounded=True`）只认**至少有一个界**的目标，三级回落照走（P2-1640）：这里取的目标是拿来判数值的，定性目标
+    （「尿酸持续达标」，上下限全空）没有能比的界。原先按阶段取、不看界：同一指标在稳定期配一条定性目标，稳定期患者的
+    读数就拿它判、永远「正常」，不再回落到不分阶段的 ≤420——尿酸 600 判正常、不派处置任务。`bounded=False` 连定性
+    目标一起认，只给 `measure_program_for` 的兜底用。
     """
     program = db.query(SpdProgram).filter(SpdProgram.code == program_code).first()
     if program is None:
@@ -327,6 +334,8 @@ def target_for(db: Session, program_code: str, stage: str, metric: str) -> SpdTa
         SpdTarget.metric == metric,
         SpdTarget.active.is_(True),
     )
+    if bounded:
+        query = query.filter(or_(SpdTarget.target_low.is_not(None), SpdTarget.target_high.is_not(None)))
     return (
         query.filter(SpdTarget.stage == stage).first()
         or query.filter(SpdTarget.stage == "").first()
@@ -389,7 +398,11 @@ def measure_program_for(db: Session, patient_id: int, program_code: str, metric:
 
     原先没写就是空串：管理端录入表单的病种下拉默认「全部病种」（空）、居民端自报是个「病种编码（可留空）」的文本框，
     居民不认得 hypertension 这种编码——没人写的时候，高血压在管患者收缩压 190 也判「正常」，异常处置任务一条不派，
-    异常清单里没有它。"""
+    异常清单里没有它。
+
+    先取配了**有界**目标的病种（与判级同一句 `target_for`，P2-1640）：原先先建档的病种这个指标只配了定性目标，就挂到
+    它下面、永远判「正常」，后建档的病种配的量化目标用不上。几个病种都只配了定性目标的，照旧挂第一个（判不了界，判
+    「正常」与原先一样）。"""
     if program_code:
         return program_code
     enrolled = (
@@ -398,10 +411,13 @@ def measure_program_for(db: Session, patient_id: int, program_code: str, metric:
         .order_by(SpdEnrollment.id)
         .all()
     )
+    fallback = ""
     for (code,) in enrolled:
         if target_for(db, code, "", metric) is not None:
             return code
-    return ""
+        if not fallback and target_for(db, code, "", metric, bounded=False) is not None:
+            fallback = code
+    return fallback
 
 
 def judge_measurement(db: Session, program_code: str, stage: str, metric: str, value) -> str:
