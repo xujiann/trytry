@@ -6246,12 +6246,13 @@ def test_spd_resident_selfscreen_apply_measure(page, base_url, spd_seed):
     for sel in page.locator("[data-q]").all():
         sel.select_option("是")
     page.click("#spd-screen-submit")
-    # 只断言链路的**稳定终态**：申请单卡片"待受理"。不断言"风险等级"提示——
-    # 那是瞬态文本：确认申请后 `await loadSpd()` 重画自查分段，`#spd-screen-msg`
-    # 被重建为空，提示只活在"POST 返回 → 重画完成"的几十毫秒里，断言它等于
-    # 跟自家重画抢时间（本地常赢、CI 慢半拍就输——真在 CI 上 flake 过一次，
-    # 而"待受理"只有筛查+申请两步都成功才会出现，覆盖不打折）。
+    # 先断言链路的**稳定终态**：申请单卡片"待受理"（只有筛查+申请两步都成功才会出现）。
     expect(page.locator("#spd-result")).to_contain_text("待受理")
+    # 自查结论在重画之后写回（P2-1676）：原先确认申请后 `await loadSpd()` 重画自查分段，`#spd-screen-msg`
+    # 被重建为空，风险等级与健康建议只活在"POST 返回 → 重画完成"的几十毫秒里（当年这里因此不敢断言它，
+    # 断言就跟自家重画抢时间、在 CI 上 flake 过）。现在先重画、再把结论连同申请结果写回，是稳定终态
+    expect(page.locator("#spd-screen-msg")).to_contain_text("风险等级")
+    expect(page.locator("#spd-screen-msg")).to_contain_text("已申请专病管理服务")
     # 分段渲染竞态（提交链路半途切分段互相盖写）已由 m.js loadSpd 串行化修复
     # （序号+互斥+收尾补画，与管理端 route() 同构）；竞态窗口取决于机器时序，
     # e2e 关不稳这扇窗——**确定性的防拆卸由静态守卫

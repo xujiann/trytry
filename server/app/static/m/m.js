@@ -1926,15 +1926,26 @@ async function renderSpdScreen(box) {
         method: "POST", body: JSON.stringify(body) });
       // 含「极高危」（P2-372）；空串是得分没落进任何分段——未分级，建议栏写着原因（P2-689）
       // 命中病种排除规则的说出是哪条（P2-935）：不提示申请，原先照样提示、受理进了成人管理
-      $("#spd-screen-msg").textContent =
+      const verdict =
         `风险等级：${r.risk_level ? (SPD_RISK_TAGS[r.risk_level] || [r.risk_level])[0] : "未分级"}。${r.advice}`
         + (r.excluded_reason ? `${r.excluded_reason}，不纳入本病种专病管理，如有不适请就医。` : "");
+      $("#spd-screen-msg").textContent = verdict;
       if (r.can_apply && confirm("检测到中高风险，是否申请专病管理服务？")) {
         const applyBody = { program_code: scale.program_code, screening_id: r.id };
         if (viewingPatientId !== null) applyBody.patient_id = viewingPatientId;
-        await authApi("/api/portal/spd/service-applies", {
-          method: "POST", body: JSON.stringify(applyBody) });
+        // 结论不被冲掉（P2-1676，P2-1013 的同形漏网）：原先申请完 `await loadSpd()` 整块重画，刚写的风险等级、健康建议、
+        // 排除原因当场没了，申请失败又拿错误文案把它盖掉——居民端别处再看不到这次自查的结论，点「申请」的正是中高风险
+        // 的那批人。失败把原因接在结论后面；成功先重画、再把结论连同申请结果写回重画后的消息行
+        try {
+          await authApi("/api/portal/spd/service-applies", {
+            method: "POST", body: JSON.stringify(applyBody) });
+        } catch (err) {
+          $("#spd-screen-msg").textContent = `${verdict}申请专病管理服务没有提交成功：${err.message}`;
+          return;
+        }
         await loadSpd();
+        const msg = $("#spd-screen-msg");
+        if (msg) msg.textContent = `${verdict}已申请专病管理服务，请等待基层医生复核。`;
       }
     } catch (err) { $("#spd-screen-msg").textContent = err.message; }
   });
