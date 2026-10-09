@@ -408,9 +408,11 @@ def test_路径启动与档案详情(client, h, base):
     assert detail == {
         **base["enroll_row"],
         "packages": [base["binding_used"]],
+        # 路径行末尾追加模板名、当前节点名（P2-1600）
         "paths": [{"id": instance["id"], "template_code": "ctp_path",
                    "status": "running", "current_node_key": "n1",
-                   "current_stage": "s1", "progress": 0}],
+                   "current_stage": "s1", "progress": 0,
+                   "template_name": "契约慢病路径", "current_node_name": "随访评估"}],
     }
 
 
@@ -690,7 +692,8 @@ def test_专病360档案(client, h, base):
             "enrollment": base["enroll"],
             "program_name": "契约糖尿病",
             "paths": [{"id": base["instance"]["id"], "template_code": "ctp_path",
-                       "status": "running", "current_node_key": "n1", "progress": 0}],
+                       "status": "running", "current_node_key": "n1", "progress": 0,
+                       "template_name": "契约慢病路径", "current_node_name": "随访评估"}],   # 末尾追加（P2-1600）
             "packages": [base["binding_used"]],
             "open_tasks": 1,
             "recent_tasks": [{"id": task["id"], "title": "契约慢病路径·随访评估",

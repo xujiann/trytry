@@ -53,7 +53,9 @@ TASK_KEYS = ["id", "program_code", "patient_id", "enrollment_id", "instance_id",
 INSTANCE_KEYS = ["id", "enrollment_id", "template_id", "template_code", "template_name",
                  "scene", "program_code", "patient_id", "patient_name",
                  "current_node_key", "current_stage", "status", "progress", "overrides",
-                 "owner_user_id", "started_at", "finished_at"]
+                 "owner_user_id", "started_at", "finished_at",
+                 # 末尾追加当前节点名（P2-1600）：前面的键一字不动
+                 "current_node_name"]
 COND = {"field": "risk_level", "op": "==", "value": "high", "label": ""}
 
 
@@ -149,6 +151,7 @@ def test_启动回执完整精确(client, auth, world):
         "overrides": {}, "owner_user_id": 1,
         "started_at": _ts(created["started_at"]),
         "finished_at": "",  # 未结束是空串不是 null
+        "current_node_name": "首次随访",
     }
 
 
@@ -340,7 +343,7 @@ def test_办结路径任务_暂停恢复完成三条advance分支(client, auth, 
     assert resumed.json() == {
         "instance": {**instance, "overrides": {"ct_n2": {"due_days": 3}},
                      "current_node_key": "ct_n2", "current_stage": "stage_b",
-                     "progress": 50},
+                     "progress": 50, "current_node_name": "风险复评"},
         "status": "running", "resumed": True, "matched": [COND],
     }
 
@@ -384,7 +387,7 @@ def test_手工推进分支与批量处理(client, auth, world):
     assert list(advanced.json().keys()) == ["instance", "status", "current_node_key",
                                             "next_node"]
     assert advanced.json() == {
-        "instance": {**ib, "current_node_key": "ct_m2", "current_stage": ""},
+        "instance": {**ib, "current_node_key": "ct_m2", "current_stage": "", "current_node_name": "第二步"},
         "status": "running", "current_node_key": "ct_m2", "next_node": "第二步",
     }
 

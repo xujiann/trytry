@@ -55,6 +55,7 @@ from ..service import (
     node_due_days,
     node_enter_allowed,
     notify_severe_abnormal_handover,
+    path_node_names,
     path_overrides_problem,
     spawn_task,
     sweep_overdue_on_read,
@@ -175,6 +176,8 @@ class PathInstanceOut(BaseModel):
     owner_user_id: int | None
     started_at: str
     finished_at: str
+    # 当前节点的名称（P2-1600）：只追加在末尾、前面的键一字不动。取不到（没有当前节点等）为空串，页面回落到节点键
+    current_node_name: str
 
 
 class NodeTaskBriefOut(BaseModel):
@@ -279,22 +282,24 @@ def _template_node_keys(db: Session, template_id: int) -> set[str]:
     return {key for (key,) in db.query(SpdPathNode.key).filter(SpdPathNode.template_id == template_id).order_by(SpdPathNode.id)}
 
 
-def _instance_refs(db: Session, rows: list[SpdPathInstance]) -> tuple[dict, dict, dict]:
-    """一页路径实例出参要的（模板、纳管档案、患者），各按页一次 IN 取齐（P2-1157）：清单原先逐行 `db.get` 三次，
-    一页 100 行三百来条查询。"""
+def _instance_refs(db: Session, rows: list[SpdPathInstance]) -> tuple[dict, dict, dict, dict]:
+    """一页路径实例出参要的（模板、纳管档案、患者、当前节点名），各按页一次 IN 取齐（P2-1157）：清单原先逐行 `db.get`
+    三次，一页 100 行三百来条查询。当前节点名同样按页取（P2-1600，`service.path_node_names`）。"""
     templates = rows_by_id(db, SpdPathTemplate, (i.template_id for i in rows))
     enrollments = rows_by_id(db, SpdEnrollment, (i.enrollment_id for i in rows))
-    return templates, enrollments, rows_by_id(db, Patient, (e.patient_id for e in enrollments.values()))
+    return (templates, enrollments, rows_by_id(db, Patient, (e.patient_id for e in enrollments.values())),
+            path_node_names(db, rows))
 
 
-def _instance_out(db: Session, i: SpdPathInstance, refs: tuple[dict, dict, dict] | None = None) -> dict:
-    """`refs` 是清单按页取齐的那三样（`_instance_refs`）；单条出参不给，照旧逐个 `db.get`。"""
+def _instance_out(db: Session, i: SpdPathInstance, refs: tuple[dict, dict, dict, dict] | None = None) -> dict:
+    """`refs` 是清单按页取齐的那四样（`_instance_refs`）；单条出参不给，照旧逐个 `db.get`。"""
     if refs is None:
         template = db.get(SpdPathTemplate, i.template_id)
         enrollment = db.get(SpdEnrollment, i.enrollment_id)
         patient = db.get(Patient, enrollment.patient_id) if enrollment else None
+        node_names = path_node_names(db, [i])
     else:
-        templates, enrollments, patients = refs
+        templates, enrollments, patients, node_names = refs
         template = templates.get(i.template_id)
         enrollment = enrollments.get(i.enrollment_id)
         patient = patients.get(enrollment.patient_id) if enrollment else None
@@ -311,6 +316,7 @@ def _instance_out(db: Session, i: SpdPathInstance, refs: tuple[dict, dict, dict]
         "owner_user_id": i.owner_user_id,
         "started_at": i.started_at.isoformat(),
         "finished_at": i.finished_at.isoformat() if i.finished_at else "",
+        "current_node_name": node_names.get((i.template_id, i.current_node_key), ""),
     }
 
 

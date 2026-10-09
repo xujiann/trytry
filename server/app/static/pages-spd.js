@@ -1007,7 +1007,8 @@ function spdProfileHtml(p) {
       ${spdTag(SPD_RISK, e.risk_level)} <span class="tag">${esc(SPD_ENROLL_STATUS[e.status] || e.status || "")}</span>
       阶段 ${esc(e.stage || "—")} · 待办 ${g.open_tasks ?? 0}${nextFollowup}
       <div class="desc">路径：${(g.paths || []).map((i) =>
-        `#${i.id} ${esc(i.template_code)} ${esc(i.current_node_key || "—")} ${i.progress}%`).join("；") || "—"}</div>
+        // 印模板名、节点名与状态中文（P2-1600）：原先印模板编码与节点键、不印状态，已取消的与执行中的长得一样；名称为空回落到编码
+        `#${i.id} ${esc(i.template_name || i.template_code)} ${esc(SPD_INST_STATUS[i.status] || i.status || "")} ${esc(i.current_node_name || i.current_node_key || "—")} ${i.progress}%`).join("；") || "—"}</div>
       <div class="desc">服务包：${(g.packages || []).map((b) => (b.status === "bound"
         ? `${esc(b.package_name)} ${spdBindingTag(b)} 余 ${b.remaining}（已用 ${b.usage_rate}%）`
         // 已解绑的灰显、不写余量（P2-1576）：原先不看状态照印「余 N」，同页明细写「已解绑」、扣次 409；解绑再绑后两张同名卡都写余量
@@ -1056,9 +1057,10 @@ function spdEnrollmentDetailHtml(e) {
               data-items="${esc(JSON.stringify((b.items || []).map((i) => ({ code: i.code, name: i.name }))))}">记用量</button>
             <button class="btn secondary" data-bind-unbind="${b.id}" data-enr="${e.id}">解绑</button>`
          : ""}</td></tr>`);
+  // 路径、当前节点印名称（P2-1600）：原先印模板编码与节点键；名称为空回落到编码
   const paths = table(["ID", "路径", "状态", "当前节点", "阶段", "进度"], e.paths || [], (i) =>
-    `<tr><td>${i.id}</td><td>${esc(i.template_code)}</td><td>${esc(SPD_INST_STATUS[i.status] || i.status)}</td>
-     <td>${esc(i.current_node_key || "—")}</td><td>${esc(i.current_stage || "—")}</td><td>${i.progress}%</td></tr>`);
+    `<tr><td>${i.id}</td><td>${esc(i.template_name || i.template_code)}</td><td>${esc(SPD_INST_STATUS[i.status] || i.status)}</td>
+     <td>${esc(i.current_node_name || i.current_node_key || "—")}</td><td>${esc(i.current_stage || "—")}</td><td>${i.progress}%</td></tr>`);
   return panel(`纳管档案 #${e.id}`, `
     <p class="desc">${esc(e.patient_name || String(e.patient_id))} · ${esc(e.program_code)}
       · ${esc(SPD_ENROLL_STATUS[e.status] || e.status)} · ${spdTag(SPD_RISK, e.risk_level)} · 阶段 ${esc(e.stage || "—")}
@@ -2139,7 +2141,7 @@ function spdInstanceDetailHtml(inst, nodeIds) {
   return panel(`路径明细 #${inst.id}`, `
     <p class="desc">${esc(inst.patient_name || String(inst.patient_id || ""))} · ${esc(inst.template_name)} ·
       ${esc(SPD_INST_STATUS[inst.status] || inst.status)} · 进度 ${inst.progress}%
-      · 当前节点 ${esc(inst.current_node_key || "—")}</p>
+      · 当前节点 ${esc(inst.current_node_name || inst.current_node_key || "—")}</p>
     ${table(["序", "节点", "阶段", "执行角色", "时限(天)", "本节点任务", "操作"], rows, (n) =>
       `<tr><td>${n.seq}</td>
        <td>${esc(n.name || n.key)}${n.is_current ? ' <span class="tag orange">当前</span>' : ""}</td>
@@ -2279,7 +2281,7 @@ async function renderSpdPath() {
     $("#spd-inst-list").innerHTML = table(
       ["ID", "患者", "路径", "当前节点", "阶段", "进度", "状态", "操作"], rows, (i) =>
       `<tr><td>${i.id}</td><td>${esc(i.patient_name || i.patient_id || "")}</td>
-       <td>${esc(i.template_name)}</td><td>${esc(i.current_node_key || "—")}</td>
+       <td>${esc(i.template_name)}</td><td>${esc(i.current_node_name || i.current_node_key || "—")}</td>
        <td>${esc(i.current_stage || "—")}</td><td>${i.progress}%</td>
        <td>${i.status === "running" ? '<span class="tag orange">执行中</span>'
           : i.status === "completed" ? '<span class="tag green">已完成</span>'

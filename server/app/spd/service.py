@@ -946,6 +946,21 @@ def node_due_days(instance: SpdPathInstance, node: SpdPathNode) -> int:
     return node.due_days
 
 
+def path_node_names(db: Session, instances: list[SpdPathInstance]) -> dict[tuple[int, str], str]:
+    """一批路径实例「当前节点」的名称 `{(模板, 节点键): 名称}`，一次 IN 取齐（P2-1600）；取不到的调用方按空串给。
+
+    节点键只在模板内唯一（`uq_spd_node_key`），按 (模板, 键) 对；管理端的实例清单、执行明细、纳管档案详情与 360 卡原先只回
+    节点键，页面「当前节点」印的是 `n1`、`assess`——居民端早按 P2-372 回了名称。清单是批量出的，别逐行查。"""
+    pairs = {(i.template_id, i.current_node_key) for i in instances if i.current_node_key}
+    if not pairs:
+        return {}
+    return {
+        (template_id, key): name
+        for template_id, key, name in db.query(SpdPathNode.template_id, SpdPathNode.key, SpdPathNode.name)
+        .filter(SpdPathNode.template_id.in_({t for t, _ in pairs}), SpdPathNode.key.in_({k for _, k in pairs}))
+    }
+
+
 def path_overrides_problem(overrides: dict, node_keys: set[str]) -> str:
     """路径实例个性化覆盖的结构问题，没问题返回空串（P2-717，启动与调整共用）。
 

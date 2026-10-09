@@ -30,7 +30,7 @@ from ...patchtypes import UNSET
 from ...datetypes import OptionalDateStr
 from ...numtypes import INT4_MAX, INT4_MIN
 from ...texttypes import NON_BLANK
-from ...deps import get_current_user, paginate, require_date, require_roles, row_dict, keyword_like
+from ...deps import get_current_user, paginate, require_date, require_roles, row_dict, rows_by_id, keyword_like
 from ..platform import (Organization, Patient, User, assignee_outside_org, id_card_variants, pii_filter,
                         role_unfit, unusable_user)
 from ..models import (
@@ -44,6 +44,7 @@ from ..models import (
     SpdPackageBinding,
     SpdPackageUsage,
     SpdPathInstance,
+    SpdPathTemplate,
     SpdProgram,
     SpdRecall,
     SpdReferralCase,
@@ -61,7 +62,7 @@ from ..service import (ENROLL_STATUS_LABELS, PACKAGE_ITEM_NAME_MAX, paused_enrol
                        candidate_reason, candidate_undistributed, close_open_work, enrollment_still_active, exclusion_problem,
                        enrollment_pathless, enrollment_unassessed, enrollment_unstaged,
                        match_program, migration_void_reason, my_team_ids,
-                       package_items_ok,
+                       package_items_ok, path_node_names,
                        scale_program_mismatch, scale_unusable, scale_version_problem, team_view_scope, unknown_program)
 
 # 筛查来源、分组范围文案（措辞照抄 SpdScreening.source / SpdGroup.scope 列注释——P2-74）
@@ -227,6 +228,9 @@ class EnrollPathOut(BaseModel):
     current_node_key: str
     current_stage: str
     progress: int
+    # 模板名、当前节点名（P2-1600）：只追加在末尾。原先只有编码，页面「路径」「当前节点」两列印的是模板编码与 `n1` 这样的节点键
+    template_name: str
+    current_node_name: str
 
 
 class EnrollmentDetailOut(EnrollmentOut):
@@ -394,6 +398,9 @@ class ProfilePathOut(BaseModel):
     status: str
     current_node_key: str
     progress: int
+    # 与 `EnrollPathOut` 同样只在末尾追加模板名、当前节点名（P2-1600）
+    template_name: str
+    current_node_name: str
 
 
 class ProfileTaskOut(BaseModel):
@@ -1384,15 +1391,28 @@ def get_enrollment(
         .filter(SpdPackageBinding.enrollment_id == enrollment_id)
         .all()
     ]
+    instances = db.query(SpdPathInstance).filter(SpdPathInstance.enrollment_id == enrollment_id).all()
+    template_names, node_names = _path_labels(db, instances)
     out["paths"] = [
         {"id": i.id, "template_code": i.template_code, "status": i.status,
          "current_node_key": i.current_node_key, "current_stage": i.current_stage,
-         "progress": i.progress}
-        for i in db.query(SpdPathInstance)
-        .filter(SpdPathInstance.enrollment_id == enrollment_id)
-        .all()
+         "progress": i.progress, **_path_label_fields(i, template_names, node_names)}
+        for i in instances
     ]
     return out
+
+
+def _path_labels(db: Session, instances: list[SpdPathInstance]) -> tuple[dict[int, str], dict[tuple[int, str], str]]:
+    """档案详情与 360 卡路径行的模板名、当前节点名，各一次 IN 取齐（P2-1600）：原先这两处只回模板编码与节点键。"""
+    templates = rows_by_id(db, SpdPathTemplate, (i.template_id for i in instances))
+    return {tid: t.name for tid, t in templates.items()}, path_node_names(db, instances)
+
+
+def _path_label_fields(i: SpdPathInstance, template_names: dict[int, str],
+                       node_names: dict[tuple[int, str], str]) -> dict[str, str]:
+    """路径行末尾追加的两个键（P2-1600）；取不到为空串，页面回落到编码。"""
+    return {"template_name": template_names.get(i.template_id, ""),
+            "current_node_name": node_names.get((i.template_id, i.current_node_key), "")}
 
 
 class EnrollUpdate(BaseModel):
@@ -2427,6 +2447,7 @@ def patient_profile(
             .filter(SpdPathInstance.enrollment_id == enrollment.id)
             .all()
         )
+        path_labels = _path_labels(db, instances)   # 模板名、当前节点名（P2-1600）
         tasks = (
             db.query(SpdTask)
             .filter(SpdTask.enrollment_id == enrollment.id)
@@ -2451,7 +2472,8 @@ def patient_profile(
             "program_name": program_names.get(enrollment.program_code, enrollment.program_code),
             "paths": [
                 {"id": i.id, "template_code": i.template_code, "status": i.status,
-                 "current_node_key": i.current_node_key, "progress": i.progress}
+                 "current_node_key": i.current_node_key, "progress": i.progress,
+                 **_path_label_fields(i, *path_labels)}
                 for i in instances
             ],
             "packages": [
