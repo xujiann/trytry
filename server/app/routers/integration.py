@@ -572,6 +572,8 @@ def _do_fhir_patient(resource: dict, db: Session, user: User):
 
 # LOINC 编码 → 随访指标字段。血糖三个编码：2339-0 是质量浓度（mg/dL），15074-8 / 14749-6 是摩尔浓度（mmol/L）
 _LOINC_FIELDS = {"8480-6": "sbp", "8462-4": "dbp", "2339-0": "glucose", "15074-8": "glucose", "14749-6": "glucose"}
+#: LOINC 的编码系统（Observation 入站有几条 coding 时优先取它，P2-1764）
+LOINC_SYSTEM = "http://loinc.org"
 #: 血糖单位（UCUM，`valueQuantity.code`，没有再看 `unit`）→ 折成 mmol/L 的除数（P2-639）
 _GLUCOSE_UNIT_DIVISOR = {"mmol/l": 1.0, "mg/dl": 18.0}
 # 指标 → 慢病病种（用于定位随访归属档案）：挪进 `chronic.FIELD_DISEASE` 作唯一一份，桌面端录随访按同一份拆（P2-1541）
@@ -650,10 +652,13 @@ def _do_fhir_observation(resource: dict, db: Session):
         raise HTTPException(status_code=404, detail="患者不存在")
 
     def loinc_code(codeable: dict | None) -> str:
-        for coding in (codeable or {}).get("coding", []):
-            if coding.get("code"):
-                return coding["code"]
-        return ""
+        # 优先取 system 为 LOINC 的那条，没有再退回第一条带 code 的（P2-1764，第五十二批扫描 AP2-10）：原先只取第一条，
+        # 本地码排在 LOINC 前面（`[{本地 SBP}, {LOINC 8480-6}]`）的合法观测 422「未识别到支持的观测指标」。
+        # 同 Encounter 按 coding.system 挑 ICD-10（P2-1080）；对接规范写的就是 LOINC
+        codings = [coding for coding in (codeable or {}).get("coding", []) if coding.get("code")]
+        loinc = next((c for c in codings if str(c.get("system") or "").strip() == LOINC_SYSTEM), None)
+        coding = loinc or (codings[0] if codings else None)
+        return coding["code"] if coding else ""
 
     values: dict[str, float] = {}
     for comp in resource.get("component", []):
