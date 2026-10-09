@@ -59,6 +59,7 @@ SHARED, CORE, CLINICAL, DOCTOR = _read("shared.js"), _read("core.js"), _read("pa
 HELPERS = "".join([
     _block(SHARED, "function esc(value) {"),
     _block(SHARED, "function statusTag(map, key) {"),
+    _block(SHARED, "async function fetchAllPages(get, path) {"),   # 待诊断 / 诊断中两种续页取全（P2-1711）
     _block(CORE, "function table(cols, rows, renderRow) {"),
     _block(CORE, 'function panel(title, body, { accent = "" } = {}) {'),
     _block(CORE, "function actionableFirst(recent, ...actionable) {"),

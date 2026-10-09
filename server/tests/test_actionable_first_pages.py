@@ -54,8 +54,9 @@ def test_共用的合并函数_待办在前_按id去重():
      ['api("/api/outpatient/consents?status=pending&limit=500")'],
      "const consents = actionableFirst(recentConsents, pendingConsents);"),
     # P2-1310：待诊断 + 诊断中 = 铃铛「待诊断申请」；已登记 + 采购中 = 「在途」卡片，加上等着结案的已配送
+    # P2-1711：共享诊断页这两种改为续页取全（按状态取也只回缺省一页 200 张）
     ("core.js", "renderExams",
-     ['api("/api/exams?status=pending")', 'api("/api/exams?status=diagnosing")'],
+     ['fetchAllPages(api, "/api/exams?status=pending")', 'fetchAllPages(api, "/api/exams?status=diagnosing")'],
      "const requests = actionableFirst(recent, pending, diagnosing);"),
     ("pages-clinical.js", "renderMedication",
      ['api("/api/medication/shortages?status=registered")', 'api("/api/medication/shortages?status=purchasing")',

@@ -699,7 +699,12 @@ const CRITICAL_TAGS = {
 async function loadCritical() {
   const box = $("#critical-list");
   try {
-    const reports = await api("/api/exams/critical");
+    // 未处置的续页取全排在最前，再接缺省清单里最近已处置的、按 id 去重（P2-1711，同管理端危急值操作台）：缺省清单一页 100 条、
+    // 不能翻页，未处置的一过 100 条，最早那条已确认的就点不到「处置反馈」
+    const [open, recent] = await Promise.all([
+      fetchAllPages(api, "/api/exams/critical?open=true"), api("/api/exams/critical")]);
+    const openIds = new Set(open.map((r) => r.id));
+    const reports = [...open, ...recent.filter((r) => !openIds.has(r.id))];
     if (!reports.length) {
       box.innerHTML = '<p class="empty">暂无危急值报告</p>';
       return;
@@ -766,8 +771,9 @@ const EXAM_STATUS = { pending: ["待领取", "orange"], diagnosing: ["诊断中"
 async function loadExams() {
   const box = $("#exam-list");
   try {
+    // 按状态续页取全（P2-1711，同管理端共享诊断页）：接口缺省一页 200 张，205 张待诊断时最早那批不在卡片里
     const [pending, diagnosing] = await Promise.all([
-      api("/api/exams?status=pending"), api("/api/exams?status=diagnosing"),
+      fetchAllPages(api, "/api/exams?status=pending"), fetchAllPages(api, "/api/exams?status=diagnosing"),
     ]);
     const rows = [...pending, ...diagnosing];
     if (!rows.length) {

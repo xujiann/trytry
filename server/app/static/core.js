@@ -1697,9 +1697,11 @@ const SAMPLE_STATUS = { "": "未采样", collected: "已采样", in_transit: "�
 async function renderExams() {
   $("#page-desc").textContent = "影像/心电/检验/病理：基层检查、上级诊断、结果互认、危急值管理";
   // 待诊断、诊断中的单独取一遍、排在最前（P2-1310，同 P2-456）：清单只回最新 200 张，铃铛「待诊断申请」数的是这两种状态的
-  // 全量——早开的单一被后来的挤出窗口，页面上就没有一行能领取 / 出报告
+  // 全量——早开的单一被后来的挤出窗口，页面上就没有一行能领取 / 出报告。
+  // 这两种按状态续页取全（P2-1711，同 P2-1333 的 fetchAllPages）：原先按状态取也不带 limit，接口缺省仍是 200 张——205 张待诊断时
+  // 最早那批（连同只画在申请单行上的「登记采样 / 发起转运 / 中心核收」）照样从页面消失，铃铛却报 205
   const [recent, pending, diagnosing, critical, templates] = await Promise.all([
-    api("/api/exams"), api("/api/exams?status=pending"), api("/api/exams?status=diagnosing"),
+    api("/api/exams"), fetchAllPages(api, "/api/exams?status=pending"), fetchAllPages(api, "/api/exams?status=diagnosing"),
     api("/api/exams/critical"), api("/api/exams/templates")]);
   const requests = actionableFirst(recent, pending, diagnosing);
   $("#page-body").innerHTML = `

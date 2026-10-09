@@ -494,21 +494,40 @@ def advance_sample(request_id: int, db: Session = Depends(get_db)):
 CRITICAL_LIST_LIMIT = 100
 
 
+#: 未处置的危急值（待确认 / 已确认待反馈；空串是迁移前的存量，等同已通知），与待办铃铛、运营报表同一判据
+_OPEN_CRITICAL_STATUSES = ("notified", "acknowledged", "")
+
+
 @router.get("/critical", response_model=list[ExamReportOut])
-def list_critical_reports(db: Session = Depends(get_db)):
+def list_critical_reports(
+    response: Response,
+    open: bool | None = None,
+    offset: int = 0,
+    limit: int = CRITICAL_LIST_LIMIT,
+    db: Session = Depends(get_db),
+):
     """危急值清单：需立即通知申请机构处置。
 
     没处置完的（待确认 / 已确认待反馈）排在最前，之后才是已处置的（P1-166）。这张清单是「确认接收」「处置反馈」两个
     按钮唯一的所在（管理端危急值页、医生移动端危急值页都取它）；原先按报告号倒序取最新 100 条、各种状态混排——
     全县一天几十条危急值，前天已确认、还没反馈的那条被新出的挤出窗口，超时未确认催办那张表又不收已确认的，
-    「处置反馈」再也点不到，这条危急值永远闭不了环（与 P1-148 审方队列同一个形状）。"""
-    return (
-        db.query(ExamReport)
-        .filter(ExamReport.critical == true())   # 不写 `.is_(True)`：那样用不上危急值部分索引（P2-1156）
-        .order_by(case((ExamReport.critical_status == "resolved", 1), else_=0), ExamReport.id.desc())
-        .limit(CRITICAL_LIST_LIMIT)
-        .all()
-    )
+    「处置反馈」再也点不到，这条危急值永远闭不了环（与 P1-148 审方队列同一个形状）。
+
+    **可选 `open` 分开取、能翻页（P2-1711）**：上面那一页仍封顶 100 条、不能翻页，未处置的按报告号倒序——未处置的一过
+    100 条，被截掉的正是最早的那几条，P1-166 原来的形状又回来了（清单是全县的，确认之后又无人催，未处置条数会随时间累积）。
+    `true` 只取未处置（判据同 `_OPEN_CRITICAL_STATUSES`）、`false` 只取已处置，都按报告号倒序走 `paginate`
+    （`offset` / `limit` 只对这两种生效，总数在 `X-Total-Count`）；两个危急值页把未处置的续页取全排在最前，再接缺省
+    这一页里最近已处置的。缺省不传，返回集合、排序与字节都与原先一致——对接规范里让 HIS 轮询的就是这一句。"""
+    query = db.query(ExamReport).filter(ExamReport.critical == true())   # 不写 `.is_(True)`：那样用不上危急值部分索引（P2-1156）
+    if open is None:
+        return (
+            query.order_by(case((ExamReport.critical_status == "resolved", 1), else_=0), ExamReport.id.desc())
+            .limit(CRITICAL_LIST_LIMIT)
+            .all()
+        )
+    query = query.filter(ExamReport.critical_status.in_(_OPEN_CRITICAL_STATUSES) if open
+                         else ExamReport.critical_status == "resolved")
+    return paginate(query.order_by(ExamReport.id.desc()), response, offset, limit)
 
 
 # ---------- 危急值闭环：通知 → 确认接收 → 处置反馈 ----------

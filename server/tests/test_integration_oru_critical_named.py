@@ -130,6 +130,14 @@ def _run_node(script: str, data) -> str:
                           text=True, check=True, timeout=60).stdout
 
 
+#: 两个危急值页把未处置的续页取全（P2-1711）：页面按 fetchAllPages 拼出来的地址取，桩里回清单行中未处置的那些
+OPEN_PAGE = "/api/exams/critical?open=true&limit=500&offset=0"
+
+
+def _open(rows):
+    return [r for r in rows if r["critical_status"] != "resolved"]
+
+
 #: 页面取数换成桩：`$()` 按选择器给一个记 innerHTML 的假元素，`api()` 按路径回给定的数据
 _HARNESS = """
 const els = {};
@@ -156,10 +164,12 @@ def test_管理端危急值操作台_所见照原样换行显示且转义(critic
     page = (STATIC / "pages-clinical.js").read_text(encoding="utf-8")
     script = (_HARNESS + (STATIC / "shared.js").read_text(encoding="utf-8")
               + _top_level(core, "function table(") + _top_level(core, "function panel(")
+              + _top_level(core, "function actionableFirst(")   # 未处置的排最前、按 id 去重（P2-1711）
               + _top_level(page, "const CRIT_STATUS = ")   # 状态表连同其后的 renderCritical
               + "\nconst DATA = JSON.parse(process.argv[1]);\nasync function api(path) { return DATA[path]; }\n"
               "renderCritical().then(() => process.stdout.write(els['#page-body'].innerHTML));\n")
-    html = _run_node(script, {"/api/exams/critical": critical_rows, "/api/exams/critical/unacknowledged": []})
+    html = _run_node(script, {"/api/exams/critical": critical_rows, OPEN_PAGE: _open(critical_rows),
+                              "/api/exams/critical/unacknowledged": []})
     finding = critical_rows[0]["finding"]
     assert "<th>所见</th>" in html
     assert f'<td style="white-space:pre-wrap">{_esc(finding)}</td>' in html   # 修前清单不显示所见
@@ -174,7 +184,7 @@ def test_医生移动端危急值卡片_所见照原样换行显示且转义(cri
               + _top_level(doctor, "const CRITICAL_TAGS = ", "\n};\n") + _top_level(doctor, "async function loadCritical(")
               + "\nconst DATA = JSON.parse(process.argv[1]);\nasync function api(path) { return DATA[path]; }\n"
               "loadCritical().then(() => process.stdout.write(els['#critical-list'].innerHTML));\n")
-    html = _run_node(script, {"/api/exams/critical": critical_rows})
+    html = _run_node(script, {"/api/exams/critical": critical_rows, OPEN_PAGE: _open(critical_rows)})
     finding = critical_rows[0]["finding"]
     assert f'<p class="note-body">{_esc(finding)}</p>' in html   # 修前卡片只有结论
     assert _esc(critical_rows[0]["conclusion"]) in html and HOSTILE not in html

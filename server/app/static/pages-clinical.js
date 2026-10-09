@@ -3155,8 +3155,12 @@ const CRIT_STATUS = { notified: ["已通知", "orange"], acknowledged: ["已确�
 
 async function renderCritical() {
   $("#page-desc").textContent = "危急值闭环：通知 → 医师确认接收 → 处置反馈；超时未确认催办";
-  const [critical, unacked] = await Promise.all([
-    api("/api/exams/critical"), api("/api/exams/critical/unacknowledged")]);
+  // 未处置的续页取全排在最前，再接缺省清单里最近已处置的、按 id 去重（P2-1711）：缺省清单一页 100 条、不能翻页，未处置的按
+  // 报告号倒序——一过 100 条，被截掉的正是最早的未处置，「处置反馈」又点不到了（P1-166 原来的形状）
+  const [open, recent, unacked] = await Promise.all([
+    fetchAllPages(api, "/api/exams/critical?open=true"), api("/api/exams/critical"),
+    api("/api/exams/critical/unacknowledged")]);
+  const critical = actionableFirst(recent, open);
   $("#page-body").innerHTML = `
     ${unacked.length ? panel(`⚠ 超时未确认催办（${unacked.length}）`, `${
       // 「最近通知」是超时的起算点（第十五批 S3-2）：修订改判为危急值的，报告时间是首次出具、通知是修订那一刻

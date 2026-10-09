@@ -92,7 +92,9 @@ import warnings
 #:   规则总目录回到计数里，审计日志归档导出也被认出来（它是批读游标、读完全量，记进下方误报名单，照样计数）；
 #:   L-J 图与测定清单的上限在帮手函数里，仍看不见。87 + 3 = 90，基线收紧到实测值，不留空档）
 #: → 89（2026-10-09 第四十七批 P2-1610：慢专病转诊规则清单切到 paginate）
-BASELINE_SILENT_TRUNCATION = 89
+#: → 88（同日第五十批 P2-1711：危急值清单加可选 `open`，未处置 / 已处置分开取走 paginate；缺省那一页照旧封顶 100 条、
+#:   字节不变——HIS 轮询的是它，两个危急值页改为未处置的续页取全）
+BASELINE_SILENT_TRUNCATION = 88
 
 ROUTER_DIRS = (
     (os.path.join(os.path.dirname(__file__), "..", "app", "routers"), ""),
@@ -247,6 +249,7 @@ PAGINATED_ENDPOINTS = {
     "encounters.py:list_encounters",
     "esb.py:list_flow_runs",
     "esb.py:list_messages",
+    "exams.py:list_critical_reports",   # 传 `open` 时（P2-1711）；缺省那一页照旧封顶，见端点 docstring
     "exams.py:list_requests",
     "followups.py:list_followups",
     "homevisits.py:list_visits",
@@ -574,7 +577,9 @@ def test_上限提成模块常量也认得出():
     模块常量要认，调用方传进来的 `limit` 参数不认（那是调用方能自己调的，本就不算）。
     """
     found = silently_truncating_endpoints()
-    assert {"exams.py:list_critical_reports", "rules.py:rule_catalog"} <= found, (
+    # 危急值清单原是这里的一处真实端点；P2-1711 给它加了 `open` 分开取、走 paginate（缺省那一页照旧封顶），按判据已不算
+    # 截断——换成同形状的慢专病居民档案时间轴（`.limit(ARCHIVE_TIMELINE_LIMIT)`），仍拿两处真实端点钉住
+    assert {"spd/portal.py:archive", "rules.py:rule_catalog"} <= found, (
         "上限提成模块常量的两处真实端点没被认出来——判据退回只认字面量了"
     )
     sample = ast.parse(

@@ -135,6 +135,9 @@ def _run_node(script: str, data) -> dict:
 def page_data(client, admin, loop):
     return {
         "/api/exams/critical": client.get("/api/exams/critical", headers=admin).json(),
+        # 两个危急值页把未处置的续页取全（P2-1711）：页面按 fetchAllPages 拼出来的地址取
+        "/api/exams/critical?open=true&limit=500&offset=0":
+            client.get("/api/exams/critical?open=true&limit=500&offset=0", headers=admin).json(),
         "/api/exams/critical/unacknowledged": [],
         f"/api/exams/reports/{loop['id']}/critical-actions":
             client.get(f"/api/exams/reports/{loop['id']}/critical-actions", headers=admin).json(),
@@ -147,6 +150,7 @@ def test_管理端危急值操作台_清单出报告时间_留痕轨迹出每一
     page = (STATIC / "pages-clinical.js").read_text(encoding="utf-8")
     script = (_HARNESS + (STATIC / "shared.js").read_text(encoding="utf-8")
               + _top_level(core, "function table(") + _top_level(core, "function panel(")
+              + _top_level(core, "function actionableFirst(")   # 未处置的排最前、按 id 去重（P2-1711）
               + _top_level(page, "const CRIT_STATUS = ")   # 状态表连同其后的 renderCritical
               + "(async () => { await renderCritical(); const listed = els['#page-body'].innerHTML;\n"
               f"  await els['#page-body'].onclick({{ target: {{ dataset: {{ trail: '{loop['id']}' }} }} }});\n"

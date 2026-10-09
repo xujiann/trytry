@@ -18,7 +18,8 @@ STATIC = Path(__file__).resolve().parent.parent / "app" / "static"
 
 #: 指标 → (目标页, 目标页列不列得出这一类, 依据)。列得出的，依据写目标页取这一类的那句取数（下面逐条核对它还在）
 PAGE_LISTS = {
-    "critical_values": ("critical", True, 'api("/api/exams/critical")'),   # 未闭环的排在最前（P1-166），上限 100 条
+    # 未闭环的续页取全排在最前（P1-166 / P2-1711），再接缺省清单里最近已处置的
+    "critical_values": ("critical", True, 'api("/api/exams/critical")'),
     "stock_alerts": ("pharmacy", True, 'api("/api/pharmacy/alerts")'),   # 与指标同一构造，库存表逐行标「缺药」
     "infectious_recent": ("infectious", True, 'api("/api/infectious/cases")'),   # 最新 500 例按报告号倒序，近 7 日发病的在最前
     "pending_reviews": ("rx", True, 'api("/api/prescriptions?status=pending_review")'),   # 待审单独取、排最前（P1-148）
