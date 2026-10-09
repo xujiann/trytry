@@ -19,7 +19,7 @@
 import ast
 import operator
 
-from .formula import MAX_EXPRESSION_LENGTH, FormulaError, _eval_node
+from .formula import _ARITY, _FUNCTIONS, MAX_EXPRESSION_LENGTH, FormulaError, _eval_node
 
 _COMPARE_OPS = {
     ast.Gt: operator.gt,
@@ -58,12 +58,15 @@ def _coerce(name: str, value):
     raise RuleError(f"变量 {name} 的值类型不受支持：{type(value).__name__}")
 
 
-def _eval_operand(node: ast.AST, variables: dict):
-    """求一个操作数：字符串/元组按原样返回，其余交给数值求值器。"""
+def _eval_operand(node: ast.AST, variables: dict, lenient: bool = False):
+    """求一个操作数：字符串/元组按原样返回，其余交给数值求值器。
+
+    `lenient` 只给录入校验逐环查链式比较用（P2-1736）：这组样例值下算不出有限实数的记成 nan 接着往下查，与公式录入校验
+    （`formula.validate`）同一个道理。求值一律不带它。"""
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         return node.value
     if isinstance(node, (ast.Tuple, ast.List)):
-        return tuple(_eval_operand(e, variables) for e in node.elts)
+        return tuple(_eval_operand(e, variables, lenient) for e in node.elts)
     if isinstance(node, ast.Name):
         if node.id not in variables:
             raise RuleError(f"未知变量：{node.id}")
@@ -71,12 +74,12 @@ def _eval_operand(node: ast.AST, variables: dict):
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "len":
         if len(node.args) != 1:
             raise RuleError("len() 只接受一个参数")
-        target = _eval_operand(node.args[0], variables)
+        target = _eval_operand(node.args[0], variables, lenient)
         if not isinstance(target, str):
             # len(数值) 在 Python 里是 TypeError，这里转成规则级错误
             raise RuleError("len() 只能作用于文本变量")
         return float(len(target))
-    return _eval_node(node, variables)
+    return _eval_node(node, variables, lenient)
 
 
 #: 比较前数值取整到的小数位：与公式求值器 `formula.evaluate` 的结果同一精度（P2-892）
@@ -159,11 +162,55 @@ def _single_string_membership(node: ast.Compare) -> tuple[str, str, str] | None:
     return None
 
 
+#: 条件里能调用的函数：公式求值器的白名单（min / max / round / abs），加上本模块自己认的 `len`（见 `_eval_operand`）
+_CALLABLE = (*_FUNCTIONS, "len")
+
+
+def _check_call(node: ast.Call) -> None:
+    """函数名与参数个数按白名单静态核（P2-1736）：判据与求值时同一份（`formula._FUNCTIONS` / `_ARITY`，`len` 只收一个
+    参数），不靠样例值算到它——链式比较短路掉的那一截里写错的函数名、参数个数，试算从来算不到。"""
+    if not isinstance(node.func, ast.Name) or node.func.id not in _CALLABLE:
+        raise RuleError(f"只允许调用 {' / '.join(_CALLABLE)}")
+    if node.keywords:
+        raise RuleError("函数调用不支持关键字参数")
+    name, count = node.func.id, len(node.args)
+    if name == "len":
+        if count != 1:
+            raise RuleError("len() 只接受一个参数")
+        return
+    if not count:
+        raise RuleError("函数调用至少需要一个参数")
+    low, high = _ARITY[name]
+    if count < low:
+        raise RuleError(f"{name} 至少需要 {low} 个参数")
+    if high is not None and count > high:
+        raise RuleError(f"{name} 最多接受 {high} 个参数")
+
+
+def _check_every_link(node: ast.Compare, variables: dict) -> None:
+    """链式比较逐环都算、两两查可比性，不短路（P2-1736）。求值语义不动：`_eval_condition` 照旧一环为假即停。
+
+    样例值下算不出有限实数的记成 nan 接着往下查（`lenient`）：那是取值问题不是写错，换组真实取值就算得出，与公式录入
+    校验同一个道理；类型对不上（数与文本比大小、`len(数值)`）不随取值变，照样报。"""
+    values = [_comparable(_eval_operand(operand, variables, lenient=True)) for operand in (node.left, *node.comparators)]
+    for op, left, right in zip(node.ops, values, values[1:]):
+        if type(op) not in _COMPARE_OPS:
+            raise RuleError("不支持的比较运算符")
+        try:
+            _COMPARE_OPS[type(op)](left, right)
+        except TypeError:
+            raise RuleError(f"类型不可比较：{left!r} 与 {right!r}") from None
+
+
 def validate_condition(expression: str, known_variables: dict) -> None:
     """录入时校验：用各变量的样例值代入试算一次，再把表达式里引用的变量逐个对一遍（P2-352）。
 
     光试算不够：链式比较一环为假就不再往下算——`65 <= age < max_agee` 在样例 age=40 时第一环就是假，写错的 `max_agee`
     从没被求值，录入照收；上线后每一次真求值（age ≥ 65）都记一条「未知变量」错误，规则形同虚设。
+
+    P2-352 只补了变量名这一半（P2-1736）：后半截里的引号数字（`65 <= age < "80"`）、写错的函数名（`maxx(age, 80)`）、
+    `len(数值)`、参数个数不对（`max(age)`）照样录得进去，age ≥ 65 时每次求值都报错。函数名与参数个数按白名单静态核
+    （`_check_call`），每个比较逐环都算、两两查可比性（`_check_every_link`）。
 
     「变量 in 单个字符串」录入时拒收（P2-1735，见 `_single_string_membership`）：试算查不出来——子串判断不报错，只是
     结果与枚举判断不一样。只拦录入，求值语义不动（已录入的照旧按子串算，存量要人工改写）。
@@ -174,6 +221,18 @@ def validate_condition(expression: str, known_variables: dict) -> None:
     for node in ast.walk(tree):
         if isinstance(node, ast.Name) and id(node) not in functions and node.id not in known_variables:
             raise RuleError(f"未知变量：{node.id}")
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            _check_call(node)
+    try:
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Compare):
+                _check_every_link(node, known_variables)
+    except FormulaError as exc:
+        raise RuleError(str(exc)) from None
+    except (TypeError, ValueError, ArithmeticError) as exc:
+        # 与 `evaluate_condition` 同一层兜底：对外只抛 RuleError（路由只接它，漏出别的就是 500）
+        raise RuleError(f"条件求值失败：{exc}") from None
     for node in ast.walk(tree):
         if isinstance(node, ast.Compare) and (hit := _single_string_membership(node)):
             name, op, value = hit
