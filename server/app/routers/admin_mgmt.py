@@ -434,6 +434,10 @@ def transfer_asset(
         raise HTTPException(status_code=409, detail="已报废物资不可调拨")
     if db.get(Organization, to_org_id) is None:
         raise HTTPException(status_code=404, detail="调入机构不存在")
+    # 调往物资现属机构不收（P2-1634，与员工调动 P2-1272、派驻「派出与接收机构不能相同」同一类）：原先照收 200——机构没变，
+    # 请求级审计却多一条调拨，看着像调走了又没动
+    if to_org_id == asset.org_id:
+        raise HTTPException(status_code=422, detail="调入机构与物资现属机构不能相同")
     # 划拨与「未报废」压进同一条 UPDATE（P2-1188）：上面那道预检是锁外读的——与整件报废（物资行的临界区里重读、置已报废）
     # 同时到，原先照旧把机构改掉：已报废的物资被划到调入机构名下。抢输的一路改到 0 行，与顺序发生时同一句 409
     if not move_row(db, Asset, asset.id, Asset.status != "scrapped", org_id=to_org_id):
