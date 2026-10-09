@@ -29,7 +29,7 @@ from ..models import ChronicDiseaseType, ChronicPatient, FollowUp, Organization,
 from ..numtypes import non_finite_path
 from ..visibility import assert_org_writable, assert_patient_visible
 from ..schemas import ChronicCreate, ChronicOut, FollowUpCreate, FollowUpHistoryOut, FollowUpOut
-from ..texttypes import NON_BLANK
+from ..texttypes import NON_BLANK, code_key
 from ..vitals import bp_order_problem
 
 router = APIRouter(prefix="/api/chronic", tags=["慢病管理"], dependencies=[Depends(get_current_user)])
@@ -356,6 +356,16 @@ def create_disease_type(body: DiseaseTypeCreate, db: Session = Depends(get_db)):
         raise HTTPException(status_code=422, detail=f"分级规则非法：{problem}")
     if get_disease_type(db, body.code) is not None:
         raise HTTPException(status_code=409, detail="病种编码已存在")
+    # 编码按比对键 `code_key` 与已有的比（P2-1742，编码比对的统一口径 P1-218 / P1-219）：原先只按原样查重，`Hypertension`、
+    # `hypertension ` 都 201——建档下拉里多出几个同名「高血压」，同一患者能为同一病种再建一份档案（在管人数多算），挂在变体编码上
+    # 的档案也收不到 FHIR 入站的血压（`FIELD_DISEASE` 只认规范写法）。写法不同的点名已有的那条；字面完全相同的照旧上面的原文案。
+    # 名称重名不提示，存量不动
+    key = code_key(body.code)
+    same = next(((code, name) for code, name in db.query(ChronicDiseaseType.code, ChronicDiseaseType.name)
+                 .order_by(ChronicDiseaseType.id) if code_key(code) == key), None)
+    if same is not None:
+        raise HTTPException(status_code=409, detail=f"已有病种「{same[1]}」（编码 {same[0]}），与填写的编码「{body.code}」只差"
+                                                    "首尾空白、全半角、大小写或不可见字符，疑似同一病种：请沿用已有病种")
     disease_type = insert_or_conflict(
         db, ChronicDiseaseType(**body.model_dump()), "病种编码已存在"
     )
