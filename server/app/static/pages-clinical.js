@@ -3278,12 +3278,15 @@ async function renderInpatient() {
   // 选项写「机构名 · 病区名」（同名病区各院都有），首项留空必选：不动下拉不会悄悄落在第一个病区上
   const orgName = Object.fromEntries(orgs.map((o) => [o.id, o.name]));
   const wardOptions = wards.map((w) => `<option value="${w.id}">${esc(orgName[w.org_id] || `机构 ${w.org_id}`)} · ${esc(w.name)}</option>`).join("");
+  // 建病区的机构同样从下拉里选（P2-1743，与上面建床位的 P2-1696 同一个思路）：原先是「机构ID」数字框，管理员是全域角色、
+  // 后端只看机构存在——敲错一位就把病区建进别家机构，计入人家的床位，病区又改不了名、撤不掉（P2-1357）。首项留空必选
+  const orgOptions = orgs.map((o) => `<option value="${o.id}">${esc(o.name)}</option>`).join("");
   $("#page-body").innerHTML = `
     ${stats.length ? panel("床位效率", table(["机构", "床位", "占用", "当前占床率", "在院", "累计出院"], stats, (s) =>
       `<tr><td>${esc(s.org_name)}</td><td>${s.beds_total}</td><td>${s.beds_occupied}</td>
        <td>${s.occupancy_pct}%</td><td>${s.in_hospital}</td><td>${s.discharged_total}</td></tr>`)) : ""}
     ${panel("病区/床位建档（admin）与入院登记", `
-      <form class="inline" id="ward-form"><input name="org_id" type="number" placeholder="机构ID" required>
+      <form class="inline" id="ward-form"><select name="org_id" required><option value="">选择机构</option>${orgOptions}</select>
         <input name="name" placeholder="病区名称" required><button>建病区</button></form>
       <form class="inline" id="bed-form"><select name="ward_id" required><option value="">选择病区（机构 · 病区）</option>${wardOptions}</select>
         <input name="bed_no" placeholder="床号" required><button>建床位</button></form>
