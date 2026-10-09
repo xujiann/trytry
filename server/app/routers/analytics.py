@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 
 from .. import clock
 from ..database import get_db
-from ..datetypes import DateStr
+from ..datetypes import DateStr, before_birth_problem
 from ..deps import (
     get_current_user,
     month_bounds,
@@ -275,8 +275,17 @@ def create_outbound_visit(
     body: OutboundIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
     """登记一次县外就诊。"""
-    if db.get(Patient, body.patient_id) is None:
+    patient = db.get(Patient, body.patient_id)
+    if patient is None:
         raise HTTPException(status_code=404, detail="患者不存在")
+    # 就诊日期不得晚于今天、不得早于患者出生（P2-1704，与签约日期 P2-1548、证明日期 P2-1538 同一句）：记的是已经发生的
+    # 就诊，原先只查格式——2026 敲成 2062 照收，本月就医流向里看不到、要到 2062 年才冒出来，全期累计里倒一直算着；
+    # 早于出生的也照收。患者没有出生日期就不判下界（`before_birth_problem` 的口径）；存量不动
+    if body.visit_date > clock.today().isoformat():
+        raise HTTPException(status_code=422, detail=f"就诊日期（{body.visit_date}）不得晚于今天")
+    before_birth = before_birth_problem(body.visit_date, patient.birth_date, "就诊日期")
+    if before_birth:
+        raise HTTPException(status_code=422, detail=before_birth)
     if body.insurance_pay > body.total_amount:
         raise HTTPException(status_code=422, detail="医保支付不得超过总费用")
     if body.referral_id is not None:
