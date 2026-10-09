@@ -1520,6 +1520,38 @@ class RevisitUpdate(BaseModel):
     note: str = Field(default="", max_length=256)
 
 
+#: 复诊状态、提醒状态的中文名：与页面 `SPD_REVISIT_STATUS` / `SPD_REMIND_STATUS` 同一套字（模型列注释里的「已计划」
+#: 「逾期未复诊」是早先的叫法，页面上印的是这一套）。写进给人看的复诊日志（P2-1607，与 P2-767 同一句：不把英文码拼进给人看的文字）
+REVISIT_STATUS_NAMES = {"planned": "已排期", "done": "已复诊", "overdue": "已逾期", "removed": "已移除"}
+REVISIT_REMIND_NAMES = {"none": "未提醒", "sent": "已提醒", "contacted": "已联系"}
+#: 复诊改动日志逐项的写法：（字段，中文名，取值的中文名表；日期原样）
+_REVISIT_LOG_FIELDS: tuple[tuple[str, str, dict[str, str] | None], ...] = (
+    ("status", "状态", REVISIT_STATUS_NAMES),
+    ("plan_date", "计划日", None),
+    ("actual_date", "实际复诊日", None),
+    ("remind_status", "提醒", REVISIT_REMIND_NAMES),
+)
+
+
+def _revisit_change_note(before: dict[str, str], record: SpdRevisit) -> str:
+    """按这次实际改了什么拼一句中文日志：「状态：已排期 → 已复诊；实际复诊日：— → 2026-10-09」；一项没变返回空串（P2-1607）。
+
+    原先一律写「状态变更为{英文码}」——改计划日、置提醒、什么都没改的空 PATCH 都记「状态变更为planned」，日志带英文码，
+    也看不出改了什么。只写真变了的（传了、值没变的不写）。
+    """
+    parts = []
+    for key, label, names in _REVISIT_LOG_FIELDS:
+        if key not in before:
+            continue
+        old, new = before[key], getattr(record, key)
+        if old == new:
+            continue
+        if names is not None:
+            old, new = names.get(old, old), names.get(new, new)
+        parts.append(f"{label}：{old or '—'} → {new or '—'}")
+    return "；".join(parts)
+
+
 @router.patch("/revisits/{revisit_id}", response_model=RevisitOut,
               dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def update_revisit(
@@ -1551,12 +1583,17 @@ def update_revisit(
                      if record.status == "removed" and data["status"] != "removed" else "")
             if ended:
                 raise HTTPException(status_code=409, detail=f"患者已不在管（{ended}），复诊计划不能恢复")
+        before = {key: getattr(record, key) for key in data}
         for key, value in data.items():
             setattr(record, key, value)
-        record.log = (record.log or []) + [{
-            "at": clock.today().isoformat(),
-            "note": note or f"状态变更为{record.status}",
-        }]
+        # 日志按实际改动拼中文（P2-1607）：调用方写了 note 的照旧记 note；没写的记这次真改了什么，一项没改（空 PATCH、
+        # 传的值与原值相同）就不追加——原先一律追加「状态变更为{英文码}」
+        change = _revisit_change_note(before, record)
+        if note or change:
+            record.log = (record.log or []) + [{
+                "at": clock.today().isoformat(),
+                "note": note or change,
+            }]
         # 复诊做完或移除，从它转出的待呼叫撤出队列（P2-735，与随访的 P2-498 同一个帮手）
         if data.get("status") in ("done", "removed"):
             withdraw_calls(db, "revisit", [record.id],

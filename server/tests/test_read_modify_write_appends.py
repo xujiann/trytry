@@ -267,7 +267,8 @@ def test_复诊计划两次办理_两条日志都在(client, admin, world):
     assert finished.json()["status"] == "done"
     assert finished.json()["log"] == [
         {"at": business_today_str(), "note": "患者外出，改期一周"},
-        {"at": business_today_str(), "note": "状态变更为done"},
+        # 没写 note 的按实际改动记中文（P2-1607）：原先一律「状态变更为done」
+        {"at": business_today_str(), "note": f"状态：已排期 → 已复诊；实际复诊日：— → {business_today_str()}"},
     ]
 
 
