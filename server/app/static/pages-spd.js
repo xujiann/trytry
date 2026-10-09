@@ -3850,6 +3850,7 @@ async function renderSpdMember() {
         <input name="patient_id" type="number" placeholder="患者ID" required>
         <select name="scale_id">${spdLatestScales(catalog.scales).map((s) =>
           `<option value="${s.id}">${esc(s.name)}（${esc(s.code)}）</option>`).join("")}</select>
+        <select name="program_code"><option value="">病种：随量表 / 只在管一个病种的按它</option>${spdProgramOptions(catalog)}</select>
         <button>开展评估</button>
       </form><p class="msg" id="spd-assess-msg"></p>
       ${spdCards([["评估人数", assessStats.persons], ["评估人次", assessStats.times]])}
@@ -3999,15 +4000,17 @@ async function renderSpdMember() {
     if (!fields.length) return setMsg("#spd-assess-msg", "该量表没有题目，先去量表配置补齐", false);
     // 框自己提交（P2-1091，与筛查同一句）：原先答完点确定就关框、再发请求——选了别家患者 403、量表改版 409，作答随框没了
     const r = await spdModal(`${scale.name} · 逐题作答（没答的题留空）`, fields, {
-      // 带上作答的那一版（P2-921）：与筛查同一句
+      // 带上作答的那一版（P2-921）：与筛查同一句。病种（P1-252）：留空随量表、量表也通用的按在管档案推断
       submit: (answersRaw) => api("/api/spd/assessments", { method: "POST", body: JSON.stringify({
-        patient_id: picked.patient_id, scale_code: scale.code, scale_id: scale.id,
+        patient_id: picked.patient_id, scale_code: scale.code, scale_id: scale.id, program_code: picked.program_code,
         answers: spdCollectAnswers(scale.items, answersRaw, "q_") }) }) });
     if (!r) return;
     /* 不调 route() 刷新整页——那会把这条结果消息一并刷掉。
-     * 统计卡片下次进入页面自然更新，当下要紧的是让操作者看到评估结论。 */
+     * 统计卡片下次进入页面自然更新，当下要紧的是让操作者看到评估结论。
+     * 推不出病种、没回写档案的，后端回执带 `writeback_note`（P1-252），跟在结论后面说出来 */
     setMsg("#spd-assess-msg",
-      `评估完成：${r.score} 分，风险等级 ${SPD_RISK[r.risk_level]?.[0] || r.risk_level || "未分级"}。${r.advice || ""}`);
+      `评估完成：${r.score} 分，风险等级 ${SPD_RISK[r.risk_level]?.[0] || r.risk_level || "未分级"}。${r.advice || ""}`
+      + (r.writeback_note ? `（${r.writeback_note}）` : ""));
   };
   /* 评估记录（成员端 #8「查看评估对象、记录与统计结果」，P2-563）：原先这一块只有统计卡片，列表容器画了却从不填——
    * 评了谁、哪次评的、得几分，页面上一条也看不到。按患者 / 量表 / 风险等级 / 病种筛，截到上限时明说 */

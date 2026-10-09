@@ -172,6 +172,14 @@ class CareAssessmentOut(BaseModel):
     created_at: str
 
 
+class AssessmentCreatedOut(CareAssessmentOut):
+    """新建评估的回执：比清单行多一个 `writeback_note`（P1-252）——请求与量表都没写病种、按在管档案又推不出来（在管几个
+    病种不替人猜、或没有在管档案）时，说明这次结论为什么没回写档案风险分层。推出来了、写了病种的都不出这个键，原有回执
+    逐字节不变（端点开 `response_model_exclude_unset`）。"""
+
+    writeback_note: str = ""
+
+
 class AssessmentStatsOut(BaseModel):
     persons: int
     times: int
@@ -662,8 +670,8 @@ def _assess_out(a: SpdAssessment, patient_name: str = "") -> dict:
     }
 
 
-@router.post("/assessments", response_model=CareAssessmentOut, status_code=201,
-             dependencies=[Depends(require_roles(*SERVICE_ROLES))])
+@router.post("/assessments", response_model=AssessmentCreatedOut, response_model_exclude_unset=True,
+             status_code=201, dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def create_assessment(
     body: AssessIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
@@ -672,6 +680,12 @@ def create_assessment(
     风险等级回写是有意的联动：招标文件成员端 #4 要求风险等级"作为管理目标、
     路径、随访和转诊策略调整依据"，评估完还要人工去改一次档案，
     这一步一定会有人忘记，忘记的结果是高危患者仍按低危频次随访。
+
+    请求与量表都没写病种的，按在管档案推断（P1-252，与干预 / 复诊 / 转诊的 `enrollment_for` 同一句，P1-139）：只在管
+    一个病种的，评估记录挂这个病种、照常回写与派发；在管几个病种的不替人猜、没有在管档案的无从回写，都只存评估，回执的
+    `writeback_note` 写明没回写的原因。原先评估页只送患者与量表，手册指定的综合风险评估量表（`assess_risk_common`）又是
+    通用量表——评出极高危，档案仍是低危、不开 14 天高危复诊、不开自动干预，按病种的待评估 / 跑分 / 统计也都不计这次。
+    推断只看病种空不空、**不按量表类别分流**：筛查问卷做评估要不要回写是 P2-868 待裁定，这里不碰。
     """
     assert_patient_visible(db, user, body.patient_id, resource="spd_assessment")
     program_problem = unknown_program(db, body.program_code)  # 病种编码先查在不在（P1-120）；留空取量表自己的病种
@@ -694,9 +708,21 @@ def create_assessment(
     if scale_problem:
         raise HTTPException(status_code=422, detail=scale_problem)
     graded = score_scale(scale.items or [], body.answers, scale.scoring or {})
+    program_code, writeback_note = body.program_code or scale.program_code, ""
+    if not program_code:
+        # 请求与量表都没写病种：只在管一个病种的挂它（P1-252，见 docstring）；推不出来的不猜，回执说清楚为什么没回写
+        program_code = enrollment_for(db, body.patient_id, "")[0]
+        if not program_code:
+            several = db.query(SpdEnrollment.id).filter(
+                SpdEnrollment.patient_id == body.patient_id, SpdEnrollment.status == "active").first() is not None
+            writeback_note = (
+                "该患者在管不止一个病种，评估没写病种、量表也不分病种，结论只存为评估记录、未回写档案风险分层"
+                "（也不开高危复诊与干预）；要回写请选定病种再评" if several
+                else "该患者没有在管的纳管档案，结论只存为评估记录、未回写档案风险分层"
+            )
     record = SpdAssessment(
         patient_id=body.patient_id, scale_id=scale.id, scale_code=scale.code,
-        scale_version=scale.version, program_code=body.program_code or scale.program_code,
+        scale_version=scale.version, program_code=program_code,
         answers=body.answers, score=graded["score"], risk_level=graded["risk_level"],
         advice=graded["advice"][:SCALE_ADVICE_MAX], channel=body.channel, operator_id=user.id,   # 存量量表的长建议（P2-1048）
     )
@@ -719,7 +745,10 @@ def create_assessment(
                 db.commit()
     db.commit()
     patient = db.get(Patient, body.patient_id)
-    return _assess_out(record, patient.name if patient else "")
+    out = _assess_out(record, patient.name if patient else "")
+    if writeback_note:
+        out["writeback_note"] = writeback_note   # 条件键（P1-252）：推出来了、写了病种的回执逐字节不变
+    return out
 
 
 def _auto_intervene(db: Session, enrollment: SpdEnrollment, risk_level: str) -> None:
