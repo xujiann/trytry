@@ -28,6 +28,7 @@ from ..models import (
     ConsentTemplate,
     Encounter,
     InformedConsent,
+    MedicalRecord,
     NursingRecord,
     Organization,
     Patient,
@@ -170,6 +171,12 @@ class EncounterCompletenessOut(BaseModel):
     patient_name: str
     encounter_created_at: str
     org_name: str
+    # 门诊病历与诊断（P2-1632）：只增键、排在末尾。原先只数处置、护理、告知书三类——写了病历的就诊和什么都没写的结果一模一样，
+    # 可下面那句 docstring 自己写着「感冒开药就该只有病历」。病历一次就诊一份（`MedicalRecord.encounter_id` 唯一），给 0 / 1，
+    # 附环节质控等级（没写为空串）；诊断记在就诊上（编码或名称有一项即算有）。照旧只报事实、不判合格
+    medical_record: int
+    medical_record_grade: str
+    has_diagnosis: bool
 
 
 @router.post("/consent-templates", response_model=ConsentTemplateOut, status_code=201,
@@ -652,6 +659,10 @@ def encounter_completeness(
     )
     patient = db.get(Patient, encounter.patient_id)
     org = db.get(Organization, encounter.org_id)
+    # 门诊病历一次就诊一份（P2-1632）：只取等级一列
+    record_grade = (
+        db.query(MedicalRecord.qc_grade).filter(MedicalRecord.encounter_id == encounter_id).scalar()
+    )
     return {
         "encounter_id": encounter_id,
         "patient_id": encounter.patient_id,
@@ -660,11 +671,15 @@ def encounter_completeness(
         "consents_total": len(consents),
         "consents_pending": sum(1 for c in consents if c.status == "pending"),
         "consents_refused": sum(1 for c in consents if c.status == "refused"),
-        # 只报事实：待签的告知书是真正该被追的那一项，拒签不是缺陷
+        # 只报事实：待签的告知书是真正该被追的那一项，拒签不是缺陷。病历与诊断两项是 P2-1632 加的，文案同步
         "note": "门急诊并非每次就诊都需处置与告知，本表只列事实，不判合格与否；"
+                "门诊病历一次就诊一份，诊断记在就诊上，两项列出这次就诊写了没有；"
                 "待签署的告知书应在就诊结束前处理完毕",
         # 这次就诊是谁的、哪天、哪家（P2-1631）：可见性上面已判过并留痕，一次就诊各取一行
         "patient_name": patient.name if patient else "",
         "encounter_created_at": encounter.created_at.isoformat(),
         "org_name": org.name if org else "",
+        "medical_record": 0 if record_grade is None else 1,
+        "medical_record_grade": record_grade or "",
+        "has_diagnosis": bool((encounter.diagnosis_code or "").strip() or (encounter.diagnosis_name or "").strip()),
     }

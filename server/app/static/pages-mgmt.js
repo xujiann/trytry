@@ -1733,7 +1733,8 @@ async function renderOutpatientDocs() {
     } catch (err) { scopeError = err.message; }
   }
   // 载入后回显「姓名 · 就诊时间 · 机构」（P2-1631，同住院文书选择框的 P2-1335）：原先载入后页面只拿得到患者号，敲错一位、
-  // 载入的是李四那次就诊，给张三做的皮试照样记进去
+  // 载入的是李四那次就诊，给张三做的皮试照样记进去。
+  // 完整性卡片打头加「门诊病历」「诊断」两张（P2-1632）：原先只有处置 / 护理 / 告知书——写了病历的就诊和什么都没写的一模一样
   $("#page-body").innerHTML = `
     ${panel("选择就诊", `
       <form class="inline" id="od-pick">
@@ -1744,6 +1745,11 @@ async function renderOutpatientDocs() {
       ${scoped.completeness ? `<p class="desc" id="od-who">已载入就诊 #${encounterId}：${encounterWho(scoped.completeness)}
         ——核对是这一位再记处置、护理与告知书</p>` : ""}
       ${scoped.completeness ? `<div class="cards">
+        <div class="card"><span class="k">门诊病历</span><b>${scoped.completeness.medical_record
+          ? `已写${scoped.completeness.medical_record_grade ? `（${esc(scoped.completeness.medical_record_grade)}级）` : ""}`
+          : '<span class="tag orange">未写</span>'}</b></div>
+        <div class="card"><span class="k">诊断</span><b>${scoped.completeness.has_diagnosis
+          ? "有" : '<span class="tag orange">无</span>'}</b></div>
         <div class="card"><span class="k">处置记录</span><b>${scoped.completeness.treatment_records}</b></div>
         <div class="card"><span class="k">护理记录</span><b>${scoped.completeness.nursing_records}</b></div>
         <div class="card"><span class="k">告知书</span><b>${scoped.completeness.consents_total}</b></div>
