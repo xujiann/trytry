@@ -1,7 +1,9 @@
 """终审轮批2：处方点评、供应商/采购验收/盘点、统一知识库、检查资源、双通道申报、供应风险。"""
+from datetime import date
+
 import pytest
 
-from conftest import login
+from conftest import freeze_business_date, login
 
 
 @pytest.fixture(scope="module")
@@ -153,16 +155,18 @@ def test_knowledge_base(client, setup):
             ).status_code
             == 201
         )
-    # 质管制度带有效期：已过期条目默认不返回
-    expired = client.post(
-        "/api/knowledge",
-        json={
-            "category": "regulation",
-            "title": "旧版病历书写制度",
-            "expire_date": "2025-12-31",
-        },
-        headers=setup["public_health"],
-    ).json()
+    # 质管制度带有效期：已过期条目默认不返回。有效期不得早于今天（P2-1668）：这一条是有效期内发布、之后过期的，
+    # 发布那一步把业务日冻在有效期之前
+    with freeze_business_date(date(2025, 6, 1)):
+        expired = client.post(
+            "/api/knowledge",
+            json={
+                "category": "regulation",
+                "title": "旧版病历书写制度",
+                "expire_date": "2025-12-31",
+            },
+            headers=setup["public_health"],
+        ).json()
     default = client.get("/api/knowledge?category=regulation&today=2026-08-11", headers=dir_h).json()
     assert default == []
     included = client.get(
@@ -172,9 +176,10 @@ def test_knowledge_base(client, setup):
     # 检索与临期提醒
     hits = client.get("/api/knowledge?q=高血压", headers=setup["doctor"]).json()
     assert len(hits) == 1 and hits[0]["category"] == "clinical_guideline"
-    client.patch(
-        f"/api/knowledge/{expired['id']}", json={"expire_date": "2026-08-20"}, headers=dir_h
-    )
+    with freeze_business_date(date(2026, 8, 11)):   # 续期与下面的临期提醒同一个业务日（续期日不得早于今天，P2-1668）
+        client.patch(
+            f"/api/knowledge/{expired['id']}", json={"expire_date": "2026-08-20"}, headers=dir_h
+        )
     expiring = client.get("/api/knowledge/expiring?days=30&today=2026-08-11", headers=dir_h).json()
     assert any(e["id"] == expired["id"] for e in expiring)
     # 经办不可发布

@@ -7,9 +7,11 @@
 """
 from __future__ import annotations
 
+from datetime import date
+
 import pytest
 
-from conftest import login
+from conftest import freeze_business_date, login
 
 
 CREATE_KEYS = {"id", "category", "title"}
@@ -32,11 +34,13 @@ def ctx(client):
         headers=admin,
     )
     dir_h = login(client, "kn_dir", "pass123456")
-    created = client.post(
-        "/api/knowledge",
-        json={"category": "regulation", "title": "病历质控制度", "body": "正文", "expire_date": "2026-06-15"},
-        headers=dir_h,
-    ).json()
+    # 有效期不得早于今天（P2-1668）：发布那一步把业务日冻在下面检索用的那一天
+    with freeze_business_date(date(2026, 5, 1)):
+        created = client.post(
+            "/api/knowledge",
+            json={"category": "regulation", "title": "病历质控制度", "body": "正文", "expire_date": "2026-06-15"},
+            headers=dir_h,
+        ).json()
     return {"dir": dir_h, "created": created}
 
 

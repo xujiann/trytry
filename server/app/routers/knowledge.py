@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
+from .. import clock
 from ..database import get_db
 from ..datetypes import OptionalDateStr
 from ..texttypes import NON_BLANK
@@ -64,6 +65,19 @@ class EntryExpiringOut(BaseModel):
     expire_date: str
 
 
+def _expire_date_problem(expire_date: str | None) -> str:
+    """手填「有效期至」的下界（P2-1668），没问题（或留空 = 长期有效、PATCH 没带 = 不改）返回空串。
+
+    原先只查格式（P1-61）：续期把 2027-10-20 敲成 2025-10-20，PATCH 照收 200；发布时填了过去的日期照收 201。默认检索滤掉
+    过期的、临期提醒只列今天及以后到期的，这一条当场从两处同时消失，页面上只提示成功——只有勾上「含过期」才看得到。
+    有效期不得早于今天（`clock.today()` 本地业务日，与临期提醒同一把尺子），当天照收；照慢病「下次随访日不得早于今天」
+    （`chronic._next_due_problem`，P2-1545）的写法。只判请求里带了的值，存量已过期的行不动。
+    """
+    if expire_date and expire_date < clock.today().isoformat():
+        return f"有效期至（{expire_date}）不得早于今天"
+    return ""
+
+
 @router.post(
     "",
     status_code=201,
@@ -73,6 +87,9 @@ class EntryExpiringOut(BaseModel):
 def create_entry(
     body: EntryCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
+    problem = _expire_date_problem(body.expire_date)   # 新发布就已过期的条目哪儿都不显示（P2-1668）
+    if problem:
+        raise HTTPException(status_code=422, detail=problem)
     entry = KnowledgeEntry(created_by=user.id, **body.model_dump())
     db.add(entry)
     db.commit()
@@ -95,6 +112,10 @@ def update_entry(entry_id: int, body: EntryUpdate, db: Session = Depends(get_db)
     entry = db.get(KnowledgeEntry, entry_id)
     if entry is None:
         raise HTTPException(status_code=404, detail="知识条目不存在")
+    # 续期到过去的日期当场从检索与临期提醒里消失（P2-1668）：只判带了 expire_date 的请求，停用、修订正文不受影响
+    problem = _expire_date_problem(body.expire_date)
+    if problem:
+        raise HTTPException(status_code=422, detail=problem)
     for field, value in body.model_dump(exclude_none=True).items():
         setattr(entry, field, value)
     db.commit()

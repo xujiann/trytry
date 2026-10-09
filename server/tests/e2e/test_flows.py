@@ -1535,9 +1535,15 @@ def test_按月导出运营月报在页内表单里填_月份写错报人话(pag
 
 def test_知识库续期与停用在页内表单里_停用先确认(page, base_url, admin_read, admin_call):
     """P2-38：「续期」原先弹窗输日期；「停用」点一下就生效、没有任何确认，停用后条目从检索里
-    消失、页面上恢复不了。换成表单：日期写错由后端报人话；停用先确认，取消即不停。"""
+    消失、页面上恢复不了。换成表单：日期写错由后端报人话；停用先确认，取消即不停。
+
+    P2-1668：有效期不得早于今天——日子按今天起算，写死的日子过了那天就发布不了、续不上期。"""
+    from datetime import date, timedelta
+
+    first = (date.today() + timedelta(days=83)).isoformat()
+    renewed = (date.today() + timedelta(days=448)).isoformat()
     entry = admin_call("POST", "/api/knowledge", {"category": "regulation", "title": "E2E知识条目续期",
-                                                  "expire_date": "2026-12-31"})
+                                                  "expire_date": first})
 
     def row():
         rows = [k for k in admin_read("/api/knowledge?include_expired=true") if k["id"] == entry["id"]]
@@ -1550,10 +1556,10 @@ def test_知识库续期与停用在页内表单里_停用先确认(page, base_u
     page.click(f'button[data-renew="{entry["id"]}"]')
     _spd_modal(page, {"expire_date": "2027-02-30"})
     expect(page.locator("#kb-msg")).to_contain_text("expire_date")
-    assert row()["expire_date"] == "2026-12-31"
+    assert row()["expire_date"] == first
     page.click(f'button[data-renew="{entry["id"]}"]')
-    _redrawn(page, lambda: _spd_modal(page, {"expire_date": "2027-12-31"}))
-    assert row()["expire_date"] == "2027-12-31"
+    _redrawn(page, lambda: _spd_modal(page, {"expire_date": renewed}))
+    assert row()["expire_date"] == renewed
 
     page.click(f'button[data-deact="{entry["id"]}"]')
     expect(_modal(page)).to_contain_text("不能恢复")
