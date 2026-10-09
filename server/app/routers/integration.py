@@ -1150,7 +1150,7 @@ def _oru_groups(segments: list[str]) -> list[tuple[str | None, str, list[str]]]:
 def _oru_request(db: Session, obr: str, pid: str | None, index: int = 0) -> ExamRequest:
     """按 OBR 定位申请单并核对 PID（每一组拿本组的 PID 各自核，防串单，P2-1757）。
 
-    `index`：一条消息几组时这是第几个 OBR，PID 对不上时点名（只有一组时传 0，错因与原先逐字相同）。"""
+    `index`：一条消息几组时这是第几个 OBR，PID 对不上、没带证件号时点名（只有一组时传 0，错因不带前缀）。"""
     placer = _hl7_field(obr, 2)
     order_no = (placer or _hl7_field(obr, 3)).split("^")[0].strip()
     # 只认 ASCII（P1-97）：`isdigit()` 放行上标「²」、圈码「①」，下一行 int() 抛异常，被入站兜底成笼统的
@@ -1172,6 +1172,11 @@ def _oru_request(db: Session, obr: str, pid: str | None, index: int = 0) -> Exam
     # PID 一致性核验（可选段）：报文声明的患者与申请单不一致时拒收，防串单
     if pid is not None:
         id_card = _pid3_id_card(_hl7_field(pid, 3))   # 与建档同一个取法（P2-723）
+        where = f"第 {index} 个 OBR（申请单 {request.id}）：" if index else ""
+        if id_card and len(id_card) < 15:
+            # 取出的值不像证件号（与建档同一判据：不足 15 位，`parse_hl7v2_patient` 报「缺失或格式不正确」）——PID-3 只给了
+            # 病案号 / 门诊号（`MR0012345^^^HIS^MR`）。原先拿它去核、报「PID 患者与申请单患者不一致」，错因说错（P2-1759）
+            raise HTTPException(status_code=422, detail=f"{where}PID-3 未带身份证号，无法核对患者")
         if id_card:
             # 核的是**申请单患者本人**的证件号（两种写法都认，P1-114）。原先是「平台上另有一位持这个证件号的患者才拒收」：
             # 证件号不属于平台上任何人（院内自建档、没进平台的患者）的结果照样写进申请单患者名下——别人的检验结果、
@@ -1182,7 +1187,6 @@ def _oru_request(db: Session, obr: str, pid: str | None, index: int = 0) -> Exam
                 .first()
             )
             if owns is None:
-                where = f"第 {index} 个 OBR（申请单 {request.id}）：" if index else ""
                 raise HTTPException(status_code=422, detail=f"{where}PID 患者与申请单患者不一致，结果拒收")
     return request
 
