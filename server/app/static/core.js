@@ -191,6 +191,13 @@ function encounterWho(c) {
   return `<b>${esc(c.patient_name) || "—"}</b> · ${esc(at) || "—"} · ${esc(c.org_name) || "—"}`;
 }
 
+/** 这条预约是谁的、哪个号：「姓名 · 日期 时段 · 资源」（P2-1700）。核销、取消、代约原先只凭编号——代约敲错一位，回执只有编号，
+ *  不知道约给了谁。取自预约出参末尾的认人键；回的是**纯文本**，只交给按文本写的地方（`setMsg` 写 textContent、`spdModal`
+ *  的 intro 自己 esc()），别直接拼进 innerHTML。 */
+function appointmentWho(a) {
+  return `${a.patient_name || "—"} · ${[a.slot_date, a.slot_time].filter(Boolean).join(" ") || "—"} · ${a.resource_name || "—"}`;
+}
+
 function setMsg(id, text, ok = true) {
   const el = $(id);
   if (el) { el.textContent = text; el.className = `msg ${ok ? "ok" : "err"}`; }
@@ -773,10 +780,12 @@ async function renderAppointments() {
   $("#page-desc").textContent = "智能导诊 + 机构发布分时段号源，一站式预约挂号/检查/检验";
   // 已预约（待核销 / 可取消）的单独取一遍、排在最前（P2-1300，同 P2-408 / P2-456）：清单按编号倒序只回最新 500 条，约号
   // 过 500 条以后，一周前约、今天就诊的那条已被后约的挤出这一页——核销与取消只在下面这张表里，这一行就再没处办
-  const [slots, recent, booked, blacklist] = await Promise.all([
+  // 机构表取来印号源的机构名（P2-1700，同消毒供应、医废页）：号源表原先印 `org_id`，跨机构代约时认不出是哪家的号
+  const [slots, recent, booked, blacklist, orgs] = await Promise.all([
     api("/api/appointments/slots"), api("/api/appointments"), api("/api/appointments?status=booked"),
-    api("/api/appointments/blacklist")]);
+    api("/api/appointments/blacklist"), api("/api/organizations")]);
   const appointments = actionableFirst(recent, booked);
+  const orgNames = new Map(orgs.map((o) => [o.id, o.name]));
   const RT = { outpatient: "门诊", exam: "检查", lab: "检验" };
   const AS = { booked: ["已预约", "green"], cancelled: ["已取消", "red"], fulfilled: ["已就诊", ""] };
   $("#page-body").innerHTML = `
@@ -819,7 +828,7 @@ async function renderAppointments() {
         <button>预约</button>
       </form><p class="msg" id="apt-msg"></p>`)}
     ${panel("号源", table(["ID", "机构", "类型", "资源", "日期/时段", "已约/容量"], slots, (s) =>
-      `<tr><td>${s.id}</td><td>${s.org_id}</td><td>${esc(RT[s.resource_type] || s.resource_type)}</td><td>${esc(s.resource_name)}</td>
+      `<tr><td>${s.id}</td><td>${esc(orgNames.get(s.org_id) || s.org_id)}</td><td>${esc(RT[s.resource_type] || s.resource_type)}</td><td>${esc(s.resource_name)}</td>
        <td>${esc(s.slot_date)} ${esc(s.slot_time)}</td>
        <td><span class="tag ${s.booked >= s.capacity ? "red" : "green"}">${s.booked}/${s.capacity}</span></td></tr>`))}
     ${panel("便捷寻医（指引⑨）", `
@@ -842,8 +851,11 @@ async function renderAppointments() {
       ${table(["ID", "患者", "业务域", "原因", "操作"], blacklist, (b) =>
         `<tr><td>${b.id}</td><td>${b.patient_id}</td><td>${esc(b.domain_name)}</td><td>${esc(b.reason) || "—"}</td>
          <td><button class="btn secondary" data-blout="${b.patient_id}" data-domain="${esc(b.domain)}">移出</button></td></tr>`)}`)}
-    ${panel("预约记录", table(["ID", "号源", "患者", "状态", "操作"], appointments, (a) => {
-      return `<tr><td>${a.id}</td><td>${a.slot_id}</td><td>${a.patient_id}</td>
+    ${panel("预约记录", table(["ID", "号源", "日期/时段", "资源", "放号机构", "患者", "状态", "操作"], appointments, (a) => {
+      // 号源日期时段、资源、放号机构与患者姓名（P2-1700）：原先只有编号，窗口核销、取消时找不出眼前这位是哪一行
+      return `<tr><td>${a.id}</td><td>${a.slot_id}</td><td>${esc(a.slot_date)} ${esc(a.slot_time)}</td>
+        <td>${esc(a.resource_name) || "—"}</td><td>${esc(a.org_name) || "—"}</td>
+        <td>${esc(a.patient_name) || "—"}（${esc(a.patient_id)}）</td>
         <td>${statusTag(AS, a.status)}</td>
         <td>${a.status === "booked"
           ? `<button class="btn secondary" data-fulfill="${a.id}">核销</button>
@@ -935,9 +947,13 @@ async function renderAppointments() {
     e.preventDefault();
     const f = new FormData(e.target);
     try {
-      await api("/api/appointments", { method: "POST", body: JSON.stringify({
+      const a = await api("/api/appointments", { method: "POST", body: JSON.stringify({
         slot_id: Number(f.get("slot_id")), patient_id: Number(f.get("patient_id")) }) });
-      route();
+      // 回显约的是哪个号、给的是哪个患者编号（P2-1700）：原先约完就重画、一个字不说，号源或患者号敲错一位也看不出。回执不带
+      // 姓名（建预约不判患者可见性，P1-76），姓名在下面预约记录里按可见范围给。先重画再写回执（P2-1013）
+      await route();
+      const slotDesc = [a.slot_date, a.slot_time].filter(Boolean).join(" ") || "—";
+      setMsg("#apt-msg", `已预约 #${a.id}：患者编号 ${a.patient_id ?? "—"} · ${slotDesc} · ${a.resource_name || "—"}——核对号源与患者编号`);
     } catch (err) { setMsg("#apt-msg", err.message, false); }
   };
   $("#page-body").onclick = async (e) => {

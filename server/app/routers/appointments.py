@@ -22,6 +22,7 @@ from ..deps import (
     require_roles,
     resolve_business_date,
     keyword_like,
+    row_dict,
 )
 from ..models import (
     Appointment,
@@ -467,6 +468,46 @@ def release_appointment(db: Session, appointment: Appointment) -> Appointment:
     return appointment
 
 
+def _appointments_out(db: Session, appointments: list[Appointment]) -> list[dict]:
+    """预约行出参：建预约回执、预约清单、取消与核销回执都从这里出（同形）。
+
+    末尾五键是 P2-1700 加的（只增键）：患者姓名、号源日期 / 时段 / 资源、放号机构名——核销、取消、代约原先只凭编号，窗口找不出
+    眼前这位是哪一行，代约敲错一位也不知道约给了谁。按这一批取：姓名一次、号源连机构一次（与就诊行 `encounters._encounters_out`
+    的 P2-1631 同一写法），不逐行查库——清单一页最多 500 行。取不到（号源或机构已不在）为空串。姓名不是加密列，PII 加密开态下
+    照旧直读。`book_slot` / `release_appointment` 与居民端共用、照旧回 ORM 对象，出参只在管理端这四个端点上转。
+    """
+    if not appointments:
+        return []
+    names = row_dict(
+        db.query(Patient.id, Patient.name).filter(Patient.id.in_({a.patient_id for a in appointments})).all()
+    )
+    slots = {
+        slot_id: (slot_date, slot_time, resource_name, org_name)
+        for slot_id, slot_date, slot_time, resource_name, org_name in (
+            db.query(AppointmentSlot.id, AppointmentSlot.slot_date, AppointmentSlot.slot_time,
+                     AppointmentSlot.resource_name, Organization.name)
+            .outerjoin(Organization, Organization.id == AppointmentSlot.org_id)
+            .filter(AppointmentSlot.id.in_({a.slot_id for a in appointments}))
+            .all()
+        )
+    }
+    out = []
+    for a in appointments:
+        slot_date, slot_time, resource_name, org_name = slots.get(a.slot_id, ("", "", "", ""))
+        out.append({
+            "slot_id": a.slot_id,
+            "patient_id": a.patient_id,
+            "id": a.id,
+            "status": a.status,
+            "patient_name": names.get(a.patient_id) or "",
+            "slot_date": slot_date or "",
+            "slot_time": slot_time or "",
+            "resource_name": resource_name or "",
+            "org_name": org_name or "",
+        })
+    return out
+
+
 @router.post(
     "",
     response_model=AppointmentOut,
@@ -474,7 +515,12 @@ def release_appointment(db: Session, appointment: Appointment) -> Appointment:
     dependencies=[Depends(require_roles("operator", "doctor"))],  # H2: 预约经办
 )
 def book(body: AppointmentCreate, db: Session = Depends(get_db)):
-    return book_slot(db, body.slot_id, body.patient_id)
+    # 回执带上号源日期时段、资源与放号机构（P2-1700），页面据此回显约的是哪个号、给的是哪个患者编号。**回执不带患者姓名**：
+    # 建预约不判调用方能不能看这位患者（P1-76 待裁定），回执带姓名就成了「敲任意患者号约一次号即得姓名」的口子——与签约回执
+    # 同一取舍（P2-1547）；清单（按可见性收窄）、取消与核销（先判号源机构可写）照常带姓名
+    out = _appointments_out(db, [book_slot(db, body.slot_id, body.patient_id)])[0]
+    out["patient_name"] = ""
+    return out
 
 
 @router.get("", response_model=list[AppointmentOut])
@@ -506,7 +552,8 @@ def list_appointments(
         query = query.join(AppointmentSlot, AppointmentSlot.id == Appointment.slot_id).filter(
             AppointmentSlot.slot_date == slot_date
         )
-    return paginate(query.order_by(Appointment.id.desc()), response, offset, limit)
+    rows = paginate(query.order_by(Appointment.id.desc()), response, offset, limit)
+    return _appointments_out(db, rows)   # 行上带姓名、号源日期时段资源与放号机构（P2-1700）
 
 
 @router.post(
@@ -532,7 +579,7 @@ def cancel(
         raise HTTPException(status_code=404, detail="预约不存在")
     slot = db.get(AppointmentSlot, appointment.slot_id)
     assert_org_writable(db, user, slot.org_id if slot else None)
-    return release_appointment(db, appointment)
+    return _appointments_out(db, [release_appointment(db, appointment)])[0]   # 同清单行（P2-1700）
 
 
 @router.post(
@@ -557,7 +604,7 @@ def fulfill(
     _leave_booked(db, appointment, "fulfilled", "核销")   # 与并发的取消互斥（P2-109）
     db.commit()
     db.refresh(appointment)
-    return appointment
+    return _appointments_out(db, [appointment])[0]   # 同清单行（P2-1700）
 
 # ---------------------------------------------------------------- ADR-0006 搬家
 #

@@ -547,6 +547,14 @@ class AppointmentCreate(BaseModel):
 class AppointmentOut(AppointmentCreate):
     id: int
     status: str
+    # 认人用的五项（P2-1700）：只增键、排在末尾，原有键与次序不动。预约页的核销、取消、代约原先只凭编号——表上只有「ID / 号源 /
+    # 患者 / 状态」，窗口找不出眼前这位是哪一行；代约敲错一位，回执只回编号，不知道约给了谁。姓名、号源日期 / 时段 / 资源、放号
+    # 机构名按一批取（`appointments._appointments_out`），建预约、清单、取消、核销四处同形（同就诊行 P2-1631）；取不到为空串
+    patient_name: str
+    slot_date: str
+    slot_time: str
+    resource_name: str
+    org_name: str
 
     model_config = {"from_attributes": True}
 
