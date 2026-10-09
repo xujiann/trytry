@@ -35,7 +35,7 @@ from .. import clock
 from ..database import get_db
 from ..datetypes import check_date
 from ..pii import PII_PREFIX, EncryptedPII, looks_like_ciphertext
-from ..texttypes import NON_BLANK, normalize_gender
+from ..texttypes import NON_BLANK, is_blank_text, normalize_gender
 from ..deps import get_current_user, paginate, require_roles
 from ..models import (
     ConsentRecord,
@@ -394,7 +394,11 @@ def _check_correction_value(field: str, value: str) -> None:
     `patients.name`（64）在生产库上 500，申请永远卡在待审。电话的上限随 P1-61 / 加密列容量一并定，这里不另起口径。
     加密列不收以密文前缀开头的新值（P2-1723）：`EncryptedPII` 见前缀就当密文、读出解不开就抛，电话改成 `pii1$abc`
     原先提交 201、审批 200，此后这位患者的详情、360 视图全部 500，再提更正也改不回来（审批第一步取档就抛）。
+    新值只有看不见的字（零宽字符、BOM）的同样不收（P2-1724）：提交侧在 `validate_correction_changes` 先拦，这里接住修复前
+    已提交、还在待审的申请——审批时 409，不把档案姓名写成看不见的字。
     """
+    if is_blank_text(value):
+        raise ValueError("新值不能为空")
     if field == "birth_date":
         check_date(value)
         if value > clock.today().isoformat():   # 与建档同一句（P2-713）：将来的出生日期算出负年龄
@@ -427,7 +431,9 @@ def validate_correction_changes(request_type: str, changes: dict[str, str]) -> s
             ),
         )
     for field, value in changes.items():
-        if not str(value).strip():
+        # 判空与建档的 NON_BLANK 同一判据（P2-1724，`is_blank_text`）：原先只看 strip()，零宽字符（U+200B）、BOM 这类格式字符
+        # 去不掉——姓名只填一个 U+200B 提交 201、审批 200，档案姓名成了看不见的字，建档时同样的值早就 422（P2-1148）
+        if is_blank_text(str(value)):
             raise HTTPException(status_code=422, detail=f"更正字段 {field} 的新值不能为空")
         try:
             _check_correction_value(field, str(value).strip())
