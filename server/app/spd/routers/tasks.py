@@ -537,11 +537,14 @@ def adjust_path_instance(
     status = data.pop("status", None)
     for key, value in data.items():
         setattr(instance, key, value)
+    # 取消时实例与带走的节点任务记同一个结束时刻（P2-1599）：原先只有实例记，任务的「完成」一栏是空的——批量取消
+    # 与结案收尾（`service.close_open_work`）都记，事后查不出这些任务是什么时候随路径一起撤掉的
+    finished_at = now_naive()
     if status is not None:
         # 条件翻转（P2-343）：上面的终态预检是锁外读的，读到「未结束」之后别人刚办完最后一个节点、把实例走成已完成
         # （办结在实例锁里改），原先这里照旧写成暂停 / 取消——走完的路径显示为已取消，还能「恢复」
         moved = move_row(db, SpdPathInstance, instance.id, SpdPathInstance.status.in_(PATH_OPEN_STATUSES), status=status,
-                         **({"finished_at": now_naive()} if status == "cancelled" else {}))
+                         **({"finished_at": finished_at} if status == "cancelled" else {}))
         if not moved:
             db.rollback()
             db.refresh(instance)
@@ -556,7 +559,7 @@ def adjust_path_instance(
             .all()
         ):
             # 条件翻转（P2-114）：读到「未结束」之后别人刚办结的，别改成取消
-            move_task(db, task.id, "cancelled", review_note="路径取消")
+            move_task(db, task.id, "cancelled", review_note="路径取消", finished_at=finished_at)
     db.commit()
     db.refresh(instance)   # 状态走的是 Core UPDATE，会话里那份对象没跟着变
     return _instance_out(db, instance)
