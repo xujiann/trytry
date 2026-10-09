@@ -964,7 +964,14 @@ async function renderAppointments() {
         if (!await spdModal("取消预约", [], { intro: "点「确定」作废这次预约，号源立即释放给他人，不能恢复；点「取消」保留。" })) return;
         await api(`/api/appointments/${cancel}/cancel`, { method: "POST" }); route();
       }
-      if (fulfill) { await api(`/api/appointments/${fulfill}/fulfill`, { method: "POST" }); route(); }
+      if (fulfill) {
+        // P2-1701：原先点一下就生效——核销没有回退的路由，点错一行，别人的预约永久成了「已就诊」、号也一直占着。同一行的「取消」
+        // 早按 P2-43 先确认。写明是谁、哪个号（P2-1700 的认人键，纯文本交给 intro，spdModal 自己 esc()）
+        const a = appointments.find((x) => String(x.id) === fulfill);
+        if (!await spdModal("到诊核销", [], { intro: `${a ? appointmentWho(a) : `预约 #${fulfill}`}\n`
+          + "核销后不可撤回：这条预约记为已就诊，不能再取消，号源也不释放。点「确定」核销；点「取消」不核销。" })) return;
+        await api(`/api/appointments/${fulfill}/fulfill`, { method: "POST" }); route();
+      }
       if (blout) {
         // domain 必须带上：后端按 (domain, patient_id) 定位，缺省是 appointment，
         // 移「缺药不取」那条时不带就会 404（或误删另一个业务域的那条）

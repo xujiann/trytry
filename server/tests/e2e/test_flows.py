@@ -1761,6 +1761,29 @@ def test_管理端取消预约先确认(page, base_url, seed, admin_read, admin_
                   lambda: status() == "booked", lambda: status() == "cancelled")
 
 
+def test_管理端核销预约先确认(page, base_url, seed, admin_read, admin_call):
+    """P2-1701：「核销」原先点一下就生效——核销没有回退的路由，点错一行，别人的预约永久成了「已就诊」、号也一直占着。
+    确认框写明是谁、哪个号（P2-1700 的认人键）与「核销后不可撤回」；点取消不核销。"""
+    patient = admin_call("POST", "/api/patients",
+                         {"name": "E2E核销预约患者", "id_card": "320981198811112238", "gender": "男"})
+    slot = admin_call("POST", "/api/appointments/slots", {
+        "org_id": seed["org"]["id"], "resource_type": "outpatient", "resource_name": "E2E核销预约门诊",
+        "slot_date": "2099-12-02", "slot_time": "09:00", "capacity": 1})
+    apt = admin_call("POST", "/api/appointments", {"slot_id": slot["id"], "patient_id": patient["id"]})
+
+    def status():
+        (row,) = [a for a in admin_read(f"/api/appointments?patient_id={patient['id']}") if a["id"] == apt["id"]]
+        return row["status"]
+
+    _login(page, base_url)
+    _open_page(page, "appointments", "预约诊疗")
+    # 行内按钮限定在页面里点，别点到模态框上（同上一条）
+    _confirm_then(page, lambda: page.click(f'#page-body button[data-fulfill="{apt["id"]}"]'),
+                  "E2E核销预约患者 · 2099-12-02 09:00 · E2E核销预约门诊",
+                  lambda: status() == "booked", lambda: status() == "fulfilled")
+    expect(page.locator(f'#page-body button[data-fulfill="{apt["id"]}"]')).to_have_count(0)
+
+
 def test_撤销调阅授权先确认(page, base_url, seed, admin_read, admin_call):
     """P2-43：「撤销」调阅授权原先点一下就生效；要恢复，得患者本人再来办一次授权。"""
     pid = seed["patient"]["id"]

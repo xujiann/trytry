@@ -8,9 +8,12 @@ P2-38 把弹窗录入逐页换成表单时，接连撞见同一类缺陷——�
 
 判据：
 - 破坏性调用：`api(` / `authApi(` / `postAction(` 的地址落在 `/cancel` `/close` `/terminate`
-  `/end` `/revoke` `/withdraw` `/void` `/scrap` `/cancel-enroll` `/discharge` 上，或方法是 `DELETE`；
+  `/end` `/revoke` `/withdraw` `/void` `/scrap` `/cancel-enroll` `/discharge` `/fulfill` 上，或方法是 `DELETE`；
   `/discharge` 是第三十九批扫描 AC4-2 补的（P2-1334）：住院页「出院」点一下就办完——停掉全部执行中医嘱、释放床位、
   派出院随访并通知患者、发出院事件，而出院撤不回（P2-753）；原先的判据不认这个地址，闸门一直绿着；
+  `/fulfill` 是第五十批扫描 AN1-4 补的（P2-1701）：预约页「核销」点一下就把预约记成已就诊——没有回退的路由，点错一行，
+  别人的预约永久成了「已就诊」、号也一直占着，而同一行的「取消」早已先确认。补之前在全部前端文件上量过：命中两处，
+  消毒供应「响应申领」早已先过模态框选批次，只有预约核销没确认；
 - 已确认：同一分支里、调用之前出现过 `confirm(` / `spdModal(` / `cardForm(`。分支按缩进界定：
   单行的 `if (…) …` 只看这一行；块里的调用往上找到块开头为止，`try {` 与多行表达式的续行
   是透明的（确认常写在 `try` 外面、或者 `.then` 前面）。
@@ -25,7 +28,7 @@ STATIC = pathlib.Path(__file__).resolve().parents[1] / "app" / "static"
 
 CALL = re.compile(r"\b(?:api|authApi|postAction)\(")
 DESTRUCTIVE_PATH = re.compile(
-    r"/(?:cancel|close|terminate|end|revoke|withdraw|void|scrap|cancel-enroll|discharge)(?:[`?/\"$]|$)"
+    r"/(?:cancel|close|terminate|end|revoke|withdraw|void|scrap|cancel-enroll|discharge|fulfill)(?:[`?/\"$]|$)"
 )
 GUARDS = ("confirm(", "spdModal(", "cardForm(")
 SINGLE_LINE_BRANCH = re.compile(r"^(?:\}\s*)?(?:else\s+)?if\s*\(")
@@ -114,10 +117,12 @@ def test_判据自证(tmp_path):
         "      { method: \"DELETE\" });\n"
         "  }\n"
         "  if (d.discharge) { await api(`/api/inpatient/admissions/${d.discharge}/discharge`, { method: \"POST\" }); route(); }\n"
+        "  if (fulfill) { await api(`/api/appointments/${fulfill}/fulfill`, { method: \"POST\" }); route(); }\n"
         "};\n",
         encoding="utf-8",
     )
-    assert [ok for _, ok in destructive_calls(tmp_path)] == [False, False, False, False]   # 末一条是 P2-1334 修前的出院
+    # 倒数第二条是 P2-1334 修前的出院，末一条是 P2-1701 修前的预约核销
+    assert [ok for _, ok in destructive_calls(tmp_path)] == [False, False, False, False, False]
     bad.unlink()
     good = tmp_path / "good.js"
     good.write_text(
