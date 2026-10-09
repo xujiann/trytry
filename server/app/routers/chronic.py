@@ -90,6 +90,12 @@ def level_rules_problem(rules: dict) -> str:
             # 血压定成 1 级、不转诊——正是本函数要挡的「悄悄定错级」（P2-465）；PG 的 JSON 列还存不进去，直接 500
             if isinstance(value, float) and not math.isfinite(value):
                 return f"指标 {key} 的 {level} 阈值必须是有限的数（不能是 NaN / Infinity）"
+        # 至少要有一个阈值（P2-1739）：指标项不带 level3 / level2、或阈值键拼成 `level_3` / `Level3` 的，原先照存——
+        # `_metric_level` 两档都比不上、一律回 1 级，这个病种此后 220/130 也定「1 级、不建议上转」，目录表照样印「收缩压(sbp)」，
+        # 看不出规则是坏的，同样是悄悄定错级。存量这样写的与 P1-125 同一口径：记随访时 422 说清楚。规则非空却没有 metrics
+        # 列表、指标项里认不出的键要不要点名另定（P2-1753），这里不查
+        if metric.get("level3") is None and metric.get("level2") is None:
+            return f"指标 {key} 一个阈值都没有（level3 / level2 至少写一个，键名照此拼写），这一项永远定 1 级"
         # 阈值先后要与方向一致（P2-886）：3 级是更极端的一档（预置「≥160→3级，≥140→2级」；越低越危的严重精神障碍
         # level3=3 < level2=6）。原先不查——照依从性那样写 level3 < level2 却漏写 direction，按缺省越高越危算，分级整个
         # 倒过来（MMSE 28 定 3 级、5 定 1 级）；方向写对、阈值写反的，2 级永远到不了。与规则「介于」、量表分段倒置 422
