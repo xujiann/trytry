@@ -53,7 +53,7 @@ from ..models import (
     SpdTask,
 )
 from ..reporting import compose_section, default_period_label
-from ..rules import RuleError, abnormal_hits, as_validated
+from ..rules import OPERATORS, RuleError, abnormal_hits, as_validated, is_option, option_labels
 from ..service import (CALL_SETTLEABLE_STATUSES, FOLLOWUP_OPEN_STATUSES, REVISIT_OPEN_STATUSES, adjust_followup_record,
                        close_followup_record,
                        followup_abnormal, answers_problem, followup_overdue, note_call_dispatch_failure,
@@ -590,6 +590,27 @@ class QuestionnaireIn(BaseModel):
 
 #: 异常分级规则的级别（`grade_abnormal` 的级别序 none < low < mid < high；none 是「没命中」，不是规则的级别）
 ABNORMAL_RULE_LEVELS = ("low", "mid", "high")
+#: 按数比大小的比较符：异常规则里只许用在数值题上（P2-1636）
+_ORDER_OPS = (">", ">=", "<", "<=", "between")
+
+
+def _rule_value_problem(cond: dict, item: dict) -> str | None:
+    """一条异常规则的比较符与比较值对不对得上它引用的题目（P2-1636）：有问题返回一句人话（调用方报 422），没问题返回 None。
+
+    `_match_one` 比大小时作答读不成数就判不命中——单选「良好 / 红肿 / 渗液」写「切口 >= 2」永远判不出；等值比较按选项
+    文字比，比较值写成选项之外的「渗出」同样永远判不出。数值题不看选项。"""
+    op, title = cond["op"], item.get("title") or item.get("label") or cond["field"]
+    numeric = item.get("type") == "number"
+    if op in _ORDER_OPS and not numeric:
+        return f"异常分级规则「{title}」不是数值题，不能用「{OPERATORS[op]}」：比大小与介于只用在数值题上"
+    labels = [] if numeric else option_labels(item)
+    if labels and op in ("==", "!=", "in", "not_in"):
+        value = cond.get("value")
+        outside = [v for v in (value if isinstance(value, (list, tuple)) else [value]) if not is_option(v, labels)]
+        if outside:
+            return (f"异常分级规则「{title} {OPERATORS[op]} {outside[0]}」的比较值不是这道题的选项"
+                    f"（选项：{' / '.join(labels)}）")
+    return None
 
 
 def _check_abnormal_rules(rules: list[dict], items: list[dict]) -> list[dict]:
@@ -601,6 +622,10 @@ def _check_abnormal_rules(rules: list[dict], items: list[dict]) -> list[dict]:
 
     返回**要存的规则**（P2-290）：字段 / 比较符按去掉两端空格后的值查、原先却存原样，「pain 」过了校验、结案时
     按原样比，永远不命中——查的是哪个就存哪个。
+
+    P2-1636 起连同比较值一起对题目查（与 P1-122 查字段、P2-712 / P2-1117 拒收永不命中的比较值同一个理由）：有选项的题，
+    等于 / 不等于 / 属于 / 不属于的比较值必须是选项之一（「切口 == 渗出」配选项「良好 / 红肿 / 渗液」照存、永远判不出）；
+    大于 / 小于 / 介于只许用在数值题上（对单选题写「切口 >= 2」同样永远不命中）。比对口径与求值同一个（`is_option`）。
     """
     bad = non_finite_path(items, "items") or non_finite_path(rules, "abnormal_rules")   # P2-466
     if bad:
@@ -610,6 +635,7 @@ def _check_abnormal_rules(rules: list[dict], items: list[dict]) -> list[dict]:
         raise HTTPException(status_code=422, detail="问卷的每道题都要有 key")
     if len(keys) != len(set(keys)):
         raise HTTPException(status_code=422, detail="问卷题目 key 不得重复")
+    by_key = dict(zip(keys, items))
     checked = []
     for rule in rules:
         try:
@@ -618,6 +644,9 @@ def _check_abnormal_rules(rules: list[dict], items: list[dict]) -> list[dict]:
             raise HTTPException(status_code=422, detail=f"异常分级规则非法：{exc}") from None
         if cond["field"] not in keys:
             raise HTTPException(status_code=422, detail=f"异常分级规则引用了问卷里没有的题目：{cond['field']}")
+        problem = _rule_value_problem(cond, by_key[cond["field"]])
+        if problem:
+            raise HTTPException(status_code=422, detail=problem)
         if rule.get("level", "low") not in ABNORMAL_RULE_LEVELS:
             raise HTTPException(status_code=422,
                                 detail="异常分级规则的级别只能是 low（轻度）/ mid（中度）/ high（重度）")

@@ -52,7 +52,7 @@ from .models import (
     SpdTeamMember,
     SpdVillageDoctor,
 )
-from .rules import FIELD_SOURCES, evaluate, judge_level, scale_problem
+from .rules import FIELD_SOURCES, evaluate, is_option, judge_level, option_labels, scale_problem
 
 #: 慢专病服务工作（任务、目标患者、复诊、干预、路径）的办理角色：各路由文件 `require_roles(*SERVICE_ROLES)` 的那一组。
 #: 路由各自留一份同名常量（角色守卫的静态扫描按文件内的模块级常量认星号展开），这一份给系统替人挑责任人用
@@ -104,10 +104,14 @@ def answers_problem(items: list | None, answers: dict) -> str | None:
 
     医护执行与居民自助作答原先把作答原样交给 `grade_abnormal`：异常规则按数比、读不成数就判不命中——收缩压答 0、
     -185、「185/110」都照收，一条不命中、判「无异常」、不派处置任务；同一个指标走监测录入，0 早就 422（P1-101）。
-    没作答的题、非数值题不管（问卷不强制每题必答）；读得成数的文本（"185"）照收，与规则求值同一个读法。
+    没作答的题不管（问卷不强制每题必答）；读得成数的文本（"185"）照收，与规则求值同一个读法。
+
+    有选项的题（单选、多选）同一处查作答在不在选项里（P2-1636）：单选值、多选的每一项都得是选项之一。原先选项之外的
+    作答（「裂开流脓」「胸口痛」、管理端多选自由文本录成的「胸 痛」）原样落库，异常规则按选项文字比、一条不命中，判
+    「无异常」、不派处置任务。比对口径与规则求值同一个（`rules.is_option`：去首尾空白，读得成数按数比）。没有选项的题不管。
     """
     for item in items or []:
-        if not isinstance(item, dict) or item.get("type") != "number":
+        if not isinstance(item, dict):
             continue
         key = item.get("key")
         if not isinstance(key, str):
@@ -116,6 +120,12 @@ def answers_problem(items: list | None, answers: dict) -> str | None:
         if raw is None or raw == "":
             continue
         title = item.get("title") or key
+        if item.get("type") != "number":
+            labels = option_labels(item)
+            outside = [v for v in (raw if isinstance(raw, (list, tuple)) else [raw]) if not is_option(v, labels)]
+            if labels and outside:
+                return f"「{title}」的作答「{outside[0]}」不是这道题的选项（选项：{' / '.join(labels)}）"
+            continue
         try:
             value = math.nan if isinstance(raw, bool) else float(raw)
         except (TypeError, ValueError):

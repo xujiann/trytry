@@ -199,6 +199,24 @@ def _same(actual, expected) -> bool:
     return str(actual).strip() == str(expected).strip()
 
 
+def option_labels(item: dict) -> list[str]:
+    """问卷题目的选项文字（P2-1636）：预置问卷写 `{label}`，也有直接写文字的（与居民端 `_followup_questions`、管理端
+    `spdQuestionFields` 同一个读法）；去首尾空白，空的不算。没有选项的题回空列表。"""
+    labels = []
+    for option in item.get("options") or []:
+        label = option.get("label") if isinstance(option, dict) else option
+        text = "" if label is None else str(label).strip()
+        if text:
+            labels.append(text)
+    return labels
+
+
+def is_option(value, labels: list[str]) -> bool:
+    """作答 / 比较值是不是选项之一（P2-1636）：与规则求值同一个等值口径（`_same`：两边读得成数按数比，否则去首尾空白按
+    文本比）——查得过的值求值时一定比得上，查不过的求值时也一定比不上。"""
+    return any(_same(value, label) for label in labels)
+
+
 def _match_one(cond: dict, facts: dict) -> bool:
     field, op = cond.get("field"), cond.get("op")
     expected: Any = cond.get("value")  # between 时是二元序列，其余是标量

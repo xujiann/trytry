@@ -2603,6 +2603,37 @@ def test_随访问卷在界面上录题目与异常规则_执行随访逐题作�
     assert (record["status"], record["abnormal_level"], record["answers"]) == ("done", "high", {"pain": 9})
 
 
+def test_执行随访的多选题是复选框_勾中的选项照原样交上去(page, base_url, seed, admin_read, admin_call):
+    """P2-1636：管理端执行随访时多选题原先是「（多选，逗号分隔）」自由文本，录成「胸 痛」不命中「胸痛」的规则、选项外的
+    作答照存。现在有选项的多选题是复选框（与居民端自助作答同一个形态），交上去的就是勾中的选项；后端对选项外的作答 422。"""
+    admin_call("POST", "/api/spd/questionnaires", {
+        "code": "E2E_Q1636", "name": "E2E 多选问卷",
+        "items": [{"key": "sym", "title": "近期症状", "type": "multi",
+                   "options": [{"label": "无"}, {"label": "胸痛"}, {"label": "气短"}]}],
+        "abnormal_rules": [{"when": {"field": "sym", "op": "in", "value": ["胸痛"]}, "level": "high",
+                            "action": "胸痛立即上转"}]})
+    rule = admin_call("POST", "/api/spd/followup-rules", {
+        "code": "E2E_R1636", "name": "E2E 多选随访", "points": [0], "questionnaire_code": "E2E_Q1636"})
+    plan = admin_call("POST", "/api/spd/followup-plans", {
+        "patient_id": seed["patient"]["id"], "rule_id": rule["id"], "base_date": "2001-01-01",
+        "org_id": seed["org"]["id"]})
+    record_id = plan["items"][0]["id"]
+    _login(page, base_url)
+    _open_page(page, "spdfollowup", "智能随访服务端")
+    page.click("#spd-fu-filter button")
+    page.click(f'button[data-fu-exec="{record_id}"]')
+    form = _modal(page)
+    boxes = form.locator('input[type="checkbox"][name="q_sym"]')
+    expect(boxes).to_have_count(3)   # 修前是一个文本框
+    expect(form).not_to_contain_text("逗号分隔")
+    form.get_by_text("气短", exact=True).click()   # 点选项文字也勾得上，且只勾这一个
+    form.locator('input[name="q_sym"][value="胸痛"]').check()
+    expect(form.locator('input[name="q_sym"][value="无"]')).not_to_be_checked()
+    _redrawn(page, lambda: _spd_modal(page, {"result": "诉胸痛气短"}))
+    record = admin_read(f"/api/spd/followup-records/{record_id}/context")["record"]
+    assert (record["status"], record["abnormal_level"], record["answers"]) == ("done", "high", {"sym": ["胸痛", "气短"]})
+
+
 def test_超期的随访在看板上照样能执行与转呼叫(page, base_url, seed, admin_read, admin_call):
     """P1-132：随访看板的「执行」「转呼叫」原先只对待随访的给。超期扫描（定时任务、工作台、任务汇总进来都扫一遍）一过，
     过了日期没做的随访都成了「已超期」——最需要补做的那些在页面上再也执行不了（接口本就收已超期的）。"""

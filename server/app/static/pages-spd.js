@@ -132,6 +132,11 @@ function spdModal(title, fields, opts = {}) {
         return `<textarea name="${esc(f.name)}" rows="3" style="width:100%"
           placeholder="${esc(f.placeholder || "")}">${esc(val)}</textarea>`;
       }
+      // 复选框组（P2-1636，执行随访的多选题）：交上去是勾中的 value 列表，与居民端 inlineQuestions 的多选同一个写法
+      if (f.type === "checks") {
+        return (f.options || []).map((o) => `<label style="display:inline-block;margin-right:10px">
+          <input type="checkbox" name="${esc(f.name)}" value="${esc(o.value)}"> ${esc(o.label)}</label>`).join("");
+      }
       // 数字框必须带 step="any"：不带时浏览器按默认步长 1 校验，1.25、12.80、6.1 一律提交不了，
       // 只弹一句"两个最接近的有效值分别为 1 和 2"——用户只能取整了再填（P1-67）。
       // 整数字段填了小数由后端 422 报人话，校验只有后端一份；移动端的数字框一直是这么写的。
@@ -143,7 +148,10 @@ function spdModal(title, fields, opts = {}) {
     overlay.innerHTML = `<form class="panel" style="min-width:320px;max-width:440px;margin:0;max-height:90vh;overflow-y:auto">
       <h3>${esc(title)}</h3>
       ${opts.intro ? `<div class="desc" style="white-space:pre-wrap;font-size:12px">${esc(opts.intro)}</div>` : ""}
-      ${fields.map((f) => `<label style="display:block;margin:8px 0;font-size:13px">
+      ${fields.map((f) => f.type === "checks"
+        // 复选框组外层不能再套 <label>：点到组里的文字会连带勾上第一个框
+        ? `<div style="margin:8px 0;font-size:13px">${esc(f.label)}<br>${control(f)}</div>`
+        : `<label style="display:block;margin:8px 0;font-size:13px">
         ${esc(f.label)}<br>${control(f)}</label>`).join("")}
       ${opts.submit || picks.length ? '<p class="msg" data-modal-msg style="color:#c0392b"></p>' : ""}
       <div style="margin-top:12px;text-align:right">
@@ -162,6 +170,10 @@ function spdModal(title, fields, opts = {}) {
       if (busy) return;
       const out = {};
       fields.forEach((f) => {
+        if (f.type === "checks") {
+          out[f.name] = [...e.target.elements].filter((el) => el.name === f.name && el.checked).map((el) => el.value);
+          return;
+        }
         const raw = (e.target[f.name].value || "").trim();
         out[f.name] = f.type === "number" ? Number(raw || 0) : raw;
       });
@@ -296,12 +308,16 @@ function spdParseQuestionItems(text) {
 }
 
 /* 执行随访时逐题作答（P1-122）：按问卷题目生成 spdModal 的字段，name 带前缀，免得与渠道、结果撞名。
- * 数值题用文本框——spdModal 的数字框把空值读成 0，「没答」会被当成答了 0 分。 */
-function spdQuestionFields(items, prefix) {
+ * 数值题用文本框——spdModal 的数字框把空值读成 0，「没答」会被当成答了 0 分。
+ * `checks`（执行随访传，P2-1636）：有选项的多选题用复选框，与居民端自助作答同一个形态——原先是「（多选，逗号分隔）」
+ * 自由文本，录成「胸 痛」不命中「胸痛」的规则，现在后端对选项外的作答 422。量表的筛查 / 评估仍是文本框（P2-1274）。 */
+function spdQuestionFields(items, prefix, { checks = false } = {}) {
   return (items || []).map((it) => {
     const name = prefix + it.key, label = it.title || it.label || it.key;
     const options = (it.options || []).map((o) => (typeof o === "string" ? o : o.label)).filter(Boolean);
     if (it.type === "number") return { name, label, placeholder: "填数值，不答留空" };
+    if (it.type === "multi" && checks && options.length)
+      return { name, label: `${label}（多选）`, type: "checks", options: options.map((o) => ({ value: o, label: o })) };
     if (it.type === "multi") return { name, label: `${label}（多选，逗号分隔）` };
     if (options.length) return { name, label, type: "select", value: "",
       options: [{ value: "", label: "（未答）" }, ...options.map((o) => ({ value: o, label: o }))] };
@@ -322,7 +338,12 @@ function spdLatestScales(scales) {
 function spdCollectAnswers(items, form, prefix) {
   const answers = {};
   for (const it of items || []) {
-    const raw = String(form[prefix + it.key] ?? "").trim();
+    const picked = form[prefix + it.key];
+    if (Array.isArray(picked)) {   // 复选框组（P2-1636）交上来的就是勾中的选项，一项都没勾即没答
+      if (picked.length) answers[it.key] = [...new Set(picked)];
+      continue;
+    }
+    const raw = String(picked ?? "").trim();
     if (!raw) continue;
     if (it.type === "multi") answers[it.key] = [...new Set(raw.split(/[,，、]/).map((s) => s.trim()).filter(Boolean))];
     else if (it.type === "number" && !Number.isNaN(Number(raw))) answers[it.key] = Number(raw);
@@ -3618,7 +3639,7 @@ async function renderSpdFollowup() {
         { name: "outcome", label: "联系结果", type: "select", value: "done",
           options: [{ value: "done", label: "已联系上，完成随访" },
                     { value: "unreachable", label: "未联系上（记失访，不计完成）" }] },
-        ...spdQuestionFields(items, "q_"),
+        ...spdQuestionFields(items, "q_", { checks: true }),   // 多选题用复选框（P2-1636）
         { name: "result", label: "随访结果", type: "textarea" },
       ], { submit: (form) => api(`/api/spd/followup-records/${exec.dataset.fuExec}/execute`, { method: "POST",
         body: JSON.stringify({ channel: form.channel || "phone", result: form.result,
