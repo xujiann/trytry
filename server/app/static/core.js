@@ -2671,11 +2671,18 @@ async function renderChronic() {
       }
       if (risk) {
         const r = await api(`/api/chronic/${risk}/risk`);
+        // 趋势指标印名字、不印键（P2-1741，同随访史的「其他指标」）：原先原样印 sbp / cat_score。先取这份档案所属病种自己的那一项
+        // ——后端 `_risk_metric` 取的就是它的第一个分级指标；按键合并的 `metricNames` 同一个键只留最后一个名字（预置糖尿病的空腹
+        // 血糖挂高、低两条，取到的是「空腹血糖（低血糖）」，趋势却按越高越危算）。本病种没有这一项（规则清空后回落兜底表的 sbp /
+        // glucose）或那一项没写名字的，回落 `metricNames`，再没有的原样印
+        const own = (((types.find((t) => t.code === r.disease) || {}).level_rules || {}).metrics || [])
+          .find((m) => m.key === r.metric);
         $("#risk-box").innerHTML = `
           <div class="cards">
             <div class="card"><span class="k">档案</span><b>${r.chronic_id}（${
               esc(DISEASES[r.disease] || r.disease)}，${r.level} 级）</b></div>
-            <div class="card"><span class="k">趋势指标</span><b>${esc(r.metric) || "—"}</b></div>
+            <div class="card"><span class="k">趋势指标</span><b>${
+              esc((own && own.name) || metricNames[r.metric] || r.metric) || "—"}</b></div>
             <div class="card"><span class="k">最近三次</span><b>${
               r.recent_values.length ? r.recent_values.join(" → ") : "—"}</b></div>
             <div class="card"><span class="k">趋势</span><b>${esc(RISK_TREND[r.trend] || r.trend)}</b></div>
