@@ -44,11 +44,13 @@ def _row(rows: list[dict], shortage_id: int) -> dict:
 
 
 def test_登记回执与清单_末尾多出登记时间_原有键与次序不动_不出患者姓名(client, admin, world):
-    assert list(world["by_patient"]) == OLD_KEYS + ["created_at"]   # 修前没有这个键
+    # 修前没有这个键；P2-1775 又在它后面加了下一步 `next_status_name`（只加在末尾）
+    assert list(world["by_patient"]) == OLD_KEYS + ["created_at", "next_status_name"]
     rows = client.get("/api/medication/shortages", headers=admin).json()
     for key in ("by_patient", "by_org"):
         row = _row(rows, world[key]["id"])
-        assert list(row) == OLD_KEYS + ["created_at"]   # 全县可见的清单不先放大患者信息（收口待 P1-49）
+        # 全县可见的清单不先放大患者信息（收口待 P1-49）；末尾的 `next_status_name` 是 P2-1775 加的下一步
+        assert list(row) == OLD_KEYS + ["created_at", "next_status_name"]
         with SessionLocal() as db:
             stored = db.get(DrugShortage, row["id"])
             assert stored is not None

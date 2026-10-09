@@ -65,14 +65,27 @@ class ShortageOut(ShortageCreate):
     #: 记录 `DispenseOut.created_at` 同一个写法）。**不出患者姓名**：本清单全县可见、收口待 P1-49 裁定，全县可见的清单不先
     #: 放大患者信息；页面「患者」列印已有的 `patient_id`，姓名等收口定了再加
     created_at: datetime
+    #: 推进一步会记成的状态（中文，`_with_next_step` 挂上；P2-1775，只加在末尾、原有键与次序不动），已配送（该结案了）与结案
+    #: 三态为空串。页面的推进按钮原先一律写「流转」——采购中的再点一下就记成「已配送」，随即可判「未取药」、退出在途，推进又
+    #: 没有反向端点；页面按它写「标为采购中 / 标为已配送」（同代煎单 P2-1407）
+    next_status_name: str = ""
 
     model_config = {"from_attributes": True}
 
 
 def _with_can_handle(shortage: DrugShortage, user: User) -> DrugShortage:
     """挂上 `can_handle` 供响应模型取用（不入库）：与流转 / 结案的 `assert_obj_org_writable` 同一判据（P2-793）。
-    清单是全县的，原先页面只看状态摆「流转」「结案」，别家的登记照样有，点了必 403。按角色摆不摆随 P2-447 待裁定。"""
+    清单是全县的，原先页面只看状态摆「流转」「结案」，别家的登记照样有，点了必 403。按角色摆不摆随 P2-447 待裁定。
+    四个出参都经这里，下一步一并挂上（`_with_next_step`，P2-1775）。"""
     setattr(shortage, "can_handle", can_write_org(user, shortage.org_id))
+    return _with_next_step(shortage)
+
+
+def _with_next_step(shortage: DrugShortage) -> DrugShortage:
+    """挂上 `next_status_name` 供响应模型取用（不入库，同代煎单 `tcm._with_next_step`）：推进一步会记成的状态的中文，取自推进
+    用的同一张 `_SHORTAGE_FLOW`——按钮上写的就是点下去真走的那一步，页面不另抄流转表；已配送与结案三态为空串（P2-1775）。"""
+    nxt = _SHORTAGE_FLOW.get(shortage.status)
+    setattr(shortage, "next_status_name", SHORTAGE_STATUS_NAMES.get(nxt, nxt) if nxt else "")
     return shortage
 
 

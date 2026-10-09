@@ -1031,11 +1031,13 @@ async function renderMedication() {
         const canAdvance = s.can_handle && (s.status === "registered" || s.status === "purchasing");
         // 患者、登记时间两列（P2-1661）：原先看不出哪条是按患者登的、在途多久了；按机构补货的患者为「—」。患者列印编号——
         // 清单全县可见、收口待 P1-49，姓名等收口定了再加
+        // 推进按钮写明下一步（P2-1775，同代煎单 P2-1407）：原先一律「流转」——采购中的再点一下就记成「已配送」，随即可判
+        // 「未取药」、退出在途，推进又没有反向端点。字取后端的 next_status_name（与推进同一张流转表），页面不另抄一份
         return `<tr><td>${s.id}</td><td>${s.org_id}</td><td>${s.patient_id != null ? `#${s.patient_id}` : "—"}</td><td>${esc(s.drug_name)}</td>
           <td>${s.quantity}</td><td>${esc((s.created_at || "").slice(0, 16).replace("T", " "))}</td>
           <td>${statusTag(SS, s.status)}</td>
           <td>${[
-            canAdvance ? `<button class="btn secondary" data-adv="${s.id}">流转</button>` : "",
+            canAdvance ? `<button class="btn secondary" data-adv="${s.id}">标为${esc(s.next_status_name)}</button>` : "",
             CLOSED.includes(s.status) || !s.can_handle ? "" : `<button class="btn" data-close="${s.id}">结案</button>`,
           ].filter(Boolean).join(" ") || "—"}</td></tr>`;
       })}
