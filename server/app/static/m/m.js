@@ -109,32 +109,51 @@ document.querySelectorAll(".tab-btn").forEach((btn) => {
 
 /* ---------------- 健康宣教 ---------------- */
 
-async function loadArticles() {
+/* 宣教文章按页往下看（P2-1778）：接口免登录、一页上限压在 50 篇、新的在前，docstring 写着「切分页的目的是让第 51 篇之后
+ * 翻得到」；原先不带 offset、不读总数，第 51 篇之后翻不到，页面也不说没列全（同形 P2-1550）。现在读 X-Total-Count，列不全时
+ * 写「已列 N / 共 M 篇」并给「更多」按页续取——点了才取、不一次取全：接口把匿名单次可取量压在 50 篇，翻页给的是可达性不是
+ * 吞吐。翻页之间有新发布的，上一页末篇会被挤到下一页，按 id 去重；续页取不到时已列的留着，原因写在「更多」旁边 */
+async function loadArticles(shown = []) {
   const box = $("#edu-list");
+  let rows, total;
   try {
-    const items = await api("/api/portal/health-articles");
-    if (!items.length) {
-      box.innerHTML = '<p class="empty">暂无宣教内容</p>';
-      return;
-    }
-    box.innerHTML = items.map((a) => `
-      <div class="article">
-        <h3>${esc(a.title)}</h3>
-        <span class="cat">${esc(a.category_name || "健康科普")}</span>
-        <p class="clamp">${esc(a.content)}</p>
-        <a class="more">展开全文</a>
-      </div>`).join("");
-    box.querySelectorAll(".more").forEach((link) => {
-      link.addEventListener("click", () => {
-        const p = link.previousElementSibling;
-        const expanded = !p.classList.contains("clamp");
-        p.classList.toggle("clamp", expanded);
-        link.textContent = expanded ? "展开全文" : "收起";
-      });
-    });
+    // 两处地址各写字面量、各自是 api() 的第一个实参：孤儿端点闸门按它认页面入口与动词，写成三元的地址它推不出
+    ({ rows, total } = await (shown.length
+      ? api(`/api/portal/health-articles?offset=${shown.length}`, { withTotal: true })
+      : api("/api/portal/health-articles", { withTotal: true })));
   } catch (err) {
-    box.innerHTML = `<p class="empty">${esc(err.message)}</p>`;
+    const moreMsg = box.querySelector("[data-edu-more-msg]");
+    if (shown.length && moreMsg) moreMsg.textContent = err.message;
+    else box.innerHTML = `<p class="empty">${esc(err.message)}</p>`;
+    return;
   }
+  const seen = new Set(shown.map((a) => a.id));
+  const items = [...shown, ...rows.filter((a) => !seen.has(a.id))];
+  if (!items.length) {
+    box.innerHTML = '<p class="empty">暂无宣教内容</p>';
+    return;
+  }
+  const partial = total !== null && items.length < total;
+  box.innerHTML = items.map((a) => `
+    <div class="article">
+      <h3>${esc(a.title)}</h3>
+      <span class="cat">${esc(a.category_name || "健康科普")}</span>
+      <p class="clamp">${esc(a.content)}</p>
+      <a class="more">展开全文</a>
+    </div>`).join("") + (partial ? `
+    <p class="hint">已列 ${items.length} / 共 ${total} 篇</p>
+    <button type="button" class="ghost-btn" data-edu-more>更多</button>
+    <p class="msg err" data-edu-more-msg></p>` : "");
+  box.querySelectorAll(".more").forEach((link) => {
+    link.addEventListener("click", () => {
+      const p = link.previousElementSibling;
+      const expanded = !p.classList.contains("clamp");
+      p.classList.toggle("clamp", expanded);
+      link.textContent = expanded ? "展开全文" : "收起";
+    });
+  });
+  const more = box.querySelector("[data-edu-more]");
+  if (more) more.addEventListener("click", () => loadArticles(items));
 }
 
 /* ---------------- 登录：手机号验证码 ---------------- */
@@ -903,6 +922,23 @@ const URGENCY_TEXT = { elective: "择期", urgent: "限期", emergency: "急诊"
 // 治疗处置费在费用清单上印成英文「treatment」（P2-210）
 const CATEGORY_TEXT = { bed: "床位费", drug: "药费", exam: "检查检验费", treatment: "治疗处置费", other: "其他" };
 
+/** 住院费用清单的明细接齐（P2-1778）：明细接口一页最多 500 条、按收费先后给，「费用合计」却按全部明细算——长住院过 500 条
+ *  很平常（接口 docstring 自述），原先只取第一页、标题照印「明细（500）」，与同卡片的合计对不上，最新的那些收费看不到（同形
+ *  P2-1550）。费用清单是拿来对账的，列一半对不上合计，所以按页续取取全、不只写「已列 N / 共 M」：一次住院的明细以住院天数
+ *  封顶，取全不会无界（同 fetchAllPages 的理由，P2-1333）。明细行没有 id、套不上按 id 去重的 fetchAllPages，按第一页的
+ *  X-Total-Count 续页；汇总、结算、押金取第一页的。第一页（`withTotal` 取回的 `{ rows, total }`）由调用处自己取：地址写字面量、
+ *  是 authApi 的第一个实参，孤儿端点闸门按它认页面入口与动词。回 `{ ...第一页, items: 全部明细, total }`，读不到总数时 total
+ *  为 null、只有第一页 */
+async function withAllBillItems(admissionId, { rows: bill, total }) {
+  const items = [...bill.items];
+  while (total !== null && items.length < total) {
+    const page = await authApi(`/api/portal/me/admissions/${admissionId}/bill?offset=${items.length}`);
+    if (!page.items.length) break;   // 其间有明细撤掉、总数变少：取到哪儿算哪儿，不空转
+    items.push(...page.items);
+  }
+  return { ...bill, items, total };
+}
+
 async function renderInpatient(box) {
   const rows = await authApi(`/api/portal/me/admissions${svcQuery()}`);
   if (!rows.length) { box.innerHTML = '<p class="empty">暂无住院记录</p>'; return; }
@@ -944,8 +980,12 @@ async function renderInpatient(box) {
   box.querySelectorAll(".bill-detail[data-adm]").forEach((btn) => {
     btn.addEventListener("click", async () => {
       try {
-        const bill = await authApi(`/api/portal/me/admissions/${btn.dataset.adm}/bill`);
+        // 明细取全（P2-1778）：第一页带上总数，余下的按页接齐
+        const bill = await withAllBillItems(btn.dataset.adm,
+          await authApi(`/api/portal/me/admissions/${btn.dataset.adm}/bill`, { withTotal: true }));
         const cats = Object.entries(bill.by_category);
+        // 标题写明细条数；万一没取全（续页途中明细被撤掉）写「已列 N / 共 M」，不拿本页条数冒充总数
+        const partial = bill.total !== null && bill.items.length < bill.total;
         $("#adm-bill").innerHTML = `
           <div class="sec-title">费用清单（住院号 ${bill.admission_id}）</div>
           <div class="m-card">
@@ -958,7 +998,7 @@ async function renderInpatient(box) {
               ${kv("医保支付", `¥${s.insurance_pay.toFixed(2)}`)}
               ${kv("个人自付", `<b>¥${s.self_pay.toFixed(2)}</b>`)}`).join("<hr>")}
           </div>` : '<p class="empty">尚未结算</p>'}
-          <div class="sec-title">明细（${bill.items.length}）</div>
+          <div class="sec-title">明细（${partial ? `已列 ${bill.items.length} / 共 ${bill.total}` : bill.items.length}）</div>
           ${bill.items.map((i) => `<div class="m-card">
             ${kv(esc(i.item_name), `¥${i.amount.toFixed(2)}`)}
             ${kv("单价×数量", `¥${i.unit_price.toFixed(2)} × ${i.quantity}`)}
