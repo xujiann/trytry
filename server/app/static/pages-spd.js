@@ -3258,6 +3258,19 @@ async function renderSpdAssess() {
 const SPD_QC_RESULT = { pending: ["待判定", "orange"], pass: ["合格", "green"], warn: ["提醒", "orange"], fail: ["不合格", "red"] };
 const SPD_QC_METHOD = { record: "查记录", phone: "电话回访", wechat: "微信回访" };
 const SPD_FU_CHANNELS = { phone: "电话", wechat: "微信", sms: "短信", self: "自填", visit: "面访" };
+// 看板行上给「执行」的状态：与后端 `execute_followup` 的 allowed_from 同一个集合（P2-1637，有用例对着比）。失访的也收——
+// 「失访的还能补录」（`service.py` / `followup.py` 的注释），按钮写「补录」；原先只对待随访、已超期的给，失访的要先「调整 →
+// 恢复为待随访」再执行。「转呼叫」仍只对待随访、已超期的给（失访接通的结果回不回写随访记录是 P2-1256 待裁定的事）
+const SPD_FU_EXECUTABLE = ["planned", "overdue", "unreachable"];
+
+/** 随访看板一行的「执行 / 补录」「转呼叫」按钮（P1-132 起超期的也给，P2-1637 起失访的给「补录」）。 */
+function spdFollowupRowActions(r) {
+  const exec = SPD_FU_EXECUTABLE.includes(r.status)
+    ? `<button class="btn secondary" data-fu-exec="${r.id}">${r.status === "unreachable" ? "补录" : "执行"}</button>` : "";
+  const call = r.status === "planned" || r.status === "overdue"
+    ? `<button class="btn secondary" data-fu-call="${r.id}" data-pid="${r.patient_id}">转呼叫</button>` : "";
+  return [exec, call].filter(Boolean).join(" ");
+}
 const SPD_REPORT_PERIODS = { daily: "日报", weekly: "周报", monthly: "月报", custom: "自定义" };
 const SPD_REPORT_SCOPES = { center: "专病中心", dept: "科室团队", grassroots: "基层机构", personal: "个人" };
 
@@ -3415,7 +3428,8 @@ async function renderSpdFollowup() {
            ? `<button class="btn secondary" data-call-result="${c.id}">回写结果</button>` : "—"}</td></tr>`)}`)}`;
 
   // 「执行」「转呼叫」对待随访与已超期的都给（P1-132）：超期扫描（定时任务、工作台、任务汇总进来都扫）一过，过了日期没做的
-  // 随访都成了已超期——原先只对待随访的给，最需要补做的那些在页面上再也执行不了（接口本就收已超期的）
+  // 随访都成了已超期——原先只对待随访的给，最需要补做的那些在页面上再也执行不了（接口本就收已超期的）。
+  // 失访的给「补录」（P2-1637），见 spdFollowupRowActions
   const drawRecords = async (query) => {
     const qs = new URLSearchParams({ limit: "30", ...(query || {}) }).toString();
     // 没筛选时，已超期 / 待随访的单独取一遍、排在最前（P2-783）：清单按计划日升序，攒过 30 条之后首屏全是早已做完的，
@@ -3435,10 +3449,7 @@ async function renderSpdFollowup() {
        <td><span class="tag ${r.status === "done" ? "green" : r.status === "planned" ? "orange"
           : r.status === "overdue" ? "red" : ""}">${esc(r.status_name)}</span></td>
        <td><button class="btn secondary" data-fu-ctx="${r.id}">前置资料</button>
-           ${r.status === "planned" || r.status === "overdue"
-          ? `<button class="btn secondary" data-fu-exec="${r.id}">执行</button>
-             <button class="btn secondary" data-fu-call="${r.id}" data-pid="${r.patient_id}">转呼叫</button>`
-          : ""}
+           ${spdFollowupRowActions(r)}
            ${r.status !== "done" ? `<button class="btn secondary" data-fu-adjust="${r.id}" data-status="${esc(r.status)}"
              data-planned="${esc(r.planned_at || "")}" data-channel="${esc(r.channel || "")}">调整</button>` : ""}</td></tr>`);
   };

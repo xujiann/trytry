@@ -2659,6 +2659,30 @@ def test_超期的随访在看板上照样能执行与转呼叫(page, base_url, 
     assert (record["status"], record["result"]) == ("done", "补做电话随访，恢复良好"), record
 
 
+def test_失访的随访在看板上能补录(page, base_url, seed, admin_read, admin_call):
+    """P2-1637：后端执行收失访（`allowed_from` 含 unreachable，注释写「失访的还能补录」），看板却只对待随访、已超期的给
+    「执行」——失访的要先「调整 → 恢复为待随访」才能补录。现在失访行给「补录」；「转呼叫」不动（接通回写 P2-1256 待裁定）。"""
+    rule = admin_call("POST", "/api/spd/followup-rules", {"code": "E2E_R1637", "name": "E2E 失访补录", "points": [0]})
+    plan = admin_call("POST", "/api/spd/followup-plans", {
+        "patient_id": seed["patient"]["id"], "rule_id": rule["id"], "base_date": "2001-01-02",
+        "org_id": seed["org"]["id"]})
+    record_id = plan["items"][0]["id"]
+    admin_call("POST", f"/api/spd/followup-records/{record_id}/execute",
+               {"channel": "phone", "result": "三次未接通", "unreachable": True})
+
+    _login(page, base_url)
+    _open_page(page, "spdfollowup", "智能随访服务端")
+    page.locator('#spd-fu-filter [name="status"]').select_option("unreachable")
+    page.click("#spd-fu-filter button")
+    button = page.locator(f'button[data-fu-exec="{record_id}"]')
+    expect(button).to_have_text("补录")   # 修前失访行没有这个按钮
+    expect(page.locator(f'button[data-fu-call="{record_id}"]')).to_have_count(0)
+    button.click()
+    _redrawn(page, lambda: _spd_modal(page, {"result": "患者回电，恢复良好"}))
+    record = admin_read(f"/api/spd/followup-records/{record_id}/context")["record"]
+    assert (record["status"], record["result"]) == ("done", "三次未接通 患者回电，恢复良好"), record
+
+
 def test_回写通话结果由框自己提交_录音地址写超了框不关(page, base_url, seed, admin_read, admin_call):
     """P2-607 第四批：「回写通话结果」原先点确定就关框、再发请求——录音地址写超了（后端 256 字）报错落在页面消息行，
     写好的沟通结果全丢。现在框自己提交：失败留框、报错写在框里、填的都在；成功才关框、整页重画。"""
