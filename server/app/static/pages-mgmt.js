@@ -920,7 +920,7 @@ async function renderAnalytics() {
          <td>${r.avg_length_of_stay}</td><td>${r.bed_turnover}</td><td>${r.bed_occupancy_rate_pct}%</td>
          <td>${r.visits}</td><td>${r.doctors}</td><td>${r.visits_per_doctor_per_day}</td></tr>`))}
     ${panel("自定义绩效公式", `
-      <form class="inline" id="formula-form"><input name="key" placeholder="编码" required>
+      <form class="inline" id="formula-form"><input name="key" placeholder="编码（不含 /）" required>
         <input name="name" placeholder="名称" required>
         <input name="expression" placeholder="表达式，如 round(referrals_up / encounters * 100, 2)" required style="min-width:320px">
         <input name="unit" placeholder="单位"><input name="weight" type="number" step="0.1" placeholder="权重(0=只观测)">

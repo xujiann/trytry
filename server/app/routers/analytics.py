@@ -695,7 +695,11 @@ def list_formula_variables():
 
 
 class FormulaIn(BaseModel):
-    key: str = Field(min_length=1, max_length=32, pattern=NON_BLANK)
+    # 编码不得含「/」、不得全是「.」（P2-1706）：原先只要求非空白，`up/down`、`.`、`..` 都建得出来——停用接口按路径收编码，
+    # 页面编出的 `%2F` 在路由匹配前被解回分隔符、`.` `..` 被客户端先规范化掉，这几条停不了，一直参与计分。只拒停用路由
+    # 寻址不到的写法，其余照收（大写、点号、连字符照旧）；正则即「无 `/`，且至少一个不是 `.` 的可见字符」，可见字符口径同
+    # `NON_BLANK`。停用路由不改模板（改成 `{key:path}` 会牵动权限点编码，随 P2-1505 定）；存量见 `deactivate_formula`
+    key: str = Field(min_length=1, max_length=32, pattern=r"^[^/]*[^/.\s\p{Cc}\p{Cf}][^/]*$")
     name: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
     expression: str = Field(min_length=1, max_length=512, pattern=NON_BLANK)
     unit: str = Field(default="", max_length=16)
@@ -751,7 +755,14 @@ def list_formulas(db: Session = Depends(get_db)):
     dependencies=[Depends(require_admin)],
 )
 def deactivate_formula(key: str, db: Session = Depends(get_db)):
-    """停用公式（不物理删除：历史报表还要能解释当时的口径）。"""
+    """停用公式（不物理删除：历史报表还要能解释当时的口径）。
+
+    寻址不到的存量（P2-1706）：新建已拒收含「/」与全是「.」的编码，可拒收之前建下的存量可能带它们——页面
+    `encodeURIComponent` 编出的 `%2F` 在路由匹配前就被解回「/」，缺省转换器只配一段，一律 404 `Not Found`；「.」「..」
+    在客户端就被规范化掉、到不了这里。路由模板不改（改成 `{key:path}` 会牵动权限点编码，随 P2-1505 定），这几条只能用 SQL 停：
+    `SELECT id, key, name FROM performance_formulas WHERE active AND (key IN ('.', '..') OR key LIKE '%/%');`
+    查出来逐条核对后 `UPDATE performance_formulas SET active = false WHERE id = <上面查到的 id>;`
+    """
     formula = db.query(PerformanceFormula).filter(PerformanceFormula.key == key).first()
     if formula is None:
         raise HTTPException(status_code=404, detail="公式不存在")
