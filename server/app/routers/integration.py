@@ -313,6 +313,7 @@ def parse_hl7v2_patient(message: str, *, any_event: bool = False) -> tuple[dict,
     msh_line = next((ln for ln in lines if ln.startswith("MSH|")), None)
     if msh_line is None:
         raise HTTPException(status_code=422, detail="缺少 MSH 消息头段")
+    _refuse_non_default_encoding(message)   # 先于按 MSH-9 判事件（P2-1762）
     if not any_event:
         _refuse_non_patient_event(message)
     msh_fields = msh_line.split("|")
@@ -366,6 +367,25 @@ def _hl7_unescape(text: str) -> str:
     """还原 HL7 v2 转义（P2-724）：`\\S\\` → `^`、`\\T\\` → `&`、`\\F\\` → `|`、`\\R\\` → `~`、`\\E\\` → `\\`、`\\.br\\` → 换行，
     高亮开关 `\\H\\ \\N\\` 去掉；认不得的原样留着。原先原样印进报告：「10\\S\\9/L」「男 130-175 \\T\\ 女 115-150」。"""
     return _HL7_ESCAPE_RE.sub(lambda m: _HL7_ESCAPES[m.group(1)], text)
+
+
+#: 平台受理的 MSH-2：缺省编码字符 `^~\\&`；v2.7 起可多带第 5 个字符截断符（推荐值 `#`），不影响拆分（P2-1762）
+_HL7_DEFAULT_ENCODINGS = ("^~\\&", "^~\\&#")
+
+
+def _refuse_non_default_encoding(message: str) -> None:
+    """MSH-2 编码字符不是缺省的 `^~\\&` 时 422（P2-1762，第五十二批扫描 AP2-12）。三个 HL7 入口（简化建档 / ADT / ORU，
+    含 ESB 的 hl7v2_patient 转换）在判消息类型之前共用。
+
+    平台一律按缺省编码字符拆字段、还原转义（组件 `^`、重复 `~`、转义 `\\`、子组件 `&`，`_HL7_ESCAPES` 同一套），原先不读
+    MSH-2：MSH-2 为 `^#/&` 时重复符被当成数据，姓名存成「张三#ZHANGSAN」、电话「0571-88886666#13812345678」；MSH-2 为
+    `$~\\&` 时 MSH-9 拆不开，报成「不支持的消息类型 ADT$A04」，错因说错。不做通用的按 MSH-2 解析，拒收并写明原因。
+    MSH-2 空着（没声明）的照旧按缺省解析；缺 MSH 段由各入口照旧报。
+    """
+    msh = next((seg for seg in _hl7_segments(message) if seg.startswith("MSH|")), None)
+    encoding = _hl7_field(msh, 1) if msh is not None else ""
+    if encoding and encoding not in _HL7_DEFAULT_ENCODINGS:
+        raise HTTPException(status_code=422, detail=f"MSH-2 编码字符须为 ^~\\&（收到 {encoding}）")
 
 
 def _hl7_null(raw: str) -> str:
@@ -927,6 +947,7 @@ def _adt_out(event: str, ack: str, patient: Patient, user: User, **extra) -> dic
 
 
 def _do_hl7v2_adt(body: Hl7Message, db: Session, user: User, event: str):
+    _refuse_non_default_encoding(body.message)   # 先于按 MSH-9 判事件，错因不说成「不支持的消息类型」（P2-1762）
     code = event.split("^")[1] if event.startswith("ADT^") and "^" in event else ""
     if code not in _ADT_EVENTS:
         raise HTTPException(
@@ -1320,6 +1341,7 @@ def _oru_report(obr: str, obx_segments: list[str], request: ExamRequest,
 
 
 def _do_hl7v2_oru(body: Hl7Message, db: Session, event: str, source_system: str):
+    _refuse_non_default_encoding(body.message)   # 先于按 MSH-9 判事件，错因不说成「不支持的消息类型」（P2-1762）
     if event != "ORU^R01":
         raise HTTPException(
             status_code=422,
