@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from .. import clock
 from ..database import get_db
-from ..deps import get_current_user, require_roles, resolve_business_date
+from ..deps import get_current_user, require_roles, resolve_business_date, row_dict
 from ..models import InfectiousCase, InfectiousDisease, Organization, User
 from ..texttypes import code_key
 from ..visibility import assert_org_writable
@@ -25,6 +25,9 @@ class AlertOut(BaseModel):
     org_count: int
     window_days: int
     severity: str
+    # 报了这个病种的是哪几家（P2-1630，只在末尾追加）：原先只给机构数——看到「手足口病 5 例、2 家」点不进是哪两家，
+    # 只能去病例列表逐行对编号。按机构编号排定序；机构表里查不到的回落为编号
+    org_names: list[str]
 
 
 class LateReportOut(BaseModel):
@@ -37,6 +40,28 @@ class LateReportOut(BaseModel):
     onset_date: str
     reported_at: str
     days_late: int
+    # 报告机构名（P2-1630，只在末尾追加）：迟报通报本就面向辖区各报告单位，原先清单只有编号、页面也没有机构列——
+    # 疾控看着清单不知道该通报哪家。取不到的给空串（与报告卡 `_case_card` 同一口径），页面回显编号
+    org_name: str
+
+
+class InfectiousCaseListOut(InfectiousCaseOut):
+    """病例清单出参：在报卡出参末尾追加机构名（P2-1630）。
+
+    只加在清单这一侧：`InfectiousCaseOut` 同时是 `POST /cases` 的出参，加在它身上会改报卡响应的字节。
+    原先清单只印机构编号，看不出是哪家报的。取不到的给空串，页面回显编号。
+    """
+
+    org_name: str = ""
+
+
+def _org_names(db: Session, ids: set[int]) -> dict[int, str]:
+    """按编号批量取机构名（P2-1630）：这一批涉及的机构取一次，不逐行查库（与 DRG 在院预警 P2-1537、随访清单
+    `followups._name_maps` 同一写法）。空集合不打库。"""
+    if not ids:
+        return {}
+    return row_dict(db.query(Organization.id, Organization.name).filter(Organization.id.in_(ids)).all())
+
 
 DEFAULT_WINDOW_DAYS = 7
 DEFAULT_THRESHOLD = 5
@@ -98,12 +123,18 @@ def report_case(
     return case
 
 
-@router.get("/cases", response_model=list[InfectiousCaseOut])
+@router.get("/cases", response_model=list[InfectiousCaseListOut])
 def list_cases(disease_code: str | None = None, db: Session = Depends(get_db)):
     query = db.query(InfectiousCase)
     if disease_code:
         query = query.filter(InfectiousCase.disease_code == disease_code)
-    return query.order_by(InfectiousCase.id.desc()).limit(500).all()
+    cases = query.order_by(InfectiousCase.id.desc()).limit(500).all()
+    # 每行末尾带上机构名（P2-1630）：原先只有 org_id，页面「机构」列印的是编号
+    names = _org_names(db, {c.org_id for c in cases})
+    return [
+        InfectiousCaseListOut.model_validate(c).model_copy(update={"org_name": names.get(c.org_id, "")})
+        for c in cases
+    ]
 
 
 @router.get("/alerts", response_model=list[AlertOut])
@@ -133,12 +164,14 @@ def multi_point_alerts(
         groups.setdefault(code_key(row.disease_code), []).append(row)
     # 目录里有这个病种的显示目录编码与目录名，没有的显示报告里的一个写法
     catalog = {code_key(d.code): d for d in db.query(InfectiousDisease).order_by(InfectiousDisease.id).all()}
+    reached = {key: members for key, members in groups.items() if len(members) >= threshold}
+    # 达到阈值的这几组涉及的机构名一次取齐（P2-1630），不逐组查库
+    names = _org_names(db, {m.org_id for members in reached.values() for m in members})
     alerts = []
-    for key, members in groups.items():
-        if len(members) < threshold:
-            continue
+    for key, members in reached.items():
         disease = catalog.get(key)
-        org_count = len({m.org_id for m in members})
+        org_ids = sorted({m.org_id for m in members})
+        org_count = len(org_ids)
         alerts.append({
             "disease_code": disease.code if disease is not None else min(m.disease_code for m in members),
             "disease_name": disease.name if disease is not None else max(m.disease_name for m in members),
@@ -147,6 +180,7 @@ def multi_point_alerts(
             "window_days": window_days,
             # 多机构同时报告，聚集性风险升级
             "severity": "high" if org_count >= 2 else "medium",
+            "org_names": [names.get(i) or str(i) for i in org_ids],   # 按机构编号排定序（P2-1630）
         })
     return sorted(alerts, key=lambda a: a["disease_code"])
 
@@ -339,4 +373,8 @@ def late_reports(db: Session = Depends(get_db)):
                 "days_late": days_late,
             }
         )
+    # 报告机构名排在末尾（P2-1630）：进了清单的这一批机构取一次，取不到的给空串（与 `_case_card` 同一口径）
+    names = _org_names(db, {row["org_id"] for row in rows})
+    for row in rows:
+        row["org_name"] = names.get(row["org_id"], "")
     return rows

@@ -7,10 +7,11 @@ async function renderInfectiousDir() {
   const CAT = { A: ["甲类", "red"], B: ["乙类", "orange"], C: ["丙类", ""] };
   // days_late 是「发病到报告隔了几天」，不是超出法定时限几天——与报告卡弹层同一句「发病后 N 天报告」（P2-1629，P2-470 的
   // 同族余项）：原先写「迟报 N 天」，限 24 小时的肺结核前天发病、今天报告印「迟报 2 天」，乙丙类每一行都多说 1 天
+  // 报告机构一列（P2-1630）：迟报通报面向辖区各报告单位，原先没有机构列、看不出该通报哪家；取不到机构名回显编号
   $("#page-body").innerHTML = `
     ${late.length ? panel(`⚠ 迟报清单（${late.length}）`, `${
-      table(["病例ID", "病种", "类别", "发病日期", "报告时间", "迟报"], late, (l) => {
-        return `<tr><td>${l.case_id}</td><td>${esc(l.disease_name)}</td><td>${statusTag(CAT, l.category)}</td>
+      table(["病例ID", "报告机构", "病种", "类别", "发病日期", "报告时间", "迟报"], late, (l) => {
+        return `<tr><td>${l.case_id}</td><td>${esc(l.org_name || l.org_id)}</td><td>${esc(l.disease_name)}</td><td>${statusTag(CAT, l.category)}</td>
           <td>${esc(l.onset_date)}</td><td>${esc((l.reported_at || "").slice(0, 16).replace("T", " "))}</td>
           <td><span class="tag red">迟报</span>（发病后 ${l.days_late} 天报告）</td></tr>`;
       })}`, { accent: "#c62828" }) : panel("迟报清单", '<p style="color:#8a939e">无迟报病例</p>')}

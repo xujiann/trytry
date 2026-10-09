@@ -11,10 +11,12 @@ import pytest
 from conftest import login
 
 
-ALERT_KEYS = {"disease_code", "disease_name", "case_count", "org_count", "window_days", "severity"}
+# 末尾追加的机构名（P2-1630：预警 `org_names`、迟报清单 `org_name`）是有意的只加不改，键序由
+# test_infectious_org_names.py 钉住；其余键与迁移前一致
+ALERT_KEYS = {"disease_code", "disease_name", "case_count", "org_count", "window_days", "severity", "org_names"}
 LATE_KEYS = {
     "case_id", "org_id", "disease_code", "disease_name", "category",
-    "report_hours", "onset_date", "reported_at", "days_late",
+    "report_hours", "onset_date", "reported_at", "days_late", "org_name",
 }
 
 

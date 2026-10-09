@@ -12,6 +12,8 @@ async function renderInfectious() {
   // 报告卡与导出后端都是 require_roles("director")（admin 全通）——不是管理层就别摆
   const canReport = ["director", "admin"].includes(currentRole());
   // ADR-0009 第四批：面板外壳改用 `panel()`（定义见 core.js），迁一页、人工过一页。
+  // 预警印报告机构名、病例列表的机构列印名称（P2-1630）：原先预警只给机构数、列表只印编号——看到「手足口病 5 例、2 家」
+  // 点不进是哪两家，只能逐行对编号。名称由接口随行给出；病例列表取不到名称回显编号
   $("#page-body").innerHTML = `
     ${panel("病例报告", `
       <form class="inline" id="case-form">
@@ -22,11 +24,11 @@ async function renderInfectious() {
         <button>报告</button>
       </form><p class="msg" id="case-msg"></p>`)}
     ${alerts.length ? panel("⚠ 当前预警",
-      table(["病种", "7日病例数", "报告机构数", "风险等级"], alerts, (a) =>
-        `<tr><td>${esc(a.disease_name)}</td><td>${a.case_count}</td><td>${a.org_count}</td>
+      table(["病种", "7日病例数", "报告机构数", "报告机构", "风险等级"], alerts, (a) =>
+        `<tr><td>${esc(a.disease_name)}</td><td>${a.case_count}</td><td>${a.org_count}</td><td>${esc(a.org_names.join("、"))}</td>
          <td><span class="tag ${a.severity === "high" ? "red" : "orange"}">${a.severity === "high" ? "高" : "中"}</span></td></tr>`)) : ""}
     ${panel("病例列表", table(["ID", "机构", "病种", "发病日期", "操作"], cases, (c) =>
-      `<tr><td>${c.id}</td><td>${c.org_id}</td><td>${esc(c.disease_name)}</td><td>${esc(c.onset_date)}</td>
+      `<tr><td>${c.id}</td><td>${esc(c.org_name || c.org_id)}</td><td>${esc(c.disease_name)}</td><td>${esc(c.onset_date)}</td>
        <td>${canReport ? `<button class="btn" data-card="${c.id}">报告卡</button>` : "—"}</td></tr>`))}
     <div class="panel hidden" id="card-panel"><h3>法定传染病报告卡</h3><div id="card-body"></div></div>
     ${canReport ? panel("法定报告卡批量导出（CSV）", `
