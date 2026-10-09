@@ -16,7 +16,7 @@ from typing import Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import case, func, or_, select, update
+from sqlalchemy import and_, case, func, or_, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -691,6 +691,22 @@ def review_screening(
             assert_org_writable(db, user, pool_org[0])
     if screening.result != "suspect":
         raise HTTPException(status_code=409, detail="只有结论为「疑似」的筛查需要复核")
+    candidate = (
+        db.query(SpdCandidate)
+        .filter(
+            SpdCandidate.patient_id == screening.patient_id,
+            SpdCandidate.program_code == screening.program_code,
+        )
+        .first()
+    )
+    # 池行跟随的是更新的一条筛查，这一条就过时了（P2-1572）：下面「已复核不能再复核」（P2-736）只按这一条判，复核结论又按（患者、
+    # 病种）找池行就翻——同一人两条未复核的疑似（复筛、批量识别重跑，P2-537），新的那条确认并认领之后，复核旧的这条「排除」照 200，
+    # 池行翻成排除、认领人仍在，正是 P2-736 要挡的后果。过时的不记复核、不动池行，确认 / 排除 / 待定同一判据。只认「更新的」：居民
+    # 自查、修前落下的旧记录不写池行，池行跟随的可能是更早的一条，那时这一条并不过时；池行没挂筛查号的（受理申请、直接建档入池）
+    # 无从判，照旧。待复核清单与计数要不要剔掉过时的，随 P2-537 定
+    if candidate is not None and candidate.screening_id is not None and candidate.screening_id > screening.id:
+        raise HTTPException(status_code=409, detail=(
+            f"该居民已有更新的筛查 #{candidate.screening_id}，池行跟随那一条，请复核那一条"))
     if body.review_result == "confirmed":
         # 确认前按现在的档案再跑一遍排除规则（P2-935）：修前落下的居民自查不跑规则、恒按问卷判疑似，确认即把「排除」的
         # 池行翻成「目标」——P2-591 挡的是结论为排除的筛查，挡不住这一路；档案事实变了（补了出生日期）的同理
@@ -715,21 +731,17 @@ def review_screening(
         db.rollback()
         raise HTTPException(status_code=409, detail="该筛查已复核，不能重复复核")
     db.refresh(screening)
-    candidate = (
-        db.query(SpdCandidate)
-        .filter(
-            SpdCandidate.patient_id == screening.patient_id,
-            SpdCandidate.program_code == screening.program_code,
-        )
-        .first()
-    )
     if candidate is not None and candidate.status != "enrolled":
         # 条件写（P2-1177）：「不是已纳管」是刚才读的，读到之后别人刚签约建档、把池行置为已纳管并提交的，原先照旧整行写回
-        # 目标 / 排除——档案在管、池行却是排除。压进同一条 UPDATE，抢输的不动池行、复核照记（与顺序发生时同一个结果）
+        # 目标 / 排除——档案在管、池行却是排除。压进同一条 UPDATE，抢输的不动池行、复核照记（与顺序发生时同一个结果）。
+        # 「池行没有跟随更新的筛查」（P2-1572，上面判过）同样是锁外读的：判过之后另一路的新筛查才落进池里，不翻——与先复核、
+        # 后筛查同一个结果（复核照记，池行跟随新的那条）
+        current = and_(SpdCandidate.status != "enrolled",
+                       or_(SpdCandidate.screening_id.is_(None), SpdCandidate.screening_id <= screening.id))
         if body.review_result == "confirmed":
-            move_row(db, SpdCandidate, candidate.id, SpdCandidate.status != "enrolled", status="target")
+            move_row(db, SpdCandidate, candidate.id, current, status="target")
         elif body.review_result == "excluded":
-            move_row(db, SpdCandidate, candidate.id, SpdCandidate.status != "enrolled", status="excluded")
+            move_row(db, SpdCandidate, candidate.id, current, status="excluded")
     db.commit()
     return _screening_out(screening)
 
