@@ -368,11 +368,24 @@ def _hl7_unescape(text: str) -> str:
     return _HL7_ESCAPE_RE.sub(lambda m: _HL7_ESCAPES[m.group(1)], text)
 
 
+def _hl7_null(raw: str) -> str:
+    """一个字段 / 组件去首尾空白；HL7 的显式空值 `""`（两个双引号）按「没给」返回空串（P2-1760，第五十二批扫描 AP2-3）。
+
+    原先当字面值落库：A04 / A01 建档电话存成两个双引号，A08 把已有手机号、姓名覆盖成 `""`，A01 的 DG1-3 为 `""` 时诊断
+    编码与名称都是 `'""'`，FHIR 出站照样导出——同一条 PID 里 PID-7 / PID-8 的 `""` 早就当「没给」。落库、印进报告的文本
+    （PID-5 / PID-13、PV1、DG1、OBR-4、OBX）先过它、再还原转义（P2-724）；A08 因此对 `""` 保持原值（「非空字段覆盖更新」）。
+    HL7 本义是「删除接收方已有的值」，A08 要不要照此清空另待裁定，这里不做。标识（PID-3、OBR-2 / OBR-3）的 `""` 不像
+    证件号 / 单号，本来就按缺失拒收，不经这里。"""
+    value = raw.strip()
+    return "" if value == '""' else value
+
+
 def _pid5_name(raw: str) -> str:
     """PID-5（XPN，可重复）取第一个重复的姓、名、其余名三个组件（P2-724）。原先把全部 `^` 删掉拼起来：`张^三^^^^^L`（第 7
-    组件是名称类型码）成了「张三L」，`张三~ZHANG^SAN` 成了「张三~ZHANGSAN」——A08 照此覆盖主索引姓名，居民按姓名实名绑定就找不到档案。"""
+    组件是名称类型码）成了「张三L」，`张三~ZHANG^SAN` 成了「张三~ZHANGSAN」——A08 照此覆盖主索引姓名，居民按姓名实名绑定就找不到档案。
+    `""` 按没给（P2-1760）。"""
     parts = raw.split("~")[0].split("^")
-    return _hl7_unescape("".join(part.strip() for part in parts[:3])).strip()
+    return _hl7_unescape("".join(_hl7_null(part) for part in parts[:3])).strip()
 
 
 def _refuse_cipher_prefix(label: str, value: object) -> None:
@@ -387,8 +400,10 @@ def _refuse_cipher_prefix(label: str, value: object) -> None:
 
 
 def _pid13_phone(raw: str) -> str:
-    """PID-13（XTN，可重复）优先取像手机号的那一项，没有取第一项（P2-724）。原先整串「座机~手机」落库，按手机号自动绑定对不上。"""
-    numbers = [value for value in (_hl7_unescape(rep.split("^")[0]).strip() for rep in raw.split("~")) if value]
+    """PID-13（XTN，可重复）优先取像手机号的那一项，没有取第一项（P2-724）。原先整串「座机~手机」落库，按手机号自动绑定对不上。
+    `""` 按没给（P2-1760）。"""
+    numbers = [value for value in (_hl7_unescape(_hl7_null(rep.split("^")[0])).strip() for rep in raw.split("~"))
+               if value]
     return next((n for n in numbers if re.fullmatch(r"1[0-9]{10}", n)), numbers[0] if numbers else "")
 
 
@@ -1036,8 +1051,8 @@ def _parse_pv1_location(message: str) -> tuple[str, str]:
     if pv1 is None:
         raise HTTPException(status_code=422, detail="A01 入院消息缺少 PV1 就诊段")
     parts = _hl7_field(pv1, 3).split("^")
-    ward_name = _hl7_unescape(parts[0].strip())
-    bed_no = _hl7_unescape(parts[2].strip()) if len(parts) > 2 else ""
+    ward_name = _hl7_unescape(_hl7_null(parts[0]))   # `""` 按没给（P2-1760）
+    bed_no = _hl7_unescape(_hl7_null(parts[2])) if len(parts) > 2 else ""
     if not ward_name or not bed_no:
         raise HTTPException(status_code=422, detail="PV1-3 须为 病区^房间^床号")
     return ward_name, bed_no
@@ -1047,8 +1062,8 @@ def _parse_pv1_doctor(message: str) -> str:
     """PV1-7 主治医师 `工号^姓^名`：取姓名组件（无姓名组件时回落首组件）。可重复（XCN），取第一个重复（P2-724）。"""
     pv1 = next((s for s in _hl7_segments(message) if s.startswith("PV1|")), None)
     parts = _hl7_field(pv1, 7).split("~")[0].split("^") if pv1 else [""]
-    name = "".join(p.strip() for p in parts[1:3])
-    return _hl7_unescape(name or parts[0].strip())[:64]
+    name = "".join(_hl7_null(p) for p in parts[1:3])   # `""` 按没给（P2-1760）
+    return _hl7_unescape(name or _hl7_null(parts[0]))[:64]
 
 
 def _parse_dg1(message: str) -> tuple[str, str]:
@@ -1059,15 +1074,15 @@ def _parse_dg1(message: str) -> tuple[str, str]:
     dg1 = next((s for s in _hl7_segments(message) if s.startswith("DG1|")), None)
     if dg1 is None:
         return "", ""
-    parts = _hl7_field(dg1, 3).split("^") + [""] * 6
+    parts = [_hl7_null(part) for part in _hl7_field(dg1, 3).split("^")] + [""] * 6   # `""` 按没给（P2-1760）
     # DG1-3 是 CWE：`编码^名称^编码系统^备用编码^备用名称^备用编码系统`。主三元组明写了别的编码系统（如 SCT）、备用三元组是
     # ICD-10 时取备用的（P2-1080）：原先一律取第一组件，SNOMED 码当 ICD-10 落库、再按 ICD-10 导出，慢专病按诊断编码也认不出。
     # 主三元组没写编码系统的照旧当 ICD-10；一条 ICD-10 都没有时怎么办待裁定（与 P2-744 一并定）
     if parts[2].strip() and not _is_icd10_system(parts[2]) and parts[3].strip() and _is_icd10_system(parts[5]):
         parts = parts[3:]
-    code = _hl7_unescape(parts[0].strip())
-    name = _hl7_unescape(parts[1].strip())
-    return code[:64], (name or _hl7_unescape(_hl7_field(dg1, 4).strip()) or code)[:256]
+    code = _hl7_unescape(parts[0])
+    name = _hl7_unescape(parts[1])
+    return code[:64], (name or _hl7_unescape(_hl7_null(_hl7_field(dg1, 4))) or code)[:256]
 
 
 class OruReportOut(BaseModel):
@@ -1213,19 +1228,19 @@ def _obx_value(value_type: str, raw: str) -> str:
     ED（PDF 报告单的 base64）整段灌进所见，把后面的结果行挤出 2048 字的截断——危急的血钾行没了。
     编码类取文字组件（第 2 组件，空则第 1）；SN（比较符^数值^分隔符或后缀^数值）各组件拼起来（「>250」「1:128」）；
     重复值用「；」连；附件类不印正文，只印一句说明（PDF 正文怎么收随 P2-1137）；其余类型照旧整个重复还原转义。
-    都是先按分隔符拆、再还原转义（P2-724）。异常 / 危急照旧只按 OBX-8 判，与值类型无关。
+    都是先按分隔符拆、再还原转义（P2-724）。异常 / 危急照旧只按 OBX-8 判，与值类型无关。`""` 按没给（P2-1760）。
     """
     if value_type in _OBX_ATTACHMENT_TYPES:
-        return f"附件类结果（{value_type}），平台未收" if raw.strip() else ""
+        return f"附件类结果（{value_type}），平台未收" if _hl7_null(raw) else ""
     texts: list[str] = []
     for rep in raw.split("~"):
         parts = rep.split("^")
         if value_type in _OBX_CODED_TYPES:
-            text = _hl7_unescape((parts[1].strip() if len(parts) > 1 else "") or parts[0].strip())
+            text = _hl7_unescape((_hl7_null(parts[1]) if len(parts) > 1 else "") or _hl7_null(parts[0]))
         elif value_type == "SN":
-            text = "".join(_hl7_unescape(part.strip()) for part in parts[:4])
+            text = "".join(_hl7_unescape(_hl7_null(part)) for part in parts[:4])
         else:
-            text = _hl7_unescape(rep.strip())
+            text = _hl7_unescape(_hl7_null(rep))
         if text:
             texts.append(text)
     return "；".join(texts)
@@ -1241,16 +1256,16 @@ def _oru_report(obr: str, obx_segments: list[str], request: ExamRequest,
     unrecognized: list[str] = []   # 没有一个认得的标志、又带着认不得的标志的结果项——判不了，不当正常
     for seg in obx_segments:
         code_parts = _hl7_field(seg, 3).split("^")
-        # 先按分隔符拆、再还原转义（P2-724）
-        label = _hl7_unescape((code_parts[1].strip() if len(code_parts) > 1 else "") or code_parts[0].strip())
+        # 先按分隔符拆、再还原转义（P2-724）；`""` 按没给（P2-1760）
+        label = _hl7_unescape((_hl7_null(code_parts[1]) if len(code_parts) > 1 else "") or _hl7_null(code_parts[0]))
         value = _obx_value(_hl7_field(seg, 2).strip().upper(), _hl7_field(seg, 5))   # 按 OBX-2 值类型拆（P2-1758）
-        unit = _hl7_unescape(_hl7_field(seg, 6).split("^")[0].strip())
-        ref_range = _hl7_unescape(_hl7_field(seg, 7).strip())
-        flag = _hl7_field(seg, 8).strip().upper()
+        unit = _hl7_unescape(_hl7_null(_hl7_field(seg, 6).split("^")[0]))
+        ref_range = _hl7_unescape(_hl7_null(_hl7_field(seg, 7)))
+        flag = _hl7_null(_hl7_field(seg, 8)).upper()
         # 每个重复先取第 1 组件再按表 0078 判（P2-1756）：v2.7 起 OBX-8 是 CWE（`HH^Critical high^HL70078`），本地 LIS 也有
         # `H^偏高` 这样带文字的写法——原先整串比对，一律当「标志不认得」：危急值不进闭环、异常计 0 项、居民照收「已出具」。
         # 同 OBX-3 / OBX-6 先拆组件（P2-724）；第 1 组件空着的照旧整个重复当认不得的标志。结论与所见里照旧印原文
-        flags = {(rep.split("^")[0].strip() or rep.strip()) for rep in flag.split("~")} - {""}
+        flags = {(_hl7_null(rep.split("^")[0]) or _hl7_null(rep)) for rep in flag.split("~")} - {""}
         if flags & _ABNORMAL_FLAGS:
             abnormal += 1
         if flags & _CRITICAL_FLAGS:
@@ -1267,7 +1282,7 @@ def _oru_report(obr: str, obx_segments: list[str], request: ExamRequest,
             line += f" [{flag}]"
         lines.append(line)
     item_parts = _hl7_field(obr, 4).split("^")
-    item_name = _hl7_unescape((item_parts[1].strip() if len(item_parts) > 1 else "")) or request.item_name
+    item_name = _hl7_unescape((_hl7_null(item_parts[1]) if len(item_parts) > 1 else "")) or request.item_name
     conclusion = f"{item_name}：共 {len(lines)} 项，异常 {abnormal} 项"
     if critical:
         # 点名是哪一项、多少（P2-1363）：危急值的站内信正文、定向广播、待办、超时催办、两端危急值清单给的都是这句结论——
