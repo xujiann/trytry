@@ -5,7 +5,7 @@ from pydantic import AfterValidator, BaseModel, BeforeValidator, Field, FiniteFl
 from .datetypes import DateStr, OptionalDateStr
 from .numtypes import INT4_MAX
 from .pii import PII_PREFIX, looks_like_ciphertext
-from .texttypes import NON_BLANK, normalize_gender, split_list
+from .texttypes import NON_BLANK, excel_sci_notation, normalize_gender, split_list
 
 
 class LoginRequest(BaseModel):
@@ -86,14 +86,44 @@ class PatientOut(PatientCreate):
     model_config = {"from_attributes": True}
 
 
+def _strip_dict_text(value: object) -> object:
+    """字典条目的文本入参去首尾空白（P2-1734），与 CLI 导入 `scripts/import_dictionary.py` 同一口径（`str.strip()`）。
+
+    原先只有 CLI 去空白（P2-1125），HTTP 入口（单条新增、批量导入）原样收：`"310300001 "` 导进收费字典，按干净编码建
+    收费项目反倒 422「编码不在四统一收费字典内」；`"I10 "` 与种子里的 I10 并存，页面上看着一模一样。不是字符串的交给
+    类型校验。大小写 / 全角归一不在这里做（随 P2-785）。"""
+    return value.strip() if isinstance(value, str) else value
+
+
+def _not_sci_notation(value: str | None) -> str | None:
+    """字典条目的标识列（编码、医保对码、本位码）被表格软件改成了科学计数法（`8.69E+13`）的 422（P2-1734）。
+
+    判据与 CLI 导入记错误行是同一个函数（`texttypes.excel_sci_notation`，P2-1125）；原先 HTTP 入口照收——字典是给外部
+    系统「下载对照」用的，库里存着 `8.69E+13` 这种本位码，对接方对不上任何一个真编码。"""
+    if value is not None and excel_sci_notation(value):
+        raise ValueError(f"疑似被表格软件改成科学计数法：{value}（把这一列设成文本格式、改回原值后重填）")
+    return value
+
+
+#: 字典条目的文本列：先去首尾空白，再按字段自己的长度 / 非空约束校验（P2-1734）。**只给请求模型用**，出参覆盖回 `str`
+DictText = Annotated[str, BeforeValidator(_strip_dict_text)]
+OptionalDictText = Annotated[str | None, BeforeValidator(_strip_dict_text)]
+#: 字典条目的标识列（编码、医保对码、本位码）：去首尾空白，科学计数法 422（P2-1734）。同上，只给请求模型用
+DictCode = Annotated[str, BeforeValidator(_strip_dict_text), AfterValidator(_not_sci_notation)]
+OptionalDictCode = Annotated[str | None, BeforeValidator(_strip_dict_text), AfterValidator(_not_sci_notation)]
+
+
 class CodeEntryCreate(BaseModel):
-    code: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
-    name: str = Field(min_length=1, max_length=256, pattern=NON_BLANK)
+    code: DictCode = Field(min_length=1, max_length=64, pattern=NON_BLANK)
+    name: DictText = Field(min_length=1, max_length=256, pattern=NON_BLANK)
 
 
 class CodeEntryOut(CodeEntryCreate):
     id: int
     system_id: int
+    # 出参不带入参的去空白与科学计数法校验（P2-1734），也不带 NON_BLANK（P1-109）：存量条目原样读出
+    code: str = Field(min_length=1, max_length=64)
+    name: str = Field(min_length=1, max_length=256)
 
     model_config = {"from_attributes": True}
 

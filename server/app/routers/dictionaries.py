@@ -8,7 +8,7 @@ from ..concurrency import insert_if_absent, insert_or_conflict
 from ..database import get_db
 from ..deps import get_current_user, require_admin, keyword_like, paginate
 from ..models import CodeEntry, CodeSystem
-from ..schemas import CodeEntryCreate
+from ..schemas import CodeEntryCreate, OptionalDictCode, OptionalDictText
 
 router = APIRouter(prefix="/api/dictionaries", tags=["统一编码字典"])
 
@@ -26,14 +26,15 @@ class BulkImportOut(BaseModel):
 
 # D1 扩列：入参在 CodeEntryCreate 上**新增可选列**（缺列/为 None 不填不报错），
 # 对既有调用方向后兼容。属性列语义见 models/core.CodeEntry 列注释。
+# 属性列与编码、名称一样去首尾空白，医保对码、本位码不收科学计数法（P2-1734，与 CLI 导入同一口径）。
 class CodeEntryUpsert(CodeEntryCreate):
-    spec: str | None = Field(default=None, max_length=64)
-    dosage_form: str | None = Field(default=None, max_length=32)
-    manufacturer: str | None = Field(default=None, max_length=128)
-    unit: str | None = Field(default=None, max_length=16)
-    insurance_code: str | None = Field(default=None, max_length=64)
-    national_code: str | None = Field(default=None, max_length=64)
-    extra: str | None = Field(default=None, max_length=1024)
+    spec: OptionalDictText = Field(default=None, max_length=64)
+    dosage_form: OptionalDictText = Field(default=None, max_length=32)
+    manufacturer: OptionalDictText = Field(default=None, max_length=128)
+    unit: OptionalDictText = Field(default=None, max_length=16)
+    insurance_code: OptionalDictCode = Field(default=None, max_length=64)
+    national_code: OptionalDictCode = Field(default=None, max_length=64)
+    extra: OptionalDictText = Field(default=None, max_length=1024)
 
 
 class CodeEntryDetailOut(CodeEntryUpsert):
@@ -44,6 +45,15 @@ class CodeEntryDetailOut(CodeEntryUpsert):
     # 出参不带「不能只填空格」（P1-109）：修之前存进去的纯空白行要原样读出来，而不是让整个清单 500
     code: str = Field(min_length=1, max_length=64)
     name: str = Field(min_length=1, max_length=256)
+    # 出参也不带入参的去空白与科学计数法校验（P2-1734）：修之前存进去的 `"310300001 "`、`8.69E+13` 要原样读出来——
+    # 出参替人去掉空白，看到的编码就与库里的对不上；科学计数法一校验，整个清单 500
+    spec: str | None = Field(default=None, max_length=64)
+    dosage_form: str | None = Field(default=None, max_length=32)
+    manufacturer: str | None = Field(default=None, max_length=128)
+    unit: str | None = Field(default=None, max_length=16)
+    insurance_code: str | None = Field(default=None, max_length=64)
+    national_code: str | None = Field(default=None, max_length=64)
+    extra: str | None = Field(default=None, max_length=1024)
 
     model_config = {"from_attributes": True}
 
