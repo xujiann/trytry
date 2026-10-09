@@ -3,9 +3,12 @@
 config 结构按 rule_type 区分（执行逻辑见 app/routers/dataquality.py）：
 
 - required   {"field": 字段, "filter": {字段: 值}?}          字段为空/None 即违规
-- range      {"field": 字段, "min": 下限?, "max": 上限?,      数值越界或缺失即违规
-              "exclusive_min": bool?, "exclusive_max": bool?}
-- enum       {"field": 字段, "values": [允许取值...]}          取值不在清单即违规
+- range      {"field": 字段, "min": 下限?, "max": 上限?,      数值越界或缺失即违规（空串也算缺失）
+              "exclusive_min": bool?, "exclusive_max": bool?,
+              "skip_empty": bool?}
+- enum       {"field": 字段, "values": [允许取值...],         取值不在清单即违规
+              "skip_empty": bool?}
+  （skip_empty：None 与空串跳过不判，引用 / 区间 / 枚举三类同一语义，P2-1569）
 - cross_ref  {"field": 字段, "skip_empty": bool?,             引用字典/目录不存在即违规
               "ref_code_system": 字典系统编码} 或
              {"field", "ref_table": 表名, "ref_field": 字段}

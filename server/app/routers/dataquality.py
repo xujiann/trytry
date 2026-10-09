@@ -330,7 +330,7 @@ _LOGIC_CHECKS = {
     "chronic_followup_indicator": _check_chronic_followup_indicator,
 }
 #: 自己定了扫哪张表、按什么条件扫的逻辑校验（P2-1567）：查询写死在校验里（未闭环的危急值报告、全部慢病随访），不逐行看
-#: 规则的被检表，规则的 filter 也落不到它扫的行上
+#: 规则的被检表，规则的 filter 也落不到它扫的行上；违规明细按被检表标表名，被检表须写成它扫的那张（P2-1569）
 _OWN_TABLE_CHECKS = {"critical_closed_loop": ExamReport, "chronic_followup_indicator": FollowUp}
 
 
@@ -366,12 +366,16 @@ def _run_range(db: Session, rule: QcRule, model) -> list[tuple[int, str]]:
     field = rule.config.get("field", "")
     low, high = rule.config.get("min"), rule.config.get("max")
     ex_low, ex_high = rule.config.get("exclusive_min", False), rule.config.get("exclusive_max", False)
+    skip_empty = rule.config.get("skip_empty", False)
     pii = _pii_masker(model, field)   # 说明里的 PII 取值出口按角色掩码（P2-1566）
     hits = []
     for row in _filtered(db, model, rule, field):
         value = getattr(row, field, None)
-        if value is None:
-            hits.append((row.id, f"{field} 缺失，无法判定区间"))
+        # 空串也是没填（P2-234），与 None 一样按缺失报（P2-1569）：文字列（birth_date 之类）上的空串原先拿去跟界比，只设下限
+        # 时被报成「低于下限」，只设上限时一条不报。skip_empty 时缺失的跳过，与引用校验同一语义（原先只有引用校验读它）
+        if _is_blank(value):
+            if not skip_empty:
+                hits.append((row.id, f"{field} 缺失，无法判定区间"))
             continue
         if low is not None and (value <= low if ex_low else value < low):
             hits.append((row.id, _with_masked(f"{field}={value} 低于下限 {low}{'（不含）' if ex_low else ''}",
@@ -386,10 +390,13 @@ def _run_range(db: Session, rule: QcRule, model) -> list[tuple[int, str]]:
 def _run_enum(db: Session, rule: QcRule, model) -> list[tuple[int, str]]:
     field = rule.config.get("field", "")
     allowed = set(rule.config.get("values", []))
+    skip_empty = rule.config.get("skip_empty", False)   # None 与空串都跳过，与引用校验同一语义（P2-1569）
     pii = _pii_masker(model, field)   # P2-1566
     hits = []
     for row in _filtered(db, model, rule, field):
         value = getattr(row, field, None)
+        if skip_empty and _is_blank(value):
+            continue
         if value not in allowed:
             hits.append((row.id, _with_masked(f"{field}={value} 不在允许取值 {sorted(allowed)} 内", (pii, value))))
     return hits
@@ -563,6 +570,11 @@ def rule_config_problem(target_table: str, rule_type: str, config: dict) -> str:
         check = config.get("check", "")
         if check not in _LOGIC_CHECKS:
             return f"逻辑校验 {check or '空'} 未实现（可选：{'、'.join(sorted(_LOGIC_CHECKS))}）"
+        own = _OWN_TABLE_CHECKS.get(check)
+        if own is not None and target_table != own.__tablename__:
+            # 这两个校验不看被检表，违规明细却按被检表标表名（P2-1569）：critical_closed_loop 配到 patients 上，明细把危急值
+            # 报告号标成「patients · 记录 1」，库里恰好也有 1 号患者
+            return f"逻辑校验 {check} 扫的是 {own.__tablename__}，被检表要写 {own.__tablename__}"
         if row_filter and check in _OWN_TABLE_CHECKS:
             # 上面对所有类型都校验并放行 filter，这两个校验扫描时却根本不用它：配了照样 200、照样扫全部（P2-1567）——
             # 与 P2-81 修过的「filter 写错被忽略、扫了全表」同一种后果。空的 {} 等于没写，照收
