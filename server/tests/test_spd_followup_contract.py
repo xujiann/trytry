@@ -522,7 +522,8 @@ def test_呼叫任务列表行完整精确(client, auth, world):
     rows = client.get(f"{B}/call-tasks", headers=auth).json()
     assert [list(r.keys()) for r in rows] == [
         ["id", "patient_id", "patient_name", "phone", "ref_type", "ref_id", "status",
-         "duration_s", "record_url", "result", "created_at"]
+         "duration_s", "record_url", "result", "created_at",
+         "ref_type_name", "ref_plan_date"]   # 末尾追加（P2-1638）
     ]
     assert rows[0] == {
         "id": world["call"]["id"], "patient_id": world["patient"]["id"],
@@ -530,6 +531,7 @@ def test_呼叫任务列表行完整精确(client, auth, world):
         "ref_id": world["rec_b"], "status": "connected", "duration_s": 65,
         "record_url": "http://cdn/rec-b.mp3", "result": "已接通",
         "created_at": _ts(rows[0]["created_at"]),
+        "ref_type_name": "随访", "ref_plan_date": world["patched"]["planned_at"],
     }
 
 

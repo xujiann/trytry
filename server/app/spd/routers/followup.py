@@ -87,6 +87,9 @@ ABNORMAL_LEVEL_NAMES = {"none": "无异常", "low": "轻度", "mid": "中度", "
 #: 平台 `admissions.status` → 中文：措辞与平台住院页一致（该页的文案表还在前端，平台出参尚未带文案）。
 #: 随访前置资料的住院一栏原先把英文状态码原样显示。
 ADMISSION_STATUS_NAMES = {"admitted": "在院", "discharged": "已出院"}
+#: 呼叫任务 `spd_call_tasks.ref_type` → 中文（P2-1638）：只译转呼叫接口按类型查得着、回写 / 撤回认得的两种（随访、复诊），
+#: 别的来源码原样显示。呼叫台账「来源」列原先原样印 followup / revisit
+CALL_REF_TYPE_NAMES = {"followup": "随访", "revisit": "复诊"}
 
 
 class AbnormalOutcome(NamedTuple):
@@ -324,6 +327,10 @@ class CallTaskRowOut(BaseModel):
     record_url: str
     result: str
     created_at: str
+    # 末尾追加（P2-1638）：来源的中文（表外的码原样）与被引用的随访 / 复诊的计划日（取不到是空串）——台账原先原样印
+    # followup / revisit，也看不出是哪条随访
+    ref_type_name: str
+    ref_plan_date: str
 
 
 class QcPlanOut(BaseModel):
@@ -1477,11 +1484,21 @@ def list_call_tasks(
         p.id: p.name
         for p in db.query(Patient).filter(Patient.id.in_([r.patient_id for r in rows] or [0]))
     }
+    # 被引用的随访 / 复诊的计划日（P2-1638）：按这一页的引用号一次各取一遍，不逐行查
+    plan_dates: dict[tuple[str, int], str] = {}
+    for ref_type, model, column in (("followup", SpdFollowupRecord, SpdFollowupRecord.planned_at),
+                                    ("revisit", SpdRevisit, SpdRevisit.plan_date)):
+        ids = {r.ref_id for r in rows if r.ref_type == ref_type and r.ref_id is not None}
+        if ids:
+            plan_dates.update(((ref_type, rid), day or "")
+                              for rid, day in db.query(model.id, column).filter(model.id.in_(ids)))
     return [
         {"id": r.id, "patient_id": r.patient_id, "patient_name": names.get(r.patient_id, ""),
          "phone": r.phone, "ref_type": r.ref_type, "ref_id": r.ref_id,
          "status": r.status, "duration_s": r.duration_s, "record_url": r.record_url,
-         "result": r.result, "created_at": r.created_at.isoformat()}
+         "result": r.result, "created_at": r.created_at.isoformat(),
+         "ref_type_name": CALL_REF_TYPE_NAMES.get(r.ref_type, r.ref_type),
+         "ref_plan_date": plan_dates.get((r.ref_type, r.ref_id), "") if r.ref_id is not None else ""}
         for r in rows
     ]
 

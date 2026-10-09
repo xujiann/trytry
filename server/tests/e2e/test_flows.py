@@ -2707,6 +2707,41 @@ def test_回写通话结果由框自己提交_录音地址写超了框不关(pag
     assert status() == "failed"
 
 
+def test_呼叫台账印中文来源与计划日_抽查按数量_基本合格(page, base_url, seed, admin_read, admin_call):
+    """P2-1638：呼叫台账「来源」列原先原样印 followup、看不出是哪条随访；抽查结论 warn 页面写「提醒」（列注释是「基本合格」）；
+    抽查表单只有比例，接口早有 count。现在台账印「随访 #号」与计划日，warn 显示「基本合格」，表单能按数量抽。"""
+    dept = "E2E质控科1638"
+    rule = admin_call("POST", "/api/spd/followup-rules", {"code": "E2E_R1638", "name": "E2E 质控随访", "points": [0, 7]})
+    plan = admin_call("POST", "/api/spd/followup-plans", {
+        "patient_id": seed["patient"]["id"], "rule_id": rule["id"], "base_date": "2001-01-05",
+        "org_id": seed["org"]["id"], "dept": dept})
+    first, second = (item["id"] for item in plan["items"])
+    call = admin_call("POST", "/api/spd/call-tasks", {
+        "patient_id": seed["patient"]["id"], "ref_type": "followup", "ref_id": first, "phone": "13800001638"})
+    for record_id in (first, second):
+        admin_call("POST", f"/api/spd/followup-records/{record_id}/execute", {"channel": "phone", "result": "已随访"})
+
+    _login(page, base_url)
+    _open_page(page, "spdfollowup", "智能随访服务端")
+    row = page.locator("tr", has=page.locator(f'button[data-call-result="{call["id"]}"]'))
+    expect(row).to_contain_text(f"随访 #{first}")   # 修前印 followup
+    expect(row).to_contain_text("计划 2001-01-05")
+    expect(row).not_to_contain_text("followup")
+
+    form = page.locator("#spd-qc-form")
+    form.locator('[name="dept"]').fill(dept)
+    form.locator('[name="count"]').fill("2")   # 修前没有这一栏
+    _submit(page, "#spd-qc-form button")
+    samples = [s for s in admin_read("/api/spd/qc-samples?limit=200") if s["dept"] == dept]
+    assert sorted(s["record_id"] for s in samples) == sorted([first, second]), samples
+    page.click(f'button[data-qc-judge="{samples[0]["id"]}"]')
+    expect(_modal(page).locator('[name="result"] option[value="warn"]')).to_have_text("基本合格")   # 修前「提醒」
+    _redrawn(page, lambda: _spd_modal(page, {"result": "warn"}))
+    qc_rows = page.locator("tr", has=page.locator(f'td:text-is("{dept}")'))
+    expect(qc_rows.filter(has_text="基本合格")).to_have_count(1)
+    expect(qc_rows.filter(has_text="提醒")).to_have_count(0)
+
+
 def test_统筹调度的拒绝申请_改目标池状态_召回进度由框自己提交(page, base_url, seed, admin_read, admin_call):
     """P2-607 第五批：统筹调度中枢三张框（受理 / 拒绝服务申请、调整目标池状态、登记召回进度）原先点确定就关框、再发请求——
     拒绝原因、依据、联系情况写超了（后端 256 字）报错落在页面消息行，写好的一段全丢；拒绝没写原因也是框关了才说。

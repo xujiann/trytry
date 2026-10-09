@@ -3255,7 +3255,8 @@ async function renderSpdAssess() {
  * 10. 智能随访服务端
  * ==========================================================*/
 
-const SPD_QC_RESULT = { pending: ["待判定", "orange"], pass: ["合格", "green"], warn: ["提醒", "orange"], fail: ["不合格", "red"] };
+// 抽查结论的说法以 `spd_qc_samples.result` 的列注释为准（P2-1638，有用例对着比）：warn 原先写「提醒」，列注释是「基本合格」
+const SPD_QC_RESULT = { pending: ["待判定", "orange"], pass: ["合格", "green"], warn: ["基本合格", "orange"], fail: ["不合格", "red"] };
 const SPD_QC_METHOD = { record: "查记录", phone: "电话回访", wechat: "微信回访" };
 const SPD_FU_CHANNELS = { phone: "电话", wechat: "微信", sms: "短信", self: "自填", visit: "面访" };
 // 看板行上给「执行」的状态：与后端 `execute_followup` 的 allowed_from 同一个集合（P2-1637，有用例对着比）。失访的也收——
@@ -3402,6 +3403,7 @@ async function renderSpdFollowup() {
       <form class="inline" id="spd-qc-form" style="margin-top:10px">
         <input name="dept" placeholder="科室（可留空）">
         <input name="ratio" type="number" step="0.05" value="0.1" placeholder="抽查比例">
+        <input name="count" type="number" min="1" max="500" step="1" placeholder="或按数量（填了不看比例）" style="width:170px">
         <button class="secondary">生成抽查计划</button>
       </form><p class="msg" id="spd-qc-msg"></p>
       ${table(["ID", "批次", "科室", "被抽随访", "患者", "计划日期", "结论", "方式", "备注", "操作"], qcSamples, (s) =>
@@ -3414,7 +3416,8 @@ async function renderSpdFollowup() {
     ${panel("呼叫任务与录音", `
       ${table(["ID", "患者", "号码", "来源", "状态", "结果", "时长(秒)", "录音", "创建时间", "操作"], calls, (c) =>
         `<tr><td>${c.id}</td><td>${esc(c.patient_name)}</td><td>${esc(c.phone || "—")}</td>
-         <td>${esc(c.ref_type)}</td>
+         <td>${esc(c.ref_type_name || c.ref_type)}${c.ref_id != null ? ` #${c.ref_id}` : ""}${c.ref_plan_date   // 中文来源与计划日取自后端（P2-1638）
+            ? `<br><span class="desc">计划 ${esc(c.ref_plan_date)}</span>` : ""}</td>
          <td>${c.status === "connected" ? '<span class="tag green">已接通</span>'
             : c.status === "failed" ? '<span class="tag red">未接通</span>'
             : c.status === "cancelled" ? '<span class="tag">已取消</span>'
@@ -3495,7 +3498,12 @@ async function renderSpdFollowup() {
   };
   $("#spd-qc-form").onsubmit = (e) => {
     e.preventDefault();
-    return postAction("/api/spd/qc-samples/plan", formJson(e.target, ["ratio"]), "#spd-qc-msg");
+    // 按比例或按数量二选一（P2-1638）：接口的 count 自 P2-640 起就收（大于 0 即按数量抽、比例不看），表单原先只有比例。
+    // 填了数量只送数量，没填只送比例
+    const body = formJson(e.target, ["ratio", "count"]);
+    if (body.count) delete body.ratio;
+    else delete body.count;
+    return postAction("/api/spd/qc-samples/plan", body, "#spd-qc-msg");
   };
   $("#spd-cal-form").onsubmit = async (e) => {
     e.preventDefault();
