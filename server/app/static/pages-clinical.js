@@ -1009,7 +1009,7 @@ async function renderMedication() {
         <input name="drug_code" placeholder="药品编码" required>
         <input name="drug_name" placeholder="药品名称" required><input name="quantity" type="number" value="1" min="1" style="min-width:70px"><button>登记</button>
       </form><p class="msg" id="short-msg"></p>
-      ${table(["ID", "机构", "药品", "数量", "状态", "操作"], shortages, (s) => {
+      ${table(["ID", "机构", "患者", "药品", "数量", "登记时间", "状态", "操作"], shortages, (s) => {
         // `SS` 只有流转中的三个状态，而后端还会写 collected / no_show / cancelled
         // （medication.py `shortage.status = body.result`）。没有兜底时
         // `SS[s.status]` 是 undefined，解构直接 TypeError——**整页白屏**，
@@ -1021,7 +1021,10 @@ async function renderMedication() {
         // 判据与后端 `_SHORTAGE_FLOW` 的键一一对应：能流转的只有这两个状态。
         // 流转 / 结案以登记机构的名义写（P2-793）：清单是全县的，别家的登记原先照样摆这两个按钮、点了必 403
         const canAdvance = s.can_handle && (s.status === "registered" || s.status === "purchasing");
-        return `<tr><td>${s.id}</td><td>${s.org_id}</td><td>${esc(s.drug_name)}</td><td>${s.quantity}</td>
+        // 患者、登记时间两列（P2-1661）：原先看不出哪条是按患者登的、在途多久了；按机构补货的患者为「—」。患者列印编号——
+        // 清单全县可见、收口待 P1-49，姓名等收口定了再加
+        return `<tr><td>${s.id}</td><td>${s.org_id}</td><td>${s.patient_id != null ? `#${s.patient_id}` : "—"}</td><td>${esc(s.drug_name)}</td>
+          <td>${s.quantity}</td><td>${esc((s.created_at || "").slice(0, 16).replace("T", " "))}</td>
           <td>${statusTag(SS, s.status)}</td>
           <td>${[
             canAdvance ? `<button class="btn secondary" data-adv="${s.id}">流转</button>` : "",

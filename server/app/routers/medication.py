@@ -1,4 +1,5 @@
 """⑮基层缺药登记 + ⑯居民用药监测。"""
+from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -60,6 +61,10 @@ class ShortageOut(ShortageCreate):
     drug_name: str = Field(min_length=1, max_length=128)
     #: 当前用户能不能流转 / 结案这条登记（以登记机构的名义写，全域角色放行；P2-793）。新增字段，页面按它摆按钮
     can_handle: bool = False
+    #: 登记时刻（P2-1661，只在末尾加键，原有键与次序不动）：清单原先看不出一条登记在途多久了。落库的 naive UTC（与发药
+    #: 记录 `DispenseOut.created_at` 同一个写法）。**不出患者姓名**：本清单全县可见、收口待 P1-49 裁定，全县可见的清单不先
+    #: 放大患者信息；页面「患者」列印已有的 `patient_id`，姓名等收口定了再加
+    created_at: datetime
 
     model_config = {"from_attributes": True}
 
