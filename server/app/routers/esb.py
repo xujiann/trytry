@@ -895,7 +895,8 @@ def _steps_problem(db: Session, steps: list) -> str:
     没有 transform，原先都照存——编排写错是配置问题，却在运行期记成每条被执行消息的一次失败（`_record_failure`），
     到重试上限转死信，死信不可再消费，修好编排也救不回来。四处取值就是 `_run_step` 运行期认的那几种；路由目标只查
     存在，启用与否留到运行期判（停用是临时的，启用回来照常投：运行期碰上停用的目标只记这一次执行失败，消息不计次，
-    P2-1728）。建 / 改编排拦成 422，执行前对存量编排拦成 409。
+    P2-1728）。校验步还须写明必填字段（P2-1730）：一项都没有，跑起来「校验通过（0 项必填）」，这一步形同虚设。
+    建 / 改编排拦成 422，执行前对存量编排拦成 409。
     存量编排可能连形状都不对（P1-176 之前存的），这里只挑认得出的取值看，形状问题照旧留给运行期。"""
     transformed = False
     for idx, step in enumerate(steps, start=1):
@@ -920,6 +921,14 @@ def _steps_problem(db: Session, steps: list) -> str:
             known = isinstance(target, str) and db.query(EsbEndpoint.id).filter(EsbEndpoint.code == target).first()
             if not known:
                 return f"第 {idx} 步路由目标接入方 {target or '(空)'} 不存在"
+        elif step.get("type") == "validate":
+            # 校验步须写明必填字段（P2-1730，第五十一批扫描 AO1-4）：原先不写 `required`、键写成 `require` / `fields`、或写成
+            # 空数组都照存，运行期取 `config.get("required", [])` 是空的——「校验通过（0 项必填）」，后面的路由 / 落库照做，
+            # 这一步形同虚设。config 里的未知键要不要一并拦另定，这里只认 required
+            required = config.get("required")
+            if not (isinstance(required, list) and required
+                    and all(isinstance(name, str) and name.strip() for name in required)):
+                return f"第 {idx} 步校验须用 required 写明必填字段（非空的字段名数组，如 [\"id_card\", \"name\"]）"
     return ""
 
 

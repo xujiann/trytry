@@ -1638,8 +1638,9 @@ def test_绩效考核页按周期与口径计分_写错回到缺省(page, base_u
 
 def test_集成平台对消息执行编排在页内表单里填消息号(page, base_url, admin_call):
     """P2-38：「对消息执行」原先弹窗输消息 ID；换成数字框，取消即不执行；消息号不存在由后端报人话。"""
+    # 校验步不写 required 的 P2-1730 起 422（跑起来什么也不校验）
     admin_call("POST", "/api/esb/flows", {"code": "e2e_flow_run", "name": "E2E编排",
-                                          "steps": [{"type": "validate"}]})
+                                          "steps": [{"type": "validate", "config": {"required": ["id"]}}]})
     _login(page, base_url)
     _open_page(page, "esb", "集成平台")
     page.click('button[data-esbrun="e2e_flow_run"]')
@@ -1654,7 +1655,7 @@ def test_编辑编排流程由框自己提交_步骤写错框不关(page, base_u
     """P2-607 第九批：集成平台「编辑流程」原先点确定就关框——步骤 JSON 少个括号、步骤类型写错（后端只认四种），报错落在
     页面消息行，改了一半的步骤全丢。现在框自己提交：写错都在框里说、框不关、流程不动；改好再交才落库。"""
     flow = admin_call("POST", "/api/esb/flows", {"code": "e2e_p2607_flow", "name": "E2E框内提交编排",
-                                                 "steps": [{"type": "validate"}]})
+                                                 "steps": [{"type": "validate", "config": {"required": ["id"]}}]})
 
     def saved():
         return next(f for f in admin_read("/api/esb/flows") if f["id"] == flow["id"])
@@ -1669,9 +1670,10 @@ def test_编辑编排流程由框自己提交_步骤写错框不关(page, base_u
     form.locator("button[type=submit]").click()
     expect(form.locator("[data-modal-msg]")).to_contain_text("第 2 步")
     assert (saved()["name"], [s["type"] for s in saved()["steps"]]) == ("E2E框内提交编排", ["validate"])
-    # 落库交换日志：缺省实体是患者档案，前面没有 transform 的 P2-1122 起 422（跑起来必失败）
-    _redrawn(page, lambda: _spd_modal(
-        page, {"steps": '[{"type":"validate"},{"type":"persist","config":{"entity":"exchange_log"}}]'}))
+    # 落库交换日志：缺省实体是患者档案，前面没有 transform 的 P2-1122 起 422（跑起来必失败）；校验步不写 required 的
+    # P2-1730 起 422（跑起来什么也不校验）
+    _redrawn(page, lambda: _spd_modal(page, {"steps": '[{"type":"validate","config":{"required":["id"]}},'
+                                                      '{"type":"persist","config":{"entity":"exchange_log"}}]'}))
     assert (saved()["name"], [s["type"] for s in saved()["steps"]]) == ("E2E框内提交编排（改）", ["validate", "persist"])
 
 
