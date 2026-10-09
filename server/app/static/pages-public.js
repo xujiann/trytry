@@ -975,12 +975,7 @@ async function renderKnowledge() {
   const catOpts = Object.entries(KB_CATEGORIES).map(([v, t]) => `<option value="${v}">${t}</option>`).join("");
   const draw = async (params = "") => {
     const entries = await api(`/api/knowledge${params}`);
-    $("#kb-table").innerHTML = table(["ID", "分类", "标题", "有效期至", "状态", "操作"], entries, (k) =>
-      `<tr><td>${k.id}</td><td><span class="tag">${esc(k.category_name)}</span></td><td>${esc(k.title)}</td>
-       <td>${esc(k.expire_date) || "长期"}</td>
-       <td>${k.expired ? '<span class="tag red">已过期</span>' : '<span class="tag green">有效</span>'}</td>
-       <td>${canEdit ? `<button class="btn secondary" data-renew="${k.id}">续期</button>
-            <button class="btn danger" data-deact="${k.id}">停用</button>` : "—"}</td></tr>`);
+    $("#kb-table").innerHTML = renderKbTable(entries, canEdit);
   };
   $("#page-body").innerHTML = `
     ${canEdit ? panel("发布知识条目（管理层/公卫）", `
@@ -1016,6 +1011,14 @@ async function renderKnowledge() {
   };
   $("#page-body").onclick = async (e) => {
     const d = e.target.dataset;
+    if (d.kbopen) {
+      // 展开 / 收起这一条的正文（P2-1667）：展开行紧跟在这一行后面（renderKbTable）
+      const detail = e.target.closest("tr").nextElementSibling;
+      if (!detail || detail.dataset.kbbody !== d.kbopen) return;
+      detail.classList.toggle("hidden");
+      e.target.textContent = detail.classList.contains("hidden") ? "查看正文" : "收起正文";
+      return;
+    }
     try {
       if (d.renew) {
         // P2-38：弹窗换成页内表单；日期写错由后端 OptionalDateStr 报人话
@@ -1035,6 +1038,21 @@ async function renderKnowledge() {
   };
   // 取数放最后：监听已与 innerHTML 同一同步块挂好，窗口为零（P2-31 根修，样板见 pages-spd.js renderSpdPath）
   await draw();
+}
+
+/* 知识检索表（P2-1667）：每行带「查看正文」，展开行紧跟在这一行后面、默认收着（照 P2-1408 医案行的写法）——检索接口一直返回
+   正文（EntrySearchOut.body），原先表里只列 ID / 分类 / 标题 / 有效期 / 状态 / 操作，前端哪儿都不引用 body：医生搜得到指南，
+   却读不到一个字。正文一律 esc()，多行照录入时的换行显示，没填的写 —。只读：修订正文的入口不在这一条里。 */
+function renderKbTable(entries, canEdit) {
+  return table(["ID", "分类", "标题", "有效期至", "状态", "操作"], entries, (k) =>
+    `<tr><td>${k.id}</td><td><span class="tag">${esc(k.category_name)}</span></td><td>${esc(k.title)}</td>
+       <td>${esc(k.expire_date) || "长期"}</td>
+       <td>${k.expired ? '<span class="tag red">已过期</span>' : '<span class="tag green">有效</span>'}</td>
+       <td><button class="btn secondary" data-kbopen="${k.id}">查看正文</button>
+         ${canEdit ? `<button class="btn secondary" data-renew="${k.id}">续期</button>
+            <button class="btn danger" data-deact="${k.id}">停用</button>` : ""}</td></tr>` +
+    `<tr class="hidden" data-kbbody="${k.id}"><td colspan="6">` +
+    `<div style="white-space:pre-wrap;font-size:13px;line-height:1.7">${esc(k.body) || "—"}</div></td></tr>`);
 }
 
 /* ================= 块4：细目补齐（合并进既有页面的追加面板） ================= */
