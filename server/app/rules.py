@@ -8,7 +8,8 @@
 
 - 比较：`>` `>=` `<` `<=` `==` `!=`，支持链式（`0 < x < 10`）
 - 布尔：`and` `or` `not`
-- 成员：`x in ("a", "b")`（字符串枚举判断）
+- 成员：`x in ("a", "b")`（字符串枚举判断）；单个取值写成 `("a",)` 或用 `==`——`x in ("a")` 的括号不成元组，
+  成了子串判断，录入时拒收（P2-1735）；`"a" in x`（文本里含不含某段字）照收
 - 算术与白名单函数：沿用 formula 的那一套
 - 字符串常量与 `len()`（质控里判"字数少于 N"要用）
 
@@ -143,11 +144,29 @@ def evaluate_condition(expression: str, variables: dict) -> bool:
         raise RuleError(f"条件求值失败：{exc}") from None
 
 
+def _single_string_membership(node: ast.Compare) -> tuple[str, str, str] | None:
+    """`变量 in ("A")`：括号里只有一个字符串时不成元组，`in` / `not in` 成了子串判断（P2-1735）。返回 (变量, 运算符, 字符串)。
+
+    模块 docstring 把成员运算定义为字符串枚举判断，可 `drug_code in ("METFORMIN")` 在 drug_code 为 "MET"、为空串时都命中；
+    拦截级的 `diagnosis_name in ("妊娠期高血压")` 命中「高血压」与空诊断。只看「左边是变量、右边是单个字符串常量」这一种：
+    「字面量 in 变量」是有意的包含判断（`"高血压" in diagnosis_name`），照收。
+    """
+    operands = [node.left, *node.comparators]
+    for op, left, right in zip(node.ops, operands, operands[1:]):
+        if (isinstance(op, (ast.In, ast.NotIn)) and isinstance(left, ast.Name)
+                and isinstance(right, ast.Constant) and isinstance(right.value, str)):
+            return left.id, "not in" if isinstance(op, ast.NotIn) else "in", right.value
+    return None
+
+
 def validate_condition(expression: str, known_variables: dict) -> None:
     """录入时校验：用各变量的样例值代入试算一次，再把表达式里引用的变量逐个对一遍（P2-352）。
 
     光试算不够：链式比较一环为假就不再往下算——`65 <= age < max_agee` 在样例 age=40 时第一环就是假，写错的 `max_agee`
     从没被求值，录入照收；上线后每一次真求值（age ≥ 65）都记一条「未知变量」错误，规则形同虚设。
+
+    「变量 in 单个字符串」录入时拒收（P2-1735，见 `_single_string_membership`）：试算查不出来——子串判断不报错，只是
+    结果与枚举判断不一样。只拦录入，求值语义不动（已录入的照旧按子串算，存量要人工改写）。
     """
     evaluate_condition(expression, known_variables)
     tree = ast.parse(expression, mode="eval")
@@ -155,3 +174,8 @@ def validate_condition(expression: str, known_variables: dict) -> None:
     for node in ast.walk(tree):
         if isinstance(node, ast.Name) and id(node) not in functions and node.id not in known_variables:
             raise RuleError(f"未知变量：{node.id}")
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Compare) and (hit := _single_string_membership(node)):
+            name, op, value = hit
+            raise RuleError(f'{name} {op} ("{value}") 的括号里只有一个字符串、不成元组，会按子串判断（它的任意一段、空串'
+                            f'都算在内）：单个取值写成 ("{value}",) 或用 {"!=" if op == "not in" else "=="}')
