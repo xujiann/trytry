@@ -795,15 +795,17 @@ def _auto_intervene(db: Session, enrollment: SpdEnrollment, risk_level: str) -> 
             # 只丢掉调用方挂在档案上的风险分层回写这一列（expire 不重读整个对象，不是上面说的 refresh）
             db.expire(enrollment, ["risk_level"])
         # 同病种同等级几套自动模板取编号最小的那套（P2-693）：原先不排序，开哪套由库的返回次序决定；要不要几套都开
-        # 与随访方案「命中几套」同一个口径，见 P2-391
+        # 与随访方案「命中几套」同一个口径，见 P2-391。
+        # 「全部病种」（空串）的模板也算（P2-1601）：建模板表单的病种缺省就是它，手工下发也把它当通用（`create_interventions`、
+        # 页面 `!t.program_code`），这里原先按病种精确匹配，通用的自动模板永不触发。病种专用的优先，同类里仍取编号最小的
         template = (
             db.query(SpdInterventionTemplate)
             .filter(
-                SpdInterventionTemplate.program_code == enrollment.program_code,
+                SpdInterventionTemplate.program_code.in_([enrollment.program_code, ""]),
                 SpdInterventionTemplate.auto_risk_level == risk_level,
                 SpdInterventionTemplate.active.is_(True),
             )
-            .order_by(SpdInterventionTemplate.id)
+            .order_by(sa.case((SpdInterventionTemplate.program_code == "", 1), else_=0), SpdInterventionTemplate.id)
             .first()
         )
         if managed and template is not None:

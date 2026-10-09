@@ -26,16 +26,21 @@ def _first_chains(func, model: str) -> list[str]:
             and f"query({model})" in ast.unparse(node)]
 
 
-@pytest.mark.parametrize("module, name, model", [
-    ("app.spd.service", "award_points", "SpdPointRule"),
-    ("app.spd.routers.assess", "signin", "SpdPointRule"),
-    ("app.spd.routers.care", "_auto_intervene", "SpdInterventionTemplate"),
+#: 高危自动干预模板的次序（P2-1601）：「全部病种」的通用模板也参与匹配，病种专用的排在前面，同类里照旧按编号——
+#: 前置键之后仍以编号收尾，确定性与本条同一句
+_AUTO_TEMPLATE_ORDER = "order_by(sa.case((SpdInterventionTemplate.program_code == '', 1), else_=0), SpdInterventionTemplate.id)"
+
+
+@pytest.mark.parametrize("module, name, model, order", [
+    ("app.spd.service", "award_points", "SpdPointRule", "order_by(SpdPointRule.id)"),
+    ("app.spd.routers.assess", "signin", "SpdPointRule", "order_by(SpdPointRule.id)"),
+    ("app.spd.routers.care", "_auto_intervene", "SpdInterventionTemplate", _AUTO_TEMPLATE_ORDER),
 ])
-def test_按编号取第一条(module, name, model):
+def test_按编号取第一条(module, name, model, order):
     import importlib
 
     chains = _first_chains(getattr(importlib.import_module(module), name), model)
-    assert chains and all(f"order_by({model}.id)" in c for c in chains), chains   # 修前不排序
+    assert chains and all(order in c for c in chains), chains   # 修前不排序
 
 
 def test_同一事件两条启用的规则_入账按编号小的那条(client, admin):
