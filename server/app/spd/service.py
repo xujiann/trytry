@@ -1553,16 +1553,19 @@ ENROLLMENT_ENDED_STATUSES = ("dead", "migrated", "excluded", "completed")
 ENROLLMENT_PAUSED_STATUSES = ("lost", "recalled")
 
 
-def paused_enrollment(db: Session, patient_id: int, program_code: str) -> SpdEnrollment | None:
+def paused_enrollment(db: Session, patient_id: int, program_code: str, *,
+                      exclude_id: int | None = None) -> SpdEnrollment | None:
     """这位患者这个病种脱管 / 召回中的档案（P2-1050）。居民端首页、自查、申请与建档都认它：原先只认在管的，召回中的居民
-    首页被告知「没有签约的慢专病管理」、自查提示去申请、申请照收，受理后再建档出两份档案，原来那份的召回永远结不了。"""
-    return (
-        db.query(SpdEnrollment)
-        .filter(SpdEnrollment.patient_id == patient_id, SpdEnrollment.program_code == program_code,
-                SpdEnrollment.status.in_(ENROLLMENT_PAUSED_STATUSES))
-        .order_by(SpdEnrollment.id.desc())
-        .first()
-    )
+    首页被告知「没有签约的慢专病管理」、自查提示去申请、申请照收，受理后再建档出两份档案，原来那份的召回永远结不了。
+
+    `exclude_id`：恢复在管 / 召回成功（`population._reactivate`，P2-1574）问的是「另有」一份——要恢复的那份自己可能就是
+    召回中的，不算它。"""
+    query = db.query(SpdEnrollment).filter(
+        SpdEnrollment.patient_id == patient_id, SpdEnrollment.program_code == program_code,
+        SpdEnrollment.status.in_(ENROLLMENT_PAUSED_STATUSES))
+    if exclude_id is not None:
+        query = query.filter(SpdEnrollment.id != exclude_id)
+    return query.order_by(SpdEnrollment.id.desc()).first()
 #: 迁出登记之后、确认之前原档案成了这些状态的，这次迁出不再生效：死亡（P1-111），已迁出 / 已排除 / 已结案（P2-527）
 MIGRATION_VOID_STATUSES = ENROLLMENT_ENDED_STATUSES
 #: 跨机构迁出的迁入机构就是档案当前的管理机构（P2-1273）：登记时 422 的那一句，存量事件「不再生效」也以它开头

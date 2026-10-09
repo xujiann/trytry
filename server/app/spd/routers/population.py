@@ -1487,13 +1487,30 @@ def _active_elsewhere_detail(db: Session, enrollment: SpdEnrollment) -> str:
             "不能再把这份档案恢复在管")
 
 
+def _paused_elsewhere_detail(db: Session, enrollment: SpdEnrollment) -> str:
+    """同一患者同一病种另有一份脱管 / 召回中的档案时的 409 文案；没有返回空串（P2-1574）。
+
+    判据与建档同一个帮手（`service.paused_enrollment`，P2-1050）：那边同病种有一份脱管 / 召回中的就不另建，恢复在管原先只认
+    `_active_elsewhere_detail` 的「另有在管」——别家召回中时把一份已排除 / 已迁出的旧档案恢复成在管，等于另起一份在管，
+    那份召回永远登不成「已召回」（恢复在管 409「已在…在管」），居民端同一病种既「在管」又「召回中」。要恢复的这份自己不算。
+    """
+    other = paused_enrollment(db, enrollment.patient_id, enrollment.program_code, exclude_id=enrollment.id)
+    if other is None:
+        return ""
+    org = db.get(Organization, other.org_id)
+    return (f"该患者此病种在「{org.name if org else other.org_id}」有一份"
+            f"{ENROLL_STATUS_LABELS.get(other.status, other.status)}的档案（档案 #{other.id}），不能再把这份档案恢复在管")
+
+
 def _reactivate(db: Session, enrollment: SpdEnrollment) -> None:
     """把档案恢复在管；已有另一份在管档案就 409（预检 + 并发下撞索引兜底，两处同一句）。**不 commit**。
+
+    另有一份脱管 / 召回中的档案同样 409（P2-1574，见 `_paused_elsewhere_detail`）：生命周期「恢复」与召回成功共用这一处。
 
     条件翻转（P2-344）：调用方判「没登记死亡」是锁外读的，读到之后别人刚登记死亡并提交，原先这里照旧改回在管——
     死亡是终态（P1-111）就这样被并发绕过。「不是死亡」压进同一条 UPDATE，抢输了 409。
     """
-    detail = _active_elsewhere_detail(db, enrollment)
+    detail = _active_elsewhere_detail(db, enrollment) or _paused_elsewhere_detail(db, enrollment)
     if detail:
         raise HTTPException(status_code=409, detail=detail)
     try:
