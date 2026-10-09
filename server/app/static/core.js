@@ -1622,18 +1622,26 @@ async function renderDicts() {
   // 先清空、取不到把原因写出来（P2-1009）：原先切换字典时抛错没人接，表里照旧是上一个字典的条目。
   // 只画最后一次切的那个字典（P2-1012）：连着切两个，先发的那个晚到会把它的条目画在后选的字典名下
   let dictSeq = 0;
+  // 检索词（P2-1733）：只留在这一页的内存里，切字典、新增、导入后重画都带着它；查的是什么写在检索栏里
+  let dictKeyword = "";
   const draw = async (system) => {
     const seq = ++dictSeq;
     $("#dict-table").innerHTML = "";
-    let entries;
-    try { entries = await api(`/api/dictionaries/${system}/entries`); }
+    const query = dictKeyword ? `?keyword=${encodeURIComponent(dictKeyword)}` : "";
+    let entries, total;
+    try { ({ rows: entries, total } = await api(`/api/dictionaries/${system}/entries${query}`, { withTotal: true })); }
     catch (err) {
       if (seq === dictSeq) $("#dict-table").innerHTML = `<p class="msg err">${esc(err.message)}</p>`;
       return;
     }
     if (seq !== dictSeq) return;
-    $("#dict-table").innerHTML = table(["编码", "名称"], entries, (d) =>
-      `<tr><td><span class="tag">${esc(d.code)}</span></td><td>${esc(d.name)}</td></tr>`);
+    // 列不全时标题写明「已列 N / 共 M」（P2-1733，同 P2-1547）：清单一页缺省 200 条、按编码排，原先不读总数，导入全量
+    // ICD-10 后只看得到 A 开头的 200 条，也看不出被截断——要找的条目用上面的检索栏查
+    const listed = entries.length;
+    $("#dict-table").innerHTML = `<h3>${dictKeyword ? "检索结果" : "条目"}（${
+      total !== null && listed < total ? `已列 ${listed} / 共 ${total}` : listed}）</h3>`
+      + table(["编码", "名称"], entries, (d) =>
+        `<tr><td><span class="tag">${esc(d.code)}</span></td><td>${esc(d.name)}</td></tr>`);
   };
   $("#page-body").innerHTML = `
     ${panel("", `
@@ -1643,6 +1651,9 @@ async function renderDicts() {
         <input name="name" placeholder="名称" required>
         <button>新增条目</button>
       </form><p class="msg" id="dict-msg"></p>
+      <form class="inline" id="dict-search">
+        <input name="keyword" placeholder="按编码或名称检索，如 I10、高血压（留空看全部）" style="min-width:300px">
+        <button>检索</button></form>
       <div id="dict-table"></div>
       <h3 style="margin-top:14px">批量导入</h3>
       <form id="dict-import">
@@ -1658,6 +1669,12 @@ async function renderDicts() {
         整批一次提交，撞车的那一条自己跳过，不会把整批带回滚。</p>
       <p class="msg" id="dict-import-msg"></p>`)}`;
   $("#dict-system").onchange = (e) => draw(e.target.value);
+  // 按编码或名称检索（P2-1733）：先清空、查不到把原因写在表格这一块，都由 draw 管（P2-1009 / P2-1010）
+  $("#dict-search").onsubmit = (e) => {
+    e.preventDefault();
+    dictKeyword = String(new FormData(e.target).get("keyword") ?? "").trim();
+    draw($("#dict-system").value);
+  };
   $("#dict-import").onsubmit = async (e) => {
     e.preventDefault();
     const system = $("#dict-system").value;

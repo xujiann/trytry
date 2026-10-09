@@ -94,7 +94,8 @@ import warnings
 #: → 89（2026-10-09 第四十七批 P2-1610：慢专病转诊规则清单切到 paginate）
 #: → 88（同日第五十批 P2-1711：危急值清单加可选 `open`，未处置 / 已处置分开取走 paginate；缺省那一页照旧封顶 100 条、
 #:   字节不变——HIS 轮询的是它，两个危急值页改为未处置的续页取全）
-BASELINE_SILENT_TRUNCATION = 88
+#: → 87（同日第五十一批 P2-1733：统一编码字典条目清单切到 paginate，对接方「下载对照」能翻页取全）
+BASELINE_SILENT_TRUNCATION = 87
 
 ROUTER_DIRS = (
     (os.path.join(os.path.dirname(__file__), "..", "app", "routers"), ""),
@@ -243,6 +244,7 @@ PAGINATED_ENDPOINTS = {
     "contracts.py:list_contracts",
     "credentials.py:list_credentials",
     "cssd.py:list_cssd_requests",
+    "dictionaries.py:list_entries",
     "disease_programs.py:list_enrollments",
     "dispense.py:list_dispenses",
     "eldercare.py:list_assessments",

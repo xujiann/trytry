@@ -79,7 +79,8 @@ ROOT_FIXED_RENDERERS = [
      "\n  await draw();"),
     ("core.js", "renderDicts",
      ['$("#dict-system").onchange', '$("#dict-form").onsubmit',
-      '$("#dict-import").onsubmit'],   # 功能完善·dictionaries（2026-09-16）：批量导入
+      '$("#dict-import").onsubmit',   # 功能完善·dictionaries（2026-09-16）：批量导入
+      '$("#dict-search").onsubmit'],   # P2-1733：按编码或名称检索
      'await draw("diagnosis");'),
     ("pages-public.js", "renderCerts",
      ['$("#cert-form").onsubmit', '$("#cert-filter").onsubmit',

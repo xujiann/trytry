@@ -1,12 +1,12 @@
 """统一编码字典：诊断、药品、耗材、收费"四统一"，结果互认与业务联动的数据基础。"""
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..concurrency import insert_if_absent, insert_or_conflict
 from ..database import get_db
-from ..deps import get_current_user, require_admin, keyword_like
+from ..deps import get_current_user, require_admin, keyword_like, paginate
 from ..models import CodeEntry, CodeSystem
 from ..schemas import CodeEntryCreate
 
@@ -145,12 +145,24 @@ def bulk_import(system_code: str, entries: list[CodeEntryUpsert], db: Session = 
     response_model=list[CodeEntryDetailOut],
     dependencies=[Depends(get_current_user)],
 )
-def list_entries(system_code: str, keyword: str = "", db: Session = Depends(get_db)):
+def list_entries(
+    system_code: str, response: Response, keyword: str = "", offset: int = 0, limit: int = 200,
+    db: Session = Depends(get_db),
+):
+    """字典条目：按编码排，一页缺省 200 条，`offset` / `limit` 翻页，总数在 X-Total-Count（P2-1733）。
+
+    原先写死 `.limit(200)`、不收 offset、不给总数：`docs/接口对接规范.md` 叫外部系统从这里「下载对照」，第 201 条起的
+    平台编码在对接方的映射表里全成了「平台没有」；CLI 导入全量 ICD-10（三万余条）后，字典页永远只看到 A 开头的 200 条、
+    也看不出被截断。不带参数的调用返回的行与顺序照旧；一页上限照 `paginate` 的 500（与收费项目目录同一口径），整表按
+    offset 续页取。排序补尾键 `id` 只为让分页闸门认得出全序：同一字典内编码唯一（`uq_entry_system_code`），顺序不变。
+    """
     system = _get_system_readonly(db, system_code)
     if system is None:
-        # 种子缺失（存量库未经启动初始化）：读路径保持只读，返回空清单
+        # 种子缺失（存量库未经启动初始化）：读路径保持只读，返回空清单。早退也补总数头（同 `portal.portal_my_appointments`
+        # 的空名单早退）：不补就成了「同一个端点有时带头、有时不带」
+        response.headers["X-Total-Count"] = "0"
         return []
     query = db.query(CodeEntry).filter(CodeEntry.system_id == system.id)
     if keyword:
         query = query.filter(keyword_like(CodeEntry.code, keyword) | keyword_like(CodeEntry.name, keyword))
-    return query.order_by(CodeEntry.code).limit(200).all()
+    return paginate(query.order_by(CodeEntry.code, CodeEntry.id), response, offset, limit)
