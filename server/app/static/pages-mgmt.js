@@ -867,6 +867,10 @@ async function renderMaterials() {
 async function renderAnalytics() {
   $("#page-desc").textContent = "县域就诊率与就医流向 / 运行效率 / 自定义绩效公式与综合报告";
   const thisMonth = localToday().slice(0, 7);
+  // 个位月份补零（P2-1707）：切换时拿 efficiency 校验，它走 `deps.month_bounds`，收不补零的「2026-9」；下面 flowRange 拿它
+  // 拼出 `start=2026-9-01`，patient-flow 的日期校验 422，整页又被「只对 422 回落本月」接住——显示本月、存值清掉、一句提示
+  // 都没有。校验之前、读出存值之后都补成 `YYYY-MM`（后一道救已经存下的「2026-9」），别的写法照旧交给后端判
+  const padMonth = (p) => p.replace(/^(\d{4})-(\d)$/, "$1-0$2");
   // 就医流向按所选期间取（P2-1082）：原先不带 start / end，卡片是建库以来的累计，标题又不写期间——选 2026-09 看到的
   // 县域就诊率混着去年的县外就诊。接口的 end 不含当天，传次月 1 日
   const flowRange = (p) => {
@@ -877,7 +881,7 @@ async function renderAnalytics() {
   const load = (p) => Promise.all([
     api(`/api/analytics/patient-flow?${flowRange(p)}`), api(`/api/analytics/efficiency?period=${encodeURIComponent(p)}`),
     api("/api/analytics/formulas"), api("/api/analytics/formula-variables")]);
-  let period = localStorage.getItem("medplat_ana_period") || thisMonth;
+  let period = padMonth(localStorage.getItem("medplat_ana_period") || thisMonth);
   let loaded;
   try {
     loaded = await load(period);
@@ -943,7 +947,7 @@ async function renderAnalytics() {
          <td><b>${o.weighted_score}</b></td></tr>`)}`) : ""}`;
   $("#ana-period").onsubmit = async (e) => {
     e.preventDefault();
-    const value = String(new FormData(e.target).get("period") || "").trim();
+    const value = padMonth(String(new FormData(e.target).get("period") || "").trim());
     // 先让后端判这个期间合不合法，合法才记住（与会计 / 成本页同一句）：校验只有后端一份，坏值不进 localStorage
     try {
       await api(`/api/analytics/efficiency?period=${encodeURIComponent(value)}`);
