@@ -1122,25 +1122,35 @@ def hl7v2_oru(
     )
 
 
-def _oru_groups(segments: list[str]) -> list[tuple[str, list[str]]]:
-    """ORU^R01 按申请分组：每个 OBR 连同其后、下一个 OBR 之前的 OBX 是一组（HL7 的 ORDER_OBSERVATION 组，P2-722）。
+def _oru_groups(segments: list[str]) -> list[tuple[str | None, str, list[str]]]:
+    """ORU^R01 按申请分组：每个 OBR 连同其后、下一个 OBR 之前的 OBX 是一组（HL7 的 ORDER_OBSERVATION 组，P2-722），
+    返回 (本组的 PID 段, OBR 段, OBX 段列表)。
 
     一条消息可以带几张申请的结果（LIS 常把同一次采血的血常规、电解质放在一起发）。原先只认第一个 OBR、却把全文
     的 OBX 都算进去：电解质的血钾危急值写进了血常规的报告，电解质那张申请永远「待出报告」，ACK 照回 AA、LIS 不重发。
+
+    一条消息也可以带几位患者（PATIENT_RESULT 组可重复，P2-1757）：每组的患者是这个 OBR 之前最近的那个 PID，前面没有
+    PID 的为 None。原先全文只取第一个 PID、所有 OBR 都拿它核：乙的结果写进甲的申请单照样 201（防串单失效），合法的
+    多患者批量消息整条 422、错因还说成「不一致」。
     """
-    groups: list[tuple[str, list[str]]] = []
+    groups: list[tuple[str | None, str, list[str]]] = []
+    pid: str | None = None
     for seg in segments:
-        if seg.startswith("OBR|"):
-            groups.append((seg, []))
+        if seg.startswith("PID|"):
+            pid = seg
+        elif seg.startswith("OBR|"):
+            groups.append((pid, seg, []))
         elif seg.startswith("OBX|"):
             if not groups:
                 raise HTTPException(status_code=422, detail="OBX 结果段出现在 OBR 申请信息段之前，无法判断属于哪张申请")
-            groups[-1][1].append(seg)
+            groups[-1][2].append(seg)
     return groups
 
 
-def _oru_request(db: Session, obr: str, pid: str | None) -> ExamRequest:
-    """按 OBR 定位申请单并核对 PID（每一组各自核，防串单）。"""
+def _oru_request(db: Session, obr: str, pid: str | None, index: int = 0) -> ExamRequest:
+    """按 OBR 定位申请单并核对 PID（每一组拿本组的 PID 各自核，防串单，P2-1757）。
+
+    `index`：一条消息几组时这是第几个 OBR，PID 对不上时点名（只有一组时传 0，错因与原先逐字相同）。"""
     placer = _hl7_field(obr, 2)
     order_no = (placer or _hl7_field(obr, 3)).split("^")[0].strip()
     # 只认 ASCII（P1-97）：`isdigit()` 放行上标「²」、圈码「①」，下一行 int() 抛异常，被入站兜底成笼统的
@@ -1172,7 +1182,8 @@ def _oru_request(db: Session, obr: str, pid: str | None) -> ExamRequest:
                 .first()
             )
             if owns is None:
-                raise HTTPException(status_code=422, detail="PID 患者与申请单患者不一致，结果拒收")
+                where = f"第 {index} 个 OBR（申请单 {request.id}）：" if index else ""
+                raise HTTPException(status_code=422, detail=f"{where}PID 患者与申请单患者不一致，结果拒收")
     return request
 
 
@@ -1250,12 +1261,11 @@ def _do_hl7v2_oru(body: Hl7Message, db: Session, event: str, source_system: str)
     if not any(s.startswith("OBR|") for s in segments):
         raise HTTPException(status_code=422, detail="缺少 OBR 申请信息段")
     groups = _oru_groups(segments)
-    pid = next((s for s in segments if s.startswith("PID|")), None)
     # 每组先全部定位、核对完再出报告（P2-722）：出报告是逐张提交的，第二组的申请单不存在 / 已出过报告，
     # 第一组已经出具、危急值已经通知，整条消息却回 AE、LIS 再发一遍就撞「已出具」
     planned: list[tuple[ExamRequest, ExamReportCreate, int, int]] = []
-    for index, (obr, obx_segments) in enumerate(groups, start=1):
-        request = _oru_request(db, obr, pid)
+    for index, (pid, obr, obx_segments) in enumerate(groups, start=1):
+        request = _oru_request(db, obr, pid, index if len(groups) > 1 else 0)   # 本组的 PID（P2-1757）
         if not obx_segments:
             raise HTTPException(status_code=422, detail="缺少 OBX 结果段" if len(groups) == 1
                                 else f"第 {index} 个 OBR（申请单 {request.id}）下没有 OBX 结果段")
