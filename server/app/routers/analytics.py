@@ -469,10 +469,14 @@ def _efficiency_rows(db: Session, period: str, scope: list[int] | None) -> list[
         .all()
     )
     # 医师数：关键词匹配下推为 LIKE（语义同 Python 的子串 in），按机构分组计数
+    # 期末之后才建档的不计（P2-1705，与上面床位 P2-1074 同一个取法）：原先查 8 月也数着 10 月新招的医师，医师 2 → 8、
+    # 日均担负 1.0 → 0.25，已经报出去的往月数字复现不出来。员工表没有入职日期列，建档时刻 created_at 是唯一现成的上界；
+    # 期内离职的还按此刻在岗数，要靠人员变动的生效日期才能还原，随 P2-749 另定
     doctor_counts = row_dict(
         db.query(Employee.org_id, func.count(Employee.id))
         .filter(
             Employee.status == "active",
+            Employee.created_at < end_dt,
             sa.or_(*[Employee.position.like(f"%{k}%") for k in DOCTOR_POSITION_KEYWORDS]),
         )
         .group_by(Employee.org_id)

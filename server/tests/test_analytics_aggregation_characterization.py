@@ -79,12 +79,13 @@ def world(client):
         db.add_all(beds)
         db.flush()
 
+        # 医师同样在统计期之前就建档：医师数也按期末取（P2-1705，与床位同一个取法），缺省的 created_at 同样数不进 5 月
         db.add_all([
-            Employee(org_id=a.id, name="甲内科", position="内科医师", status="active"),
-            Employee(org_id=a.id, name="甲外科", position="外科医生", status="active"),
-            Employee(org_id=a.id, name="甲护士", position="护士", status="active"),
-            Employee(org_id=a.id, name="甲离职", position="内科医师", status="left"),
-            Employee(org_id=b.id, name="乙全科", position="全科医师", status="active"),
+            Employee(org_id=a.id, name="甲内科", position="内科医师", status="active", created_at=opened),
+            Employee(org_id=a.id, name="甲外科", position="外科医生", status="active", created_at=opened),
+            Employee(org_id=a.id, name="甲护士", position="护士", status="active", created_at=opened),
+            Employee(org_id=a.id, name="甲离职", position="内科医师", status="left", created_at=opened),
+            Employee(org_id=b.id, name="乙全科", position="全科医师", status="active", created_at=opened),
         ])
 
         def adm(org_id, bed, admitted, discharged, who=None):
