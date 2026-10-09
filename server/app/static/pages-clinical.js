@@ -3070,11 +3070,15 @@ async function renderOaQc() {
   const [docs, rosters, qc] = await Promise.all([api("/api/mgmt/docs"), api("/api/mgmt/rosters"), api("/api/mgmt/qc")]);
   const CN = { imaging: "影像", ecg: "心电", lab: "检验", pathology: "病理" };
   // ADR-0009 第四批：面板外壳改用 `panel()`（定义见 core.js），迁一页、人工过一页。
+  // 公文要有正文（P2-1595）：起草表单原先只有标题、类型、发文单位三栏，公文表也不显示正文——后端 `DocCreate.body` 收（最长
+  // 4096）、`DocOut` 也带，可从页面起草发布的通知、政策文件、会议纪要只有一行标题。表单加正文框，公文表在标题下折叠显示正文
+  // （照原样换行，一律 esc）
   $("#page-body").innerHTML = `
     ${panel("公文起草 / 排班 / 质控登记", `
       <form class="inline" id="doc-form"><input name="title" placeholder="公文标题" required style="min-width:240px">
         <select name="doc_type"><option value="notice">通知</option><option value="policy">政策文件</option><option value="minutes">会议纪要</option></select>
-        <input name="issuer" placeholder="发文单位"><button>起草</button></form>
+        <input name="issuer" placeholder="发文单位">
+        <textarea name="body" maxlength="4096" rows="4" placeholder="正文（最多 4096 字）" style="min-width:360px"></textarea><button>起草</button></form>
       <form class="inline" id="roster-form"><select name="center_type">${Object.entries(CN).map(([v, t]) => `<option value="${v}">${t}中心</option>`).join("")}</select>
         <input name="duty_date" placeholder="值班日期 YYYY-MM-DD" required><input name="shift" placeholder="班次" value="全天"><input name="doctor_name" placeholder="医师" required><button>排班</button></form>
       <form class="inline" id="qc-form"><select name="center_type">${Object.entries(CN).map(([v, t]) => `<option value="${v}">${t}中心</option>`).join("")}</select>
@@ -3082,7 +3086,8 @@ async function renderOaQc() {
         <input name="note" placeholder="备注"><input name="record_date" placeholder="日期"><button>登记质控</button></form>
       <p class="msg" id="oa-msg"></p>`)}
     ${panel("公文", table(["ID", "标题", "类型", "发文单位", "状态", "操作"], docs, (d) =>
-      `<tr><td>${d.id}</td><td>${esc(d.title)}</td><td>${esc(d.doc_type_name)}</td><td>${esc(d.issuer)}</td>
+      `<tr><td>${d.id}</td><td>${esc(d.title)}${d.body ? `<details><summary>查看正文</summary>
+         <div style="white-space:pre-wrap">${esc(d.body)}</div></details>` : ""}</td><td>${esc(d.doc_type_name)}</td><td>${esc(d.issuer)}</td>
        <td><span class="tag ${d.status === "published" ? "green" : "orange"}">${d.status === "published" ? "已发布" : "草稿"}</span></td>
        <td>${d.status === "draft" ? `<button class="btn secondary" data-pub="${d.id}">发布</button>` : "—"}</td></tr>`))}
     ${panel("排班", table(["中心", "日期", "班次", "医师"], rosters, (r) =>

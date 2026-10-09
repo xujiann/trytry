@@ -5259,6 +5259,23 @@ def test_人财物页的挂科室_变动_合同_出入库都在页内表单里�
     expect(page.locator("#assetmv-list")).to_contain_text("门诊领用")
 
 
+def test_公文起草带正文_公文表里展开看得到(page, base_url):
+    """P2-1595：起草表单原先只有标题、类型、发文单位三栏，公文表不显示正文——从页面起草的公文只有一行标题。
+    正文框在起草表单里、真浏览器的 FormData 收得到多行框；公文表在标题下折叠，展开后照原样换行、标签按字面显示。"""
+    text = "第一条：<b>照常</b>\n第二条：另行通知"
+    _login(page, base_url)
+    _open_page(page, "oaqc", "行政与质控")
+    page.fill("#doc-form input[name=title]", "E2E公文带正文")
+    page.fill("#doc-form textarea[name=body]", text)
+    _submit(page, "#doc-form button")
+    row = page.locator("tr", has_text="E2E公文带正文")
+    shown = row.locator("details div")
+    expect(shown).to_be_hidden()   # 折叠着，不撑高公文表
+    row.locator("summary").click()
+    expect(shown).to_be_visible()
+    assert shown.evaluate("el => el.textContent") == text   # 换行照原样、标签按字面（经 esc）
+
+
 @pytest.fixture(scope="session")
 def materials_seed(base_url, seed):
     """物资页用例的前置数据：在用供应商、经办提出的采购申请（审批人不能是申请人）、一件在库耗材。"""
