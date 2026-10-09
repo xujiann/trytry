@@ -344,7 +344,9 @@ async function renderSpdAdmin() {
     api("/api/spd/data-sources"),
     api("/api/spd/programs?limit=100"),
     api("/api/spd/data-sources-monitor"),
-    api("/api/spd/devices?limit=100"),
+    // 设备台账续页取全（P2-1641，同 P2-1610 / P2-1546 的写法）：原先只取 `limit=100`、清单按编号升序、不读总数——第 101 台起
+    // 新登记的设备表里不出现，「绑定患者」无从点起，也不提示截断。设备是逐行操作的配置台账、数量级以采购台数封顶，取全
+    fetchAllPages(api, "/api/spd/devices"),
     api("/api/spd/tags"),
     api("/api/spd/org-tree"),
     api("/api/spd/scales?limit=100"),
@@ -1287,7 +1289,9 @@ async function renderSpdTeam() {
     api(`/api/spd/workbench/team?role=${role}`),
     // 团队连停用的一起取（P2-1580，照随访问卷 P2-294）：「团队维护」表要能把停用的再启用；各页选团队的下拉取自目录，照旧只列启用的
     api("/api/spd/teams?limit=100&include_inactive=true"),
-    api("/api/spd/village-doctors?limit=100"),
+    // 村医档案续页取全（P2-1641，同 P2-1610）：原先只取 `limit=100`、按编号升序、不读总数——第 101 位起的村医改不了档、
+    // 出不了绑定码（批量导入一次就收 500 行），页面也不说截断。村医数以辖区村数封顶，取全
+    fetchAllPages(api, "/api/spd/village-doctors"),
   ]);
   // ADR-0009 第四批：面板外壳改用 `panel()`（定义见 core.js），迁一页、人工过一页。
   // 预警面板的红色左边框走 `accent`；两处"有数据才渲染"的条件仍留在调用点。
@@ -2176,7 +2180,9 @@ async function renderSpdPath() {
   $("#page-desc").textContent =
     "标准路径与统一任务：模板发布、患者路径实例与进入条件、任务接收分派提交审核催办升级、批量处理与导出";
   const [catalog, templates, summary] = await Promise.all([
-    spdCatalog(), api("/api/spd/path-templates?limit=30"), api("/api/spd/tasks/summary"),
+    // 路径模板续页取全（P2-1641，同 P2-1610）：原先只取 `limit=30`、清单按编号倒序、不读总数——过了 30 个模板，最早发布的
+    // 那版从表里消失，启动路径的下拉里却还有它，想照 P2-933 手工「停用」旧版无处可点。模板是配置项、数量级小，取全
+    spdCatalog(), fetchAllPages(api, "/api/spd/path-templates"), api("/api/spd/tasks/summary"),
   ]);
   // 启动路径的模板下拉带上病种名：模板只能给同病种的纳管档案用（P2-95），原先下拉里看不出哪条是哪个病种的
   const programName = (id) => (catalog.programs.find((p) => p.id === id) || {}).name || `病种#${id}`;
