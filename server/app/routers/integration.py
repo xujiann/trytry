@@ -805,7 +805,8 @@ def exchange_logs(
 _ADT_EVENTS = {"A01": "入院", "A03": "出院", "A04": "挂号建档", "A08": "信息更新"}
 # OBX-8 异常标志（HL7 v2 表 0078）：H/L 偏高偏低，A 异常，HH/LL 危急高/低，AA 非数值结果的危急（表 0078：与数值结果
 # 的危急界值同义）——HH/LL/AA 判危急值，进危急值闭环；< / > 超出仪器量程下限 / 上限，按异常计；N 正常，空 = 没给判断。
-# 字段可重复（`~` 分隔，如 H~W），逐个判。其余标志（变化趋势 U/D/B/W、药敏 S/R/I……）平台不据以判异常，结论里如实写
+# 字段可重复（`~` 分隔，如 H~W），逐个判；每个重复按第 1 组件判（v2.7 起是 CWE `HH^Critical high^HL70078`，P2-1756）。
+# 其余标志（变化趋势 U/D/B/W、药敏 S/R/I……）平台不据以判异常，结论里如实写
 # 「标志未识别」、不当正常（P1-213：原先整串比对、只认五个，AA 的血培养记成「异常 0 项」、不进危急值闭环）
 _ABNORMAL_FLAGS = {"H", "L", "A", "HH", "LL", "AA", "<", ">"}
 _CRITICAL_FLAGS = {"HH", "LL", "AA"}
@@ -1200,7 +1201,10 @@ def _oru_report(obr: str, obx_segments: list[str], request: ExamRequest,
         unit = _hl7_unescape(_hl7_field(seg, 6).split("^")[0].strip())
         ref_range = _hl7_unescape(_hl7_field(seg, 7).strip())
         flag = _hl7_field(seg, 8).strip().upper()
-        flags = {f.strip() for f in flag.split("~")} - {""}
+        # 每个重复先取第 1 组件再按表 0078 判（P2-1756）：v2.7 起 OBX-8 是 CWE（`HH^Critical high^HL70078`），本地 LIS 也有
+        # `H^偏高` 这样带文字的写法——原先整串比对，一律当「标志不认得」：危急值不进闭环、异常计 0 项、居民照收「已出具」。
+        # 同 OBX-3 / OBX-6 先拆组件（P2-724）；第 1 组件空着的照旧整个重复当认不得的标志。结论与所见里照旧印原文
+        flags = {(rep.split("^")[0].strip() or rep.strip()) for rep in flag.split("~")} - {""}
         if flags & _ABNORMAL_FLAGS:
             abnormal += 1
         if flags & _CRITICAL_FLAGS:
