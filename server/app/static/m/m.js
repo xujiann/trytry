@@ -457,6 +457,7 @@ function renderViewingBar(sel, me) {
 
 async function renderFamily() {
   const box = $("#family-switch");
+  setMsg("#family-switch-msg", "", true);   // 标签按服务端现状重画，上一次解除的结果不留（P2-1779）
   let members = [];
   try {
     members = await authApi("/api/portal/me/family");
@@ -479,11 +480,21 @@ async function renderFamily() {
     chip.addEventListener("click", async (e) => {
       if (e.target.classList.contains("x")) {
         if (!confirm("解除该成员的代管关系？")) return;
-        // 解除失败要说出来（P2-378）：原先 authApi() 抛错没人接，点了「×」没反应、代管关系照旧
+        const member = members.find((m) => String(m.member_id) === e.target.dataset.member) || {};
+        // 解除失败要说出来（P2-378）：原先 authApi() 抛错没人接，点了「×」没反应、代管关系照旧。
+        // 而且要写在看得见的地方（P2-1779）：P2-378 写进了缺省收起的「添加家庭成员」面板里的 #family-msg，点了 × 照样毫无
+        // 反应。现在写在成员标签下面那一行。另一台设备上已解除（404「家庭成员不存在」）时按服务端现状重画标签——那位从标签里
+        // 去掉、写明已解除；别的失败（断网、服务端出错）服务端没说关系没了，标签照旧，只写原因
         try {
           await authApi(`/api/portal/me/family/${e.target.dataset.member}`, { method: "DELETE" });
         } catch (err) {
-          setMsg("#family-msg", err.message, false);
+          if (err.status !== 404) {
+            setMsg("#family-switch-msg", `解除代管没有成功：${err.message}`, false);
+            return;
+          }
+          await renderFamily();
+          setMsg("#family-switch-msg", `「${member.name || "该成员"}」的代管已解除（可能已在其他设备上解除）`, true);
+          await loadArchive();
           return;
         }
         await renderFamily();

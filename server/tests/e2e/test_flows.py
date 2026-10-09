@@ -6524,6 +6524,52 @@ def test_居民端满意度不预置五星_没点星不提交_交了之后复位
     assert [(s["score"], s["target_type"]) for s in negative] == [(2, "contract")], negative   # 进了差评清单
 
 
+def test_居民端解除代管失败_原因写在成员标签旁_标签按服务端现状(page, base_url, admin_call):
+    """P2-1779（第五十二批扫描 AP1-5 家庭成员那一半）：解除代管失败时报错原先写进缺省收起的「添加家庭成员」面板，
+    点了 × 毫无反应、标签照旧。修后写在成员标签下面那一行：另一台设备已解除（404）时那位从标签里去掉、写明已解除；
+    断网时标签照旧、写明没成功。用自己的手机号（验证码单号冷却 60 秒）。"""
+    me = {"name": "解除E2E本人", "id_card": "320981197403034134", "phone": "13788990133"}
+    father = {"name": "解除E2E老父", "id_card": "320981194204044135"}
+    mother = {"name": "解除E2E老母", "id_card": "320981194405054136"}
+    admin_call("POST", "/api/patients", {**me, "gender": "男", "birth_date": "1974-03-03"})
+    for elder, gender in ((father, "男"), (mother, "女")):
+        old = admin_call("POST", "/api/patients", {**elder, "gender": gender, "birth_date": "1943-01-01"})
+        admin_call("POST", "/api/consents", {"patient_id": old["id"], "scene": "family_delegate", "evidence": "E2E窗口核验"})
+
+    _resident_login(page, base_url, me)
+    call = """async ([method, path, body]) => {
+      const r = await fetch(path, { method, credentials: "same-origin", body: body ? JSON.stringify(body) : undefined,
+        headers: { "Content-Type": "application/json", "X-CSRF-Token": csrfToken() } });
+      return [r.status, await r.json()];
+    }"""
+    members = {}
+    for elder in (father, mother):   # 前置数据走接口（以居民本人的会话）
+        status, body = page.evaluate(call, ["POST", "/api/portal/me/family",
+                                            {"name": elder["name"], "id_card": elder["id_card"], "relation": "parent"}])
+        assert status == 201, body
+        members[elder["name"]] = body["member_id"]
+    page.click('[data-tab="archive"]')
+    chip = lambda name: page.locator("#family-switch .chip", has_text=name)   # noqa: E731
+    expect(chip(mother["name"])).to_be_visible()
+    page.on("dialog", lambda d: d.accept())
+
+    # 另一台设备上已经解除了老母：这边再点 ×，服务端回 404
+    assert page.evaluate(call, ["DELETE", f"/api/portal/me/family/{members[mother['name']]}", None])[0] == 200
+    chip(mother["name"]).locator(".x").click()
+    expect(page.locator("#family-switch-msg")).to_have_text(f"「{mother['name']}」的代管已解除（可能已在其他设备上解除）")
+    expect(page.locator("#family-switch-msg")).to_be_visible()   # 修前写进收起的添加面板，看不见
+    expect(chip(mother["name"])).to_have_count(0)                 # 修前标签照旧挂着
+
+    # 断网时解除老父：标签照旧，写明没成功
+    page.route("**/api/portal/me/family/*", lambda route: route.abort())
+    chip(father["name"]).locator(".x").click()
+    expect(page.locator("#family-switch-msg")).to_contain_text("解除代管没有成功")
+    page.unroute("**/api/portal/me/family/*")
+    expect(chip(father["name"])).to_be_visible()
+    status, family = page.evaluate(call, ["GET", "/api/portal/me/family", None])
+    assert status == 200 and [m["name"] for m in family if not m["is_self"]] == [father["name"]], family
+
+
 def test_spd_doctor_mobile_todo_and_referral(page, base_url, spd_seed):
     """医生移动端：登录 → 慢专病待办接收 → 转诊复核通过（prompt 应答意见）。
 
