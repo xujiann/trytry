@@ -131,7 +131,8 @@ async function renderClinicalDocs() {
             esc(o.content.slice(0, 30))}</option>`).join("")}</select>
         <input name="content" placeholder="护理内容" required style="min-width:280px">
         <label style="font-size:13px">记录时间（留空按此刻） <input name="recorded_at" type="datetime-local"></label>
-        <button>记录</button></form>`}
+        <button>记录</button></form>
+      <p class="msg" id="nursing-msg"></p>`}
       ${table(["时间", "级别", "护士", "内容"], nursing, (r) =>
         `<tr><td>${esc(r.recorded_at)}</td><td>${esc(NURSING_LEVELS[r.nursing_level] || r.nursing_level)}</td>
          <td>${esc(r.nurse_name)}</td><td>${esc(r.content)}</td></tr>`)}`)}
@@ -143,7 +144,8 @@ async function renderClinicalDocs() {
         <input name="sbp" type="number" placeholder="收缩压"><input name="dbp" type="number" placeholder="舒张压">
         <input name="intake_ml" type="number" min="0" placeholder="入量 ml"><input name="output_ml" type="number" min="0" placeholder="出量 ml">
         <input name="weight_kg" type="number" step="any" min="0" placeholder="体重 kg">
-        <button>录入</button></form>`}
+        <button>录入</button></form>
+      <p class="msg" id="vital-msg"></p>`}
       ${vitals.length ? lineChart(vitals.map((v) => v.measured_at.slice(5, 10)),
         // 未测的给 null、不给 0（P2-158）：接口的注释与用户手册都说「未测项留空不要填 0，填 0 会污染体温单趋势曲线」
         { "体温": vitals.map((v) => v.temperature ?? null), "脉搏": vitals.map((v) => v.pulse ?? null) },
@@ -207,16 +209,18 @@ async function renderClinicalDocs() {
   if (handoverError) setMsg("#handover-msg", `${handoverError}（已回到全部病区）`, false);
   if (!current) return;
   if (readOnly) return;   // 只读查看没画写入表单（P2-1768），没有提交处理要挂
+  // 三张表单各写各的消息行（P2-1770，同医生移动端 P2-1093、体检 P2-1404）：原先护理、体征提交失败也写进病程面板的 #doc-msg
+  // ——体温填 365、血压录反、出院后 409 都落在页面上方，中间隔着病程表与护理表，在体征面板操作的人看到的是「点了没反应」
   $("#note-form").onsubmit = (e) => { e.preventDefault();
     postAction(`/api/inpatient/admissions/${current}/progress-notes`, formJson(e.target), "#doc-msg"); };
   $("#nursing-form").onsubmit = (e) => { e.preventDefault();
     postAction(`/api/inpatient/admissions/${current}/nursing-records`, formJson(e.target, ["inpatient_order_id"]),
-      "#doc-msg"); };
+      "#nursing-msg"); };
   $("#vital-form").onsubmit = (e) => { e.preventDefault();
     postAction(`/api/inpatient/admissions/${current}/vitals`,
       // 出入量、体重（P2-473）：接口与体温单模型一直有这三项，页面原先录不进、也看不见
       formJson(e.target, ["temperature", "pulse", "respiration", "sbp", "dbp", "intake_ml", "output_ml", "weight_kg"]),
-      "#doc-msg"); };
+      "#vital-msg"); };
 }
 
 /* ---------------- 手术麻醉 ---------------- */
