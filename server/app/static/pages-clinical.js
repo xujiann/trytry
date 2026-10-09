@@ -2827,14 +2827,28 @@ async function renderPublicHealth() {
 // 月度薪酬看的期间（P2-853）：切换后整页重画时记着，空串 = 最近一个有记录的月份
 let PAYROLL_PERIOD = "";
 
+/* 人财物页员工、物资两张表的查找（P2-1594）：员工按姓名、物资按名称 / 编码。只留在内存里、不进存储（同 CONTRACT_FILTER）——
+   查哪一位、哪一件是这一次办事的条件。 */
+const HRF_FILTER = { employee: "", asset: "" };
+
 async function renderHrFinance() {
   $("#page-desc").textContent = "人力资源（科室库/变动/合同/薪酬）、派驻下沉、财务集中核算与预算执行、物资出入库";
   const role = currentRole();
   const isDirector = ["director", "admin"].includes(role);
-  const [employees, secStats, finance, assets, departments, expiringContracts, orgs] = await Promise.all([
-    api("/api/mgmt/employees"), api("/api/mgmt/secondments/stats"), api("/api/mgmt/finance/summary"),
-    api("/api/mgmt/assets"), api("/api/mgmt/departments"), api("/api/mgmt/staff-contracts/expiring?days=60"),
-    api("/api/organizations")]);
+  // 员工、物资按查找取、读总数（P2-1594，同 P2-1547）：原先两张表不带参数只取清单缺省那一页（一页 500、按编号升序）——
+  // 第 501 位起正是最新入职、最新建档的，挂科室、登记变动、签合同、出入库、调拨、报废这些按钮只摆在表的行上，他们没有行，
+  // 页面也不提示截断。现在按姓名 / 名称 / 编码查（后端叠在可见范围之后、只收窄），总数读 X-Total-Count，列不全时标题写明
+  // 「已列 N / 共 total」。不走续页取全（P2-1333 那种）：离职的员工、报废的物资都留在表里，只增不减，取全不封顶
+  const findQuery = (keyword) => (keyword ? `?keyword=${encodeURIComponent(keyword)}` : "");
+  const [empList, secStats, finance, assetList, departments, expiringContracts, orgs] = await Promise.all([
+    api(`/api/mgmt/employees${findQuery(HRF_FILTER.employee)}`, { withTotal: true }), api("/api/mgmt/secondments/stats"),
+    api("/api/mgmt/finance/summary"), api(`/api/mgmt/assets${findQuery(HRF_FILTER.asset)}`, { withTotal: true }),
+    api("/api/mgmt/departments"), api("/api/mgmt/staff-contracts/expiring?days=60"), api("/api/organizations")]);
+  const { rows: employees } = empList;
+  const { rows: assets } = assetList;
+  const listedOf = ({ rows, total }) => (total !== null && rows.length < total ? `已列 ${rows.length} / 共 ${total}` : rows.length);
+  const empTitle = `${HRF_FILTER.employee ? "员工查找结果" : "员工"}（${listedOf(empList)}）· 变动留痕联动机构与状态`;
+  const assetTitle = `${HRF_FILTER.asset ? "物资查找结果" : "物资"}（${listedOf(assetList)}）· 出入库全程留痕；报废与调拨都不可逆，后端无反向端点`;
   // 月度薪酬按期间取（P2-853）：原先不带期间，「合计发放」是开账以来所有月份的总和、下面只列最近 500 行——面板叫
   // 「月度薪酬」，P1-149 的修法与登记也都把它当「全县一个月发薪」的合计。缺省看最近一个有记录的月份，可切换
   let payroll = null;
@@ -2879,7 +2893,9 @@ async function renderHrFinance() {
         <button>科室建档</button></form>
       ${table(["ID", "机构", "编码", "名称", "类别"], departments, (d) =>
         `<tr><td>${d.id}</td><td>${d.org_id}</td><td><span class="tag">${esc(d.code)}</span></td><td>${esc(d.name)}</td><td>${esc(d.category_name)}</td></tr>`)}`)}
-    ${panel("员工（变动留痕联动机构与状态）", table(["ID", "机构", "姓名", "职称", "科室", "状态", "操作"], employees, (em) => {
+    ${panel(empTitle, `<form class="inline" id="emp-find"><input name="keyword" value="${esc(HRF_FILTER.employee)}"
+        placeholder="按姓名查（留空看全部）" maxlength="64"><button class="secondary">查找</button></form>`
+      + table(["ID", "机构", "姓名", "职称", "科室", "状态", "操作"], employees, (em) => {
       return `<tr><td>${em.id}</td><td>${em.org_id}</td><td>${esc(em.name)}</td><td>${esc(em.title)}</td>
         <td>${em.dept_id ? esc(deptNames[em.dept_id] || em.dept_id) : "—"}</td><td>${statusTag(EST, em.status)}</td>
         <td><button class="btn secondary" data-empdept="${em.id}">挂科室</button>
@@ -2919,7 +2935,9 @@ async function renderHrFinance() {
       <div id="bud-exec"></div>`)}` : ""}
     ${panel("各单位收支（全部期间）", table(["机构", "收入", "支出", "结余"], finance.orgs, (o) =>
       `<tr><td>${o.org_id}</td><td>${o.income}</td><td>${o.expense}</td><td>${o.balance}</td></tr>`))}
-    ${panel("物资（出入库全程留痕；报废与调拨都不可逆，后端无反向端点）", table(["ID", "编码", "名称", "机构", "数量", "状态", "操作"], assets, (a) =>
+    ${panel(assetTitle, `<form class="inline" id="asset-find"><input name="keyword" value="${esc(HRF_FILTER.asset)}"
+        placeholder="按名称或编码查（留空看全部）" maxlength="128"><button class="secondary">查找</button></form>`
+      + table(["ID", "编码", "名称", "机构", "数量", "状态", "操作"], assets, (a) =>
       `<tr><td>${a.id}</td><td>${esc(a.code)}</td><td>${esc(a.name)}</td><td>${esc(orgNames[a.org_id] || a.org_id)}</td><td>${a.quantity}</td>
        <td>${statusTag(ASSET_STATUS, a.status)}</td>
        <td>${a.status !== "scrapped" ? `<button class="btn secondary" data-assetmv="${a.id}">出入库</button>
@@ -2932,6 +2950,9 @@ async function renderHrFinance() {
   $("#fin-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/mgmt/finance", formJson(e.target, ["org_id", "amount"]), "#hrf-msg"); };
   $("#asset-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/mgmt/assets", formJson(e.target, ["org_id", "quantity"]), "#hrf-msg"); };
   $("#dept-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/mgmt/departments", formJson(e.target, ["org_id"]), "#hrf-msg"); };
+  // 查找只记在内存里、整页重画（P2-1594，同签约页 P2-1547 的筛选）
+  $("#emp-find").onsubmit = (e) => { e.preventDefault(); HRF_FILTER.employee = String(new FormData(e.target).get("keyword") ?? "").trim(); route(); };
+  $("#asset-find").onsubmit = (e) => { e.preventDefault(); HRF_FILTER.asset = String(new FormData(e.target).get("keyword") ?? "").trim(); route(); };
   const payFilter = $("#pay-filter");
   if (payFilter) payFilter.onsubmit = (e) => { e.preventDefault(); PAYROLL_PERIOD = e.target.period.value; route(); };
   const payForm = $("#pay-form");

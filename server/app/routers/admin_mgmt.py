@@ -19,6 +19,7 @@ from ..visibility import (
 )
 from ..deps import (
     get_current_user,
+    keyword_like,
     paginate,
     require_admin,
     require_date,
@@ -88,13 +89,22 @@ def create_employee(body: EmployeeCreate, db: Session = Depends(get_db), user: U
 def list_employees(
     response: Response,
     org_id: int | None = None,
+    keyword: str = "",
     offset: int = 0,
     limit: int = 500,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """员工清单：人财物页的员工表，「挂科室 / 登记变动 / 签合同」只摆在这张表的行上。
+
+    按姓名查（P2-1594）：原先只收 `org_id`，页面不带参数只取缺省那一页（一页 500、按编号升序）——第 501 位起正是最新
+    入职的，在页面上没有行。`keyword` 按姓名包含匹配（`%` / `_` 按字面），叠在可见范围（`scope_org_list`）之后，只收窄、
+    不绕过它；缺省的排序与分页不变（别的页面、下拉也在用）。
+    """
     query = db.query(Employee)
     query = scope_org_list(db, user, query, Employee, org_id)
+    if keyword:
+        query = query.filter(keyword_like(Employee.name, keyword, literal_wildcards=True))
     return paginate(query.order_by(Employee.id), response, offset, limit)
 
 
@@ -384,13 +394,22 @@ def create_asset(body: AssetCreate, db: Session = Depends(get_db), user: User = 
 def list_assets(
     response: Response,
     org_id: int | None = None,
+    keyword: str = "",
     offset: int = 0,
     limit: int = 500,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """物资清单：人财物页的物资表，「出入库 / 调拨 / 报废」只摆在这张表的行上。
+
+    按名称或编码查（P2-1594，同员工清单）：页面原先只取缺省那一页（一页 500、按编号升序），第 501 件起正是最新建档的。
+    `keyword` 按名称或编码包含匹配（`%` / `_` 按字面，编码里常带下划线），叠在可见范围之后、只收窄；缺省的排序与分页不变。
+    """
     query = db.query(Asset)
     query = scope_org_list(db, user, query, Asset, org_id)
+    if keyword:
+        query = query.filter(keyword_like(Asset.name, keyword, literal_wildcards=True)
+                             | keyword_like(Asset.code, keyword, literal_wildcards=True))
     return paginate(query.order_by(Asset.id), response, offset, limit)
 
 

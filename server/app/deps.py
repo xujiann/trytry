@@ -209,7 +209,7 @@ def rows_by_id(db: Session, model: Any, ids: Iterable[Any]) -> dict[Any, Any]:
     return {row.id: row for row in db.query(model).filter(model.id.in_(wanted))}
 
 
-def keyword_like(column, keyword: str):
+def keyword_like(column, keyword: str, *, literal_wildcards: bool = False):
     """关键词模糊检索：两边都转小写再 LIKE（P2-66）。
 
     开发库 SQLite 的 LIKE 对 ASCII 不分大小写，生产库 PostgreSQL 区分——诊断字典搜 `i10` 开发库命中 `I10`，
@@ -219,7 +219,14 @@ def keyword_like(column, keyword: str):
     两边都在库里转（P2-919）：原先关键词在 Python 里 `.lower()`、列在库里 `lower()`——Python 的 lower 会把 Ⅱ 转成 ⅱ、
     全角 Ｃ 转成 ｃ，SQLite 与 C / POSIX 区域的 PG 只转 ASCII，两边转出来不是同一个串，「Ⅱ型糖尿病」「ＣＯＰＤ」原文照搜
     也落空（P2-66 带来的回退）。全角半角互认（NFKC）另议。
+
+    `literal_wildcards=True`：关键词里的 `%` / `_` 按字面找（P2-1594，人财物页按物资编码查——`ZC_001` 里的 `_` 不该匹配
+    任意一个字、单敲一个 `%` 不该列出全部）。转义符用 `/`（与 SQLAlchemy `contains(autoescape=True)` 同一个），不用反斜杠：
+    PG 字面量里反斜杠还有 standard_conforming_strings 那一层口径，`/` 两库都是同一个串。缺省不开，既有调用点一字不变。
     """
+    if literal_wildcards:
+        escaped = keyword.replace("/", "//").replace("%", "/%").replace("_", "/_")
+        return func.lower(column).like(func.lower(literal(f"%{escaped}%")), escape="/")
     return func.lower(column).like(func.lower(literal(f"%{keyword}%")))
 
 
