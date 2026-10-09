@@ -193,7 +193,7 @@ def id_card_invalid_reason(value: str) -> str:
 def _check_id_card(db: Session, rule: QcRule, model) -> list[tuple[int, str]]:
     field = rule.config.get("field", "id_card")
     hits = []
-    for row in _scan(_fields_query(db, model, field), model):
+    for row in _filtered(db, model, rule, field):   # 规则的 filter 照样生效（P2-1567）
         reason = id_card_invalid_reason(getattr(row, field, ""))
         if reason:
             hits.append((row.id, reason))
@@ -241,7 +241,7 @@ def _check_datetime_order(db: Session, rule: QcRule, model) -> list[tuple[int, s
     end_field = rule.config.get("end_field", "")
     start_pii, end_pii = _pii_masker(model, start_field), _pii_masker(model, end_field)   # P2-1566
     hits = []
-    for row in _scan(_fields_query(db, model, start_field, end_field), model):
+    for row in _filtered(db, model, rule, start_field, end_field):   # 规则的 filter 照样生效（P2-1567）
         start, end = getattr(row, start_field, None), getattr(row, end_field, None)
         # 空串也是「没填」（P2-234）：日期多是 String(10)、缺省空串而不是 NULL，原先只认 None，空的结束日期
         # 按字符串比 `"" < "2026-…"` 恒真——每一条「进行中」的都被判成「结束早于开始」
@@ -264,7 +264,7 @@ def _check_date_not_future(db: Session, rule: QcRule, model) -> list[tuple[int, 
     today = clock.today().isoformat()
     pii = _pii_masker(model, field)   # P2-1566
     hits = []
-    for row in _scan(_fields_query(db, model, field), model):
+    for row in _filtered(db, model, rule, field):   # 规则的 filter 照样生效（P2-1567）
         value = getattr(row, field, None)
         if isinstance(value, datetime):
             # 本地日期比本地的今天（P2-714）：原先取 UTC 日期，东八区次日 0–8 点的时刻算成今天、漏报
@@ -328,6 +328,9 @@ _LOGIC_CHECKS = {
     "date_not_future": _check_date_not_future,
     "chronic_followup_indicator": _check_chronic_followup_indicator,
 }
+#: 自己定了扫哪张表、按什么条件扫的逻辑校验（P2-1567）：查询写死在校验里（未闭环的危急值报告、全部慢病随访），不逐行看
+#: 规则的被检表，规则的 filter 也落不到它扫的行上
+_OWN_TABLE_CHECKS = {"critical_closed_loop": ExamReport, "chronic_followup_indicator": FollowUp}
 
 
 # ---------------------------------------------------------------------------
@@ -335,8 +338,13 @@ _LOGIC_CHECKS = {
 # ---------------------------------------------------------------------------
 
 
-def _filtered(db: Session, model, rule: QcRule, field: str):
-    query = _fields_query(db, model, field)
+def _filtered(db: Session, model, rule: QcRule, *fields: str):
+    """按规则的 filter 收窄后逐行扫被检表（只取主键与 fields 这几列）。
+
+    查询落在被检表上的逻辑校验（证件号校验位、起止先后、日期不晚于今天）也走这里（P2-1567）：原先只有必填 / 区间 / 枚举 /
+    引用四类调用，逻辑类配了 filter 照收、扫描时不用——QC001 加「只查未注销档案」返回 200，已注销的档案照报 error。
+    """
+    query = _fields_query(db, model, *fields)
     for key, value in (rule.config.get("filter") or {}).items():
         column = getattr(model, key, None)
         if column is not None:
@@ -536,6 +544,11 @@ def rule_config_problem(target_table: str, rule_type: str, config: dict) -> str:
         check = config.get("check", "")
         if check not in _LOGIC_CHECKS:
             return f"逻辑校验 {check or '空'} 未实现（可选：{'、'.join(sorted(_LOGIC_CHECKS))}）"
+        if row_filter and check in _OWN_TABLE_CHECKS:
+            # 上面对所有类型都校验并放行 filter，这两个校验扫描时却根本不用它：配了照样 200、照样扫全部（P2-1567）——
+            # 与 P2-81 修过的「filter 写错被忽略、扫了全表」同一种后果。空的 {} 等于没写，照收
+            return (f"逻辑校验 {check} 不支持 filter（它按自己的条件扫 {_OWN_TABLE_CHECKS[check].__tablename__}，"
+                    "filter 写了也不起作用）")
         if check in ("id_card_checksum", "date_not_future") and not _is_field(model, config.get(
                 "field", "id_card" if check == "id_card_checksum" else "")):
             return f"field（{config.get('field') or '空'}）不是 {target_table} 的字段"
