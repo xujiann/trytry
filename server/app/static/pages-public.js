@@ -327,6 +327,8 @@ async function renderProcure() {
     ? `已列 ${takes.length} / 共 ${takeList.total}` : `${takes.length}`;
   const role = currentRole();
   const supNames = Object.fromEntries(suppliers.map((s) => [s.id, s.name]));
+  // 采购单表印申请人 / 审批人 / 申请时间 / 备注，盘点表印差异说明 / 盘点人 / 盘点时间（P2-1673）：库里早存着，原先清单接口
+  // 不出、页面也不印——盘亏是谁哪天盘的、单子是谁申请谁批的答不出，盘点表单里填的「差异说明」填完就看不到。时间写法同用血页
   $("#page-body").innerHTML = `
     ${panel("供应商建档（管理层/经办）", `
       <form class="inline" id="sup-form">
@@ -347,7 +349,7 @@ async function renderProcure() {
         <input name="quantity" type="number" min="1" placeholder="数量" required>
         <button>提交申请</button></form>
       <p class="msg" id="po-msg"></p>
-      ${table(["ID", "机构", "供应商", "类型", "品目", "数量", "状态", "操作"], orders, (o) => {
+      ${table(["ID", "机构", "供应商", "类型", "品目", "数量", "状态", "申请人", "审批人", "申请时间", "备注", "操作"], orders, (o) => {
         const actions = o.status === "pending" && ["director", "admin"].includes(role)
           ? `<button class="btn secondary" data-poap="${o.id}">批准</button>
              <button class="btn danger" data-poap="${o.id}" data-reject="1">驳回</button>`
@@ -356,7 +358,9 @@ async function renderProcure() {
         return `<tr><td>${o.id}</td><td>${o.org_id}</td><td>${esc(supNames[o.supplier_id] || o.supplier_id)}</td>
           <td>${o.item_type === "drug" ? "药品" : "物资"}</td><td>${esc(o.item_name)}（${esc(o.item_code)}）</td>
           <td>${o.quantity}${o.received_quantity != null && o.received_quantity !== o.quantity
-            ? `（实收 ${o.received_quantity}）` : ""}</td><td>${statusTag(PO_STATUS, o.status)}</td><td>${actions}</td></tr>`;
+            ? `（实收 ${o.received_quantity}）` : ""}</td><td>${statusTag(PO_STATUS, o.status)}</td>
+          <td>${esc(o.requested_by_name) || "—"}</td><td>${esc(o.approved_by_name) || "—"}</td>
+          <td>${esc(o.created_at.slice(0, 16).replace("T", " "))}</td><td>${esc(o.note) || "—"}</td><td>${actions}</td></tr>`;
       })}`)}
     ${panel(`存货盘点（经办/药师，盘后账实相符）· 盘点记录（${takeCount}）`, `
       <form class="inline" id="st-form">
@@ -365,9 +369,11 @@ async function renderProcure() {
         <input name="actual_qty" type="number" min="0" placeholder="实盘数量" required>
         <input name="note" placeholder="差异说明">
         <button>盘点</button></form>
-      ${table(["ID", "机构", "药品编码", "账面", "实盘", "差异"], takes, (t) =>
+      ${table(["ID", "机构", "药品编码", "账面", "实盘", "差异", "差异说明", "盘点人", "盘点时间"], takes, (t) =>
         `<tr><td>${t.id}</td><td>${t.org_id}</td><td>${esc(t.drug_code)}</td><td>${t.book_qty}</td><td>${t.actual_qty}</td>
-         <td><span class="tag ${t.diff === 0 ? "green" : "red"}">${t.diff > 0 ? "+" : ""}${t.diff}</span></td></tr>`)}`)}`;
+         <td><span class="tag ${t.diff === 0 ? "green" : "red"}">${t.diff > 0 ? "+" : ""}${t.diff}</span></td>
+         <td>${esc(t.note) || "—"}</td><td>${esc(t.created_by_name) || "—"}</td>
+         <td>${esc(t.created_at.slice(0, 16).replace("T", " "))}</td></tr>`)}`)}`;
   $("#sup-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/pharmacy/suppliers", formJson(e.target), "#po-msg"); };
   $("#po-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/pharmacy/purchase-orders", formJson(e.target, ["org_id", "supplier_id", "quantity"]), "#po-msg"); };
   // 盘点、验收入库改了库存，可能越过 / 回到缺药阈值：管理层铃铛的「缺药预警」办完即刷新（P2-1312，照站内消息页标已读的写法）

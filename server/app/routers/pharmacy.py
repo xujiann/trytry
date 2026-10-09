@@ -616,6 +616,17 @@ def _stock_names(db: Session, batches: list[DrugBatch]) -> dict[tuple[int, str],
     return {(r.org_id, r.drug_code): r.drug_name for r in rows}
 
 
+def _user_names(db: Session, user_ids: set[int]) -> dict[int, str]:
+    """一页清单的经手人显示名一次取齐、不逐行查（P2-1673，同发药记录 `_dispense_names`）：姓名，没填姓名的回落账号
+    （同仓 `full_name or username`）。取不到的（账号已删）不在表里，调用方回空串。"""
+    if not user_ids:
+        return {}
+    return {
+        u.id: u.full_name or u.username
+        for u in db.query(User.id, User.full_name, User.username).filter(User.id.in_(user_ids))
+    }
+
+
 @router.post(
     "/batches",
     response_model=BatchOut,
@@ -993,6 +1004,13 @@ class PurchaseOrderOut(BaseModel):
     status: str
     # 实收数（P2-852）：验收时记；验收前、以及本列加入之前验收的单为 null（那些单按申请量整单入库）
     received_quantity: int | None = None
+    # 经手人、申请时间与申请说明（P2-1673）：库里早存着，清单原先不出——谁申请、谁批（驳）的、哪天申请的、申请时写的说明，
+    # 页面与清单接口都答不出，只能翻请求级审计日志。只在末尾追加。显示名同发药记录（P2-1539）：姓名，没填的回落账号；
+    # 还没审批、或账号取不到的为空串。时间照 `BatchDispenseRow.dispensed_at` 的写法
+    requested_by_name: str
+    approved_by_name: str
+    created_at: str
+    note: str
 
 
 class PurchaseReceiveIn(BaseModel):
@@ -1150,6 +1168,10 @@ def list_purchases(
     q = scope_org_list(db, user, q, PurchaseOrder, org_id)
     if status:
         q = q.filter(PurchaseOrder.status == status)
+    rows = paginate(q.order_by(PurchaseOrder.id.desc()), response, offset, limit)
+    names = _user_names(
+        db, {o.requested_by for o in rows} | {o.approved_by for o in rows if o.approved_by is not None}
+    )
     return [
         {
             "id": o.id,
@@ -1161,8 +1183,12 @@ def list_purchases(
             "quantity": o.quantity,
             "status": o.status,
             "received_quantity": o.received_quantity,
+            "requested_by_name": names.get(o.requested_by, ""),
+            "approved_by_name": names.get(o.approved_by, "") if o.approved_by is not None else "",
+            "created_at": o.created_at.isoformat(),
+            "note": o.note,
         }
-        for o in paginate(q.order_by(PurchaseOrder.id.desc()), response, offset, limit)
+        for o in rows
     ]
 
 
@@ -1190,6 +1216,10 @@ class StockTakeOut(BaseModel):
     actual_qty: int
     diff: int
     note: str
+    # 盘点人与盘点时间（P2-1673）：模型注释写「差异留痕」，盘亏 120 盒是谁、哪天盘的却只有库里知道。只在末尾追加，
+    # 写法同采购单清单
+    created_by_name: str
+    created_at: str
 
 
 @router.post(
@@ -1273,6 +1303,8 @@ def list_stock_takes(
 ):
     q = db.query(StockTake)
     q = scope_org_list(db, user, q, StockTake, org_id)
+    rows = paginate(q.order_by(StockTake.id.desc()), response, offset, limit)
+    names = _user_names(db, {t.created_by for t in rows})
     return [
         {
             "id": t.id,
@@ -1282,6 +1314,8 @@ def list_stock_takes(
             "actual_qty": t.actual_qty,
             "diff": t.diff,
             "note": t.note,
+            "created_by_name": names.get(t.created_by, ""),
+            "created_at": t.created_at.isoformat(),
         }
-        for t in paginate(q.order_by(StockTake.id.desc()), response, offset, limit)
+        for t in rows
     ]

@@ -31,9 +31,11 @@ SUPPLIER_KEYS = ["id", "name", "contact", "license_no", "active"]
 ORDER_ACTION_KEYS = ["id", "status"]
 ORDER_RECEIVE_KEYS = ["id", "status", "stock_quantity"]
 ORDER_KEYS = ["id", "org_id", "supplier_id", "item_type", "item_code", "item_name", "quantity", "status",
-              "received_quantity"]   # 实收数（P2-852）：验收时记，验收前为 null
+              "received_quantity",   # 实收数（P2-852）：验收时记，验收前为 null
+              "requested_by_name", "approved_by_name", "created_at", "note"]   # P2-1673 末尾追加：经手人、申请时间、说明
 STOCK_TAKE_CREATED_KEYS = ["id", "book_qty", "actual_qty", "diff"]
-STOCK_TAKE_KEYS = ["id", "org_id", "drug_code", "book_qty", "actual_qty", "diff", "note"]
+STOCK_TAKE_KEYS = ["id", "org_id", "drug_code", "book_qty", "actual_qty", "diff", "note",
+                   "created_by_name", "created_at"]   # P2-1673 末尾追加：盘点人与盘点时间
 SUGGESTION_KEYS = ["drug_code", "drug_name", "usage_30d", "current_stock", "suggested_quantity",
                    "dispensable_stock"]   # P2-1250 加：缺口按全网可发量算，可发量另给（current_stock 照旧是汇总）
 
@@ -219,21 +221,38 @@ def test_验收回执_药品回汇总int_物资回null(seed):
     assert material == {"id": seed["po_material"]["id"], "status": "received", "stock_quantity": None}
 
 
+def _created_at(model) -> dict[int, str]:
+    """各行的建档时间（`isoformat()`，P2-1673 追加的 `created_at` 与库里同一个值）。"""
+    from app.database import SessionLocal
+
+    with SessionLocal() as db:
+        return {r.id: r.created_at.isoformat() for r in db.query(model)}
+
+
 def test_采购单列表精确_过滤(client, admin, seed):
+    from app.models import PurchaseOrder
+
     org_id, sid = seed["org"]["id"], seed["supplier"]["id"]
+    created = _created_at(PurchaseOrder)
+
+    def tail(order, approver):
+        # 申请人都是经办 phct_op、审批（驳回）人是 phct_dir，账号没填姓名回落账号；没审批的为空串；种子单都没写说明
+        return {"requested_by_name": "phct_op", "approved_by_name": approver,
+                "created_at": created[seed[order]["id"]], "note": ""}
+
     expected = [
         {"id": seed["po_rejected"]["id"], "org_id": org_id, "supplier_id": sid,
          "item_type": "drug", "item_code": "PHCT-IBU", "item_name": "契约布洛芬",
-         "quantity": 20, "status": "rejected", "received_quantity": None},
+         "quantity": 20, "status": "rejected", "received_quantity": None, **tail("po_rejected", "phct_dir")},
         {"id": seed["po_pending"]["id"], "org_id": org_id, "supplier_id": sid,
          "item_type": "drug", "item_code": "PHCT-AMX", "item_name": "契约阿莫西林",
-         "quantity": 30, "status": "pending", "received_quantity": None},
+         "quantity": 30, "status": "pending", "received_quantity": None, **tail("po_pending", "")},
         {"id": seed["po_material"]["id"], "org_id": org_id, "supplier_id": sid,
          "item_type": "material", "item_code": "PHCT-GZ", "item_name": "契约纱布",
-         "quantity": 7, "status": "received", "received_quantity": 7},
+         "quantity": 7, "status": "received", "received_quantity": 7, **tail("po_material", "phct_dir")},
         {"id": seed["po_drug"]["id"], "org_id": org_id, "supplier_id": sid,
          "item_type": "drug", "item_code": "PHCT-MET", "item_name": "契约二甲双胍",
-         "quantity": 50, "status": "received", "received_quantity": 50},
+         "quantity": 50, "status": "received", "received_quantity": 50, **tail("po_drug", "phct_dir")},
     ]
     rows = client.get("/api/pharmacy/purchase-orders", headers=admin).json()
     assert [list(r.keys()) for r in rows] == [ORDER_KEYS] * 4  # id 倒序
@@ -260,13 +279,18 @@ def test_盘点回执精确_盈亏两分支(seed):
 
 
 def test_盘点列表精确_note默认空串(client, admin, seed):
+    from app.models import StockTake
+
+    created = _created_at(StockTake)
     rows = client.get("/api/pharmacy/stock-takes", headers=admin).json()
     assert [list(r.keys()) for r in rows] == [STOCK_TAKE_KEYS] * 2  # id 倒序
     assert rows == [
         {"id": seed["take_gain"]["id"], "org_id": seed["org"]["id"], "drug_code": "PHCT-MET",
-         "book_qty": 45, "actual_qty": 47, "diff": 2, "note": ""},
+         "book_qty": 45, "actual_qty": 47, "diff": 2, "note": "",
+         "created_by_name": "phct_pha", "created_at": created[seed["take_gain"]["id"]]},
         {"id": seed["take_loss"]["id"], "org_id": seed["org"]["id"], "drug_code": "PHCT-MET",
-         "book_qty": 50, "actual_qty": 45, "diff": -5, "note": "破损5片"},
+         "book_qty": 50, "actual_qty": 45, "diff": -5, "note": "破损5片",
+         "created_by_name": "phct_pha", "created_at": created[seed["take_loss"]["id"]]},
     ]
 
 
