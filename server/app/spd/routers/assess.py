@@ -856,6 +856,9 @@ def score_rule_problem(rule: dict, *, known_type_only: bool = True) -> str:
     原先照单全收：满分写成文字、分档不是列表、分档边界或分值不是数，建指标照样 201，整张考核方案一计分就 500。
     建 / 改指标时拦（422）；计分时对存量里的坏规则逐指标记错、不 500，与公式求值失败同一个处理。
     `known_type_only=False`（计分时）：存量里的未知类型照旧按「未配置」计分——修前就是这么算的，这里只拦会 500 的。
+
+    满分、分档分值写成负数（P2-1579）不抛错，却算出负分倒扣总分（满分 -100 时达标反而得分最低），与负权重（P2-108）
+    同一个毛病，也在这里拦：建 / 改指标 422，存量里的照上一段逐指标记错。
     """
     if not rule:
         return ""
@@ -868,6 +871,8 @@ def score_rule_problem(rule: dict, *, known_type_only: bool = True) -> str:
     if kind == "ratio":
         if "full" in rule and not _is_number(rule["full"]):
             return "按比例计分的满分（full）必须是数"
+        if "full" in rule and rule["full"] < 0:   # P2-1579
+            return f"按比例计分的满分（full）不能小于 0（收到 {rule['full']}）：{_NEGATIVE_SCORE_WHY}"
         if rule.get("target") is not None and not _is_number(rule["target"]):
             return "按比例计分的目标值（target）必须是数"
         if rule.get("target") is not None and rule["target"] <= 0:
@@ -876,14 +881,20 @@ def score_rule_problem(rule: dict, *, known_type_only: bool = True) -> str:
     steps = rule.get("steps", [])
     if not isinstance(steps, list) or not all(isinstance(step, dict) for step in steps):
         return "分档计分的 steps 必须是分档列表"
-    for step in steps:
+    for index, step in enumerate(steps, start=1):
         if any(step.get(key) is not None and not _is_number(step[key]) for key in ("min", "max")):
             return "分档的上下限（min / max）必须是数，不设限留空"
         if step.get("min") is not None and step.get("max") is not None and step["min"] > step["max"]:
             return f"分档的下限 {step['min']} 大于上限 {step['max']}，这一档永远命中不了"   # P2-712
         if "score" in step and not _is_number(step["score"]):
             return "分档的分值（score）必须是数"
+        if "score" in step and step["score"] < 0:   # P2-1579
+            return f"分档的分值（score）不能小于 0（第 {index} 档收到 {step['score']}）：{_NEGATIVE_SCORE_WHY}"
     return ""
+
+
+#: 满分、分档分值不能是负数的理由（P2-1579）：得分按权重折算后累加进总分，负分就是倒扣，与负权重（P2-108）同一个毛病
+_NEGATIVE_SCORE_WHY = "负分按权重折算进总分就是倒扣分，扣分会超过这一项的权重"
 
 
 def step_overlap_problem(rule: dict) -> str:
@@ -918,7 +929,7 @@ def score_of(indicator: SpdIndicator, value: float) -> tuple[float, str]:
     """把指标值折成得分，返回 (得分, 扣分理由)。
 
     两种评分规则：
-    - `ratio`：达标即满分，未达标按比例给分（`full * value / target`）；
+    - `ratio`：达标即满分，未达标按比例给分（`full * value / target`，截在 0 与满分之间，指标值为负按 0 计——P2-1579）；
     - `step`：分档给分，取第一个命中的档。
 
     `ratio` 的目标以指标的 `target_value` 为准，指标没设目标值才看规则里的 `target`，都没有按 100（P2-104）。
@@ -936,10 +947,16 @@ def score_of(indicator: SpdIndicator, value: float) -> tuple[float, str]:
         target = float(preset) if preset is not None else 100.0   # 0 不再悄悄换成 100（P2-718，写入与计分前都挡了非正数）
         if value >= target:
             return full, ""
-        got = round(full * value / target, 2) if target else 0.0
         # 「实际」按判定用的精度印（P2-991，与公式求值同一个 4 位，P2-892）：原先印两位，分母上万时 89.9955 判未达 90、
         # 理由却写「未达目标值90.0（实际90.0）」，自相矛盾
-        return got, f"未达目标值{target}（实际{round(value, 4)}）"
+        reason = f"未达目标值{target}（实际{round(value, 4)}）"
+        if value < 0:
+            # 指标值为负按 0 计（P2-1579）：公式框写得出减法（「净完成率」`(done - (total - done)) / total * 100`），原先照
+            # `满分 × 实际 / 目标` 折成负分，扣分超过这一项的权重、把总分拉成负数；与负权重（P2-108）、基金分配算出负权重按 0 计
+            # （P2-191）同一个处理，未配置评分规则那一支本就截到 0~100
+            return 0.0, f"{reason}，指标值为负，按 0 计"
+        got = round(full * value / target, 2) if target else 0.0
+        return max(0.0, min(got, full)), reason   # 得分截在 [0, 满分] 里（P2-1579）
     if kind == "step":
         for step in rule.get("steps", []):
             low, high = step.get("min"), step.get("max")
