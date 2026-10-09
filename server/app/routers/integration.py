@@ -30,7 +30,7 @@ from typing import Any, cast
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.routing import APIRoute
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from starlette.concurrency import run_in_threadpool
 from sqlalchemy import String, case, func
 from sqlalchemy.orm import Session
@@ -616,6 +616,32 @@ def fhir_observation(
     )
 
 
+#: 随访指标字段的中文名，读数越界的 422 按字段说明（P2-1765）
+_FIELD_LABELS = {"sbp": "收缩压", "dbp": "舒张压", "glucose": "血糖"}
+#: pydantic 数值约束的错误类型 → 中文的界；界值取错误里带的 ctx，即 `FollowUpCreate` 自己声明的那一份（P2-1765）
+_BOUND_TEXTS = {"greater_than": "须大于 {gt:g}", "greater_than_equal": "须不小于 {ge:g}",
+                "less_than": "须小于 {lt:g}", "less_than_equal": "须不超过 {le:g}"}
+
+
+def _observation_value_problem(exc: ValidationError) -> str:
+    """观测值没过随访入参的校验（`FollowUpCreate`：收缩压 0～300、舒张压 0～200、血糖大于 0，P1-101）→ 中文的 422 detail，
+    逐项带字段与收到的值，如「收缩压（sbp）须不超过 300（收到 350）」（P2-1765，第五十二批扫描 AP2-13）。
+
+    原先 ValidationError 一路抛到 `_run_inbound` 的兜底，回执只有「消息解析失败，已记录交换日志」，真正的错因（pydantic 的
+    「Input should be less than or equal to 300」）只在交换日志里；同一函数别的分支（血糖单位认不出、收缩压不高于舒张压）
+    都回具体错因。不把 pydantic 原文抛给对接方，界值也不另写一套。"""
+    problems = []
+    for error in exc.errors():
+        field = str(error["loc"][0]) if error.get("loc") else ""
+        name = f"{_FIELD_LABELS[field]}（{field}）" if field in _FIELD_LABELS else field
+        template = _BOUND_TEXTS.get(error.get("type", ""))
+        bound = template.format(**(error.get("ctx") or {})) if template else "须为有效数值"
+        value = error.get("input")
+        problems.append(f"{name}{bound}（收到 {value:g}）" if isinstance(value, (int, float))
+                        else f"{name}{bound}（收到 {value}）")
+    return "；".join(problems)
+
+
 def _quantity_value(field: str, quantity: dict) -> float | None:
     """观测值折成随访字段的单位；没给数值返回 None。
 
@@ -697,9 +723,12 @@ def _do_fhir_observation(resource: dict, db: Session):
         chronic = chronics[disease]
         if chronic is None:
             continue
-        # `group` 是运行期按 LOINC 映射拼出来的字段字典，键名在类型上不可知；
-        # pydantic 会做校验，缺字段/多字段都会在这里报 422，不会静默走下去。
-        followup_in = FollowUpCreate(**cast(Any, group), guidance="HL7/FHIR 对接自动归档")
+        # `group` 是运行期按 LOINC 映射拼出来的字段字典，键名在类型上不可知；pydantic 做校验，不会静默走下去。
+        # 没过校验（读数越界）的转成按字段说明的 422（P2-1765，`_observation_value_problem`）
+        try:
+            followup_in = FollowUpCreate(**cast(Any, group), guidance="HL7/FHIR 对接自动归档")
+        except ValidationError as exc:
+            raise HTTPException(status_code=422, detail=_observation_value_problem(exc)) from None
         # 收缩压须高于舒张压（P2-1016，与界面录随访同一句）：设备把两项接反，原先照样定 3 级、改写档案分级
         problem = bp_order_problem(followup_in.sbp, followup_in.dbp)
         if problem:
