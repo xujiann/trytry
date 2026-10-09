@@ -5,8 +5,9 @@
 `cssd_medwaste_page.py`）：`document.querySelector` 按选择器给一个记得住 innerHTML / onsubmit / onclick 的对象；`spdModal`
 建的遮罩记下它的 HTML，`submitModal` 照浏览器的规矩交表（`<select>` 没有 selected 项时取第一项）。
 
-页面的请求经管道转给真接口（同 `test_materials_cssd_page_reach._run_page_fetch`）：GET 一律照发；写请求记下（方法、地址、
-请求体），缺省不发、回 `{}`，`send_writes=True` 时照发、把真回执（或报错）交回页面。`alert` 的文字记在 `alerts` 里。
+页面的请求经管道转给真接口（同 `test_materials_cssd_page_reach._run_page_fetch`）：GET 一律照发（带 `withTotal` 的连同
+X-Total-Count 一起交回，同 core.js 的 `api`，P2-1740）；写请求记下（方法、地址、请求体），缺省不发、回 `{}`，
+`send_writes=True` 时照发、把真回执（或报错）交回页面。`alert` 的文字记在 `alerts` 里。
 """
 import json
 import re
@@ -58,7 +59,7 @@ async function api(path, options = {}) {
   process.stdout.write(JSON.stringify({ method, path, body }) + "\n");
   const reply = JSON.parse((await lines.next()).value);
   if ("error" in reply) throw Object.assign(new Error(reply.error), { status: reply.status });
-  return reply.data;
+  return options.withTotal ? { rows: reply.data, total: reply.total } : reply.data;
 }
 function route() {}
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
@@ -178,7 +179,8 @@ def run(client, headers, role: str, steps: str, params: dict | None = None, *, s
             assert len(requests) <= 50, f"请求停不下来：{requests}"
             if message["method"] == "GET" or send_writes:
                 resp = client.request(message["method"], message["path"], json=message["body"], headers=headers)
-                reply = ({"data": resp.json()} if resp.status_code < 400
+                total = resp.headers.get("X-Total-Count")
+                reply = ({"data": resp.json(), "total": None if total is None else int(total)} if resp.status_code < 400
                          else {"error": _detail(resp), "status": resp.status_code})
             else:
                 reply = {"data": {}}

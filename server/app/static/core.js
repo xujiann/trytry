@@ -2493,12 +2493,19 @@ const RISK_LEVEL = { high: ["高危", "red"], medium: ["中危", "orange"], low:
 
 async function renderChronic() {
   $("#page-desc").textContent = "病种目录驱动分级规则与随访周期，3级建议上转；膳食运动指导要点自动嵌入";
-  const [chronicList, overdue, types] = await Promise.all([
+  const [{ rows: chronicList, total: chronicTotal }, overdue, types] = await Promise.all([
     // 目录改成**取全部**（不带 active）：停用的病种也要能在目录里看到并重新启用，
     // 而且在管名单里那些挂着停用病种的档案，病种名也才查得到。
     // 建档下拉仍只列启用的——后端对停用病种直接 422。
-    api("/api/chronic"), api("/api/chronic/overdue"), api("/api/chronic/disease-types"),
+    api("/api/chronic", { withTotal: true }), api("/api/chronic/overdue"), api("/api/chronic/disease-types"),
   ]);
+  // 在管名单按分级从高到低、档案号取，一页缺省 500 份（后端 `list_chronic`），原先不读总数、不提示截断（P2-1740）：过了 500 份，
+  // 排在后面的 1 级档案在页面上没有行，「风险评分」「随访记录」两个按钮够不着，标题里的超期人数却按全部算。读 X-Total-Count（同
+  // 签约页 P2-1547），列不全时标题写明；取数范围与翻页随 P1-49（名单给谁看）定，这里不动。没截断时标题一字不变
+  const listNotes = [
+    chronicTotal !== null && chronicList.length < chronicTotal ? `共 ${chronicTotal} 份，仅列前 ${chronicList.length} 份` : "",
+    overdue.length ? `<span style="color:#c62828">${overdue.length} 人随访超期</span>` : "",
+  ].filter(Boolean);
   DISEASES = Object.fromEntries(types.map((t) => [t.code, t.name]));
   // 指标名取自病种目录的分级规则（随访史里的「其他指标」按名字显示，目录里没有的键原样显示）
   const metricNames = Object.fromEntries(types.flatMap((t) => ((t.level_rules || {}).metrics || []).map((m) => [m.key, m.name])));
@@ -2555,7 +2562,7 @@ async function renderChronic() {
       <p class="desc">停用一个病种后<b>不能再按它建档</b>（后端 422），
         但已建的档案不受影响、仍按原规则随访——所以停用是"不再新增"，不是"作废存量"。
         建档下拉只列启用中的病种。</p>`)}
-    <div class="panel"><h3>在管名单${overdue.length ? `（<span style="color:#c62828">${overdue.length} 人随访超期</span>）` : ""}</h3>
+    <div class="panel"><h3>在管名单${listNotes.length ? `（${listNotes.join("；")}）` : ""}</h3>
       ${table(["档案ID", "患者", "病种", "分级", "下次随访", "随访状态", "操作"], chronicList, (c) =>
         `<tr><td>${c.id}</td><td>${c.patient_id}</td><td>${esc(DISEASES[c.disease] || c.disease)}</td>
          <td><span class="tag ${c.level === 3 ? "red" : c.level === 2 ? "orange" : "green"}">${c.level} 级</span></td>
