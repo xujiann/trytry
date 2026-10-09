@@ -616,6 +616,9 @@ class RxCommentOut(BaseModel):
     issues: str
     comment: str
     at: str
+    #: 点评人姓名（P2-1666，只在末尾加键）：原先 `reviewer_id` 只落库不出参，点评表看不出是谁评的。写法同规则改动记录的
+    #: `changed_by`：没填姓名的退回账号，账号已删的为空串
+    commented_by: str
 
 
 class RxCommentStatsOut(BaseModel):
@@ -663,6 +666,10 @@ def list_comment_reviews(grade: str | None = None, db: Session = Depends(get_db)
     q = db.query(PrescriptionComment)
     if grade:
         q = q.filter(PrescriptionComment.grade == grade)
+    rows = q.order_by(PrescriptionComment.id.desc()).limit(200).all()
+    # 点评人姓名按页一次取齐、不逐行查（P2-1666，同 `list_rule_changes` 的改动人）
+    user_ids = {c.reviewer_id for c in rows}
+    names = {u.id: u.full_name or u.username for u in db.query(User).filter(User.id.in_(user_ids))} if user_ids else {}
     return [
         {
             "id": c.id,
@@ -671,8 +678,9 @@ def list_comment_reviews(grade: str | None = None, db: Session = Depends(get_db)
             "issues": c.issues,
             "comment": c.comment,
             "at": c.created_at.isoformat(),
+            "commented_by": names.get(c.reviewer_id, ""),
         }
-        for c in q.order_by(PrescriptionComment.id.desc()).limit(200).all()
+        for c in rows
     ]
 
 

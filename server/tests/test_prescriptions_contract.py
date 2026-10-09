@@ -15,7 +15,7 @@
   （`round(x*100.0/n, 2)` 真除法与空分母兜底字面量 `0.0`）全是浮点——
   种子先在零点评时取一次 0.0，再造出 50.0，两条产地各钉一遍。
 - 停用与恢复回执同形（drug_code+active）共用一个模型；
-  点评回执（3 键）与点评清单行（6 键，`at` 为 ISO 串）分开建模。
+  点评回执（3 键）与点评清单行（7 键，`at` 为 ISO 串；末键 `commented_by` 是 P2-1666 加的）分开建模。
 """
 import pytest
 from fastapi.testclient import TestClient
@@ -36,7 +36,8 @@ REVIEW_POINT_ITEM_KEYS = [
     "dose_exceeded", "review_points", "renal_hepatic_note", "no_rule",
 ]
 COMMENT_CREATED_KEYS = ["id", "prescription_id", "grade"]
-COMMENT_KEYS = ["id", "prescription_id", "grade", "issues", "comment", "at"]
+# P2-1666 在末尾加了 commented_by（点评人姓名，只增不改）
+COMMENT_KEYS = ["id", "prescription_id", "grade", "issues", "comment", "at", "commented_by"]
 COMMENT_STATS_KEYS = ["commented", "unreasonable", "reasonable_rate_pct"]
 
 
@@ -244,10 +245,10 @@ def test_点评清单精确_过滤(client, admin, seed):
     assert [list(r.keys()) for r in rows] == [COMMENT_KEYS] * 2  # id 倒序
     assert rows == [
         {"id": seed["comment2"]["id"], "prescription_id": seed["rx2"]["id"],
-         "grade": "reasonable", "issues": "", "comment": "", "at": rows[0]["at"]},
+         "grade": "reasonable", "issues": "", "comment": "", "at": rows[0]["at"], "commented_by": "rxct_pha"},
         {"id": seed["comment1"]["id"], "prescription_id": seed["rx1"]["id"],
          "grade": "unreasonable", "issues": "用法用量不适宜", "comment": "日剂量超上限",
-         "at": rows[1]["at"]},
+         "at": rows[1]["at"], "commented_by": "rxct_pha"},   # 没填姓名的退回账号
     ]
     assert isinstance(rows[0]["at"], str)
     assert client.get(

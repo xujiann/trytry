@@ -2051,10 +2051,11 @@ async function renderRx() {
         <div class="card"><div class="label">已点评处方</div><div class="value">${cstats.commented}</div></div>
         <div class="card"><div class="label">不合理处方</div><div class="value${cstats.unreasonable ? " warn" : ""}">${cstats.unreasonable}</div></div>
         <div class="card"><div class="label">点评合理率</div><div class="value">${cstats.reasonable_rate_pct}%</div></div></div>
-      ${table(["处方ID", "结论", "问题类型", "点评意见", "时间"], creviews, (c) =>
+      ${table(["处方ID", "结论", "问题类型", "点评意见", "点评人", "时间"], creviews, (c) =>
         `<tr><td>${c.prescription_id}</td>
          <td><span class="tag ${c.grade === "reasonable" ? "green" : "red"}">${c.grade === "reasonable" ? "合理" : "不合理"}</span></td>
-         <td>${esc(c.issues) || "—"}</td><td>${esc(c.comment) || "—"}</td><td>${esc(c.at.slice(0, 16).replace("T", " "))}</td></tr>`)}`)}`;
+         <td>${esc(c.issues) || "—"}</td><td>${esc(c.comment) || "—"}</td>
+         <td>${esc(c.commented_by) || "—"}</td><td>${esc(c.at.slice(0, 16).replace("T", " "))}</td></tr>`)}`)}`;
   // 「添加一行」「删除本行」（P2-1214）：只剩一行时不摆「删除本行」——处方至少一味药（后端 `items` 至少一项），
   // 删空了这张方交不出去（用不了的按钮不摆，同问卷异常规则编辑器的「添加」）
   const rxRows = $("#rx-items");
