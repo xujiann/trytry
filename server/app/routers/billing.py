@@ -45,7 +45,16 @@ from ..visibility import (
     scope_patient_list,
 )
 from ..database import get_db
-from ..deps import get_current_user, paginate, require_admin, require_date, require_roles, row_dict, rows_by_id
+from ..deps import (
+    get_current_user,
+    paginate,
+    require_admin,
+    require_date,
+    require_roles,
+    row_dict,
+    rows_by_id,
+    through_day,
+)
 from ..models import (
     Admission,
     BillDetail,
@@ -1182,10 +1191,16 @@ class MockGateway:
             return {"success": False, "refund_no": "", "message": "通道返回退款失败（演示）"}
         return {"success": True, "refund_no": f"RF{trade_no[-10:]}", "message": ""}
 
-    def query_transactions(self, db: Session, date: str) -> list[dict]:
-        """通道日流水：默认镜像本地当日已支付单（净额=支付额-退款额），叠加可控差异。"""
+    def query_transactions(
+        self, db: Session, date: str, *, orders: list[PaymentOrder] | None = None
+    ) -> list[dict]:
+        """通道日流水：默认镜像本地当日已支付单（净额=支付额-退款额），叠加可控差异。
+
+        `orders` 是调用方已取出的当日本地单（`_orders_of_day` 的结果）：日终对账本地侧刚取过同一批，镜像它即可，
+        不再重查一遍（P2-1577）。不传照旧自己取。只加在 Mock 上，`PaymentGateway` 协议不变。
+        """
         rows = []
-        for order in _orders_of_day(db, date):
+        for order in _orders_of_day(db, date) if orders is None else orders:
             if order.trade_no in self.drop_trade_nos:
                 continue
             amount = self.amount_overrides.get(
@@ -1264,15 +1279,24 @@ register_http_gateway()
 
 
 def _orders_of_day(db: Session, date: str) -> list[PaymentOrder]:
-    """当日已支付/已退款且有流水号的支付单（对账本地侧口径）。"""
-    return [
-        o
-        for o in db.query(PaymentOrder)
-        .filter(PaymentOrder.status.in_(["paid", "refunded"]), PaymentOrder.trade_no != "")
+    """当日已支付/已退款且有流水号的支付单（对账本地侧口径），按 id 排。`date` 须已校验（`require_date`）。
+
+    「当日」= `paid_at` 落在 `[该日 00:00:00, 次日 00:00:00)`，条件在 SQL 里、走 `paid_at` 上的索引（P2-1577）。原先 SQL
+    只按状态与流水号取、整表读进内存，再在 Python 里按 `paid_at.strftime("%Y-%m-%d") == date` 筛，Mock 通道出流水又调一遍：
+    3650 张已支付单里对一天（10 张）对账，实例化 7290 个支付单，存量越大越慢。日界一格没动——比的仍是 naive UTC 时间戳的
+    UTC 日期（对账的日该切在 UTC 还是本地日历是 P2-35，待裁定）；右界走 `through_day`，9999-12-31 没有次日即不设上界。
+    """
+    return (
+        db.query(PaymentOrder)
+        .filter(
+            PaymentOrder.status.in_(["paid", "refunded"]),
+            PaymentOrder.trade_no != "",
+            PaymentOrder.paid_at >= f"{date} 00:00:00",
+            through_day(PaymentOrder.paid_at, date),
+        )
         .order_by(PaymentOrder.id)
         .all()
-        if o.paid_at and o.paid_at.strftime("%Y-%m-%d") == date
-    ]
+    )
 
 
 def _payment_out(o: PaymentOrder) -> dict:
@@ -1939,7 +1963,11 @@ def run_reconciliation(
     # 通道流水：注册了 HTTP 网关时拉真通道流水（GET /transactions?date=），
     # 否则仍为 Mock 本地镜像；Mock 实现下各渠道共用同一份日流水。
     try:
-        remote_rows = gateway.query_transactions(db, date)
+        if isinstance(gateway, MockGateway):
+            # Mock 的日流水就是本地当日单的镜像：镜像上面已取出的这一批，不再按日期重查一遍（P2-1577）
+            remote_rows = gateway.query_transactions(db, date, orders=day_orders)
+        else:
+            remote_rows = gateway.query_transactions(db, date)
     except RuntimeError as exc:
         # 拉不到流水必须中止：空流水会把当日全部本地单误判成"通道缺失"
         raise HTTPException(status_code=502, detail=str(exc)) from None
