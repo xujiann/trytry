@@ -34,6 +34,7 @@ from sqlalchemy.orm import Session
 from .. import clock
 from ..database import get_db
 from ..datetypes import check_date
+from ..pii import PII_PREFIX, EncryptedPII, looks_like_ciphertext
 from ..texttypes import NON_BLANK, normalize_gender
 from ..deps import get_current_user, paginate, require_roles
 from ..models import (
@@ -378,6 +379,10 @@ def list_consent_texts(
 #: 更正落库的两处列宽（P2-1047）：姓名审批通过时写进 `patients.name`，整份更正内容序列化后写进 `correction_requests.changes`
 PATIENT_NAME_MAX = cast(String, Patient.__table__.c.name.type).length or 64
 CORRECTION_CHANGES_MAX = cast(String, CorrectionRequest.__table__.c.changes.type).length or 1024
+#: 可更正字段里的加密列（P2-1723）：按列类型 `EncryptedPII` 推导（现只有电话），与建档、入站、ORM 兜底同一份判据
+ENCRYPTED_CORRECTABLE_FIELDS = frozenset(
+    field for field in CORRECTABLE_FIELDS if isinstance(Patient.__table__.c[field].type, EncryptedPII)
+)
 
 
 def _check_correction_value(field: str, value: str) -> None:
@@ -387,6 +392,8 @@ def _check_correction_value(field: str, value: str) -> None:
     更正内容是 `dict[str, str]`，请求体日期字段的棘轮看不见字典里的值，所以在这里单独卡（P1-61）。
     姓名与建档同一个上限（P2-1047）：长度闸门同样看不见字典里的值，83 字的新姓名原先照收，主任点「通过」时写进
     `patients.name`（64）在生产库上 500，申请永远卡在待审。电话的上限随 P1-61 / 加密列容量一并定，这里不另起口径。
+    加密列不收以密文前缀开头的新值（P2-1723）：`EncryptedPII` 见前缀就当密文、读出解不开就抛，电话改成 `pii1$abc`
+    原先提交 201、审批 200，此后这位患者的详情、360 视图全部 500，再提更正也改不回来（审批第一步取档就抛）。
     """
     if field == "birth_date":
         check_date(value)
@@ -397,6 +404,8 @@ def _check_correction_value(field: str, value: str) -> None:
     # 性别与建档同一口径（P2-941）：原先「女性」审批通过即落库，区域结构、审方、FHIR 出站都认不得
     if field == "gender" and normalize_gender(value) is None:
         raise ValueError(f"性别（{value}）只能是 男 / 女 / 未知")
+    if field in ENCRYPTED_CORRECTABLE_FIELDS and looks_like_ciphertext(value):
+        raise ValueError(f"不得以 {PII_PREFIX} 开头（这是加密存储的密文前缀，请按号码原样填写）")
 
 
 def validate_correction_changes(request_type: str, changes: dict[str, str]) -> str:

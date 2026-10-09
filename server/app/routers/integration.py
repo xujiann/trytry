@@ -59,6 +59,7 @@ from ..models import (
     Ward,
     utcnow,
 )
+from ..pii import PII_PREFIX, looks_like_ciphertext
 from ..privacy import desensitize, mask_id_card, mask_phone
 from ..schemas import EncounterCreate, ExamReportCreate, FollowUpCreate, PatientOut
 from ..texttypes import NON_BLANK, normalize_gender
@@ -337,6 +338,8 @@ def parse_hl7v2_patient(message: str, *, any_event: bool = False) -> tuple[dict,
         raise HTTPException(status_code=422, detail="PID-3 身份证号缺失或格式不正确")
     if not name:
         raise HTTPException(status_code=422, detail="PID-5 患者姓名缺失")
+    _refuse_ciphertext("PID-3 身份证号", id_card)   # 解析即拒、早于任何写库（P2-1723）
+    _refuse_ciphertext("PID-13 联系电话", phone)
 
     birth_date = ""
     if len(birth_raw) >= 8 and birth_raw[:8].isdigit():
@@ -370,6 +373,17 @@ def _pid5_name(raw: str) -> str:
     组件是名称类型码）成了「张三L」，`张三~ZHANG^SAN` 成了「张三~ZHANGSAN」——A08 照此覆盖主索引姓名，居民按姓名实名绑定就找不到档案。"""
     parts = raw.split("~")[0].split("^")
     return _hl7_unescape("".join(part.strip() for part in parts[:3])).strip()
+
+
+def _refuse_ciphertext(label: str, value: object) -> None:
+    """入站的证件号 / 电话以密文前缀 `pii1$` 开头的，按解析失败 422 拒收（P2-1723）。
+
+    两列都是加密列（`EncryptedPII`），见前缀就当密文：写入直通、读出解密，解不开就抛。原先 A08 拿 PID-13 的 `pii1$x`
+    先覆盖、提交，回读时才抛——回执 422「消息解析失败」，覆盖却已经提交，这位患者的清单、取档、360 视图从此 500，再推一条
+    正常电话的 A08 也修不回来（取档那一步就抛）；A04 / A01、简化建档、FHIR 与 ESB 的建档同样落得进去。放在解析函数里，
+    入站接口与 ESB 编排共用、拒在任何写库之前。detail 不带原值（交换日志任一机构的经办都读得到）。"""
+    if looks_like_ciphertext(value):
+        raise HTTPException(status_code=422, detail=f"{label}不得以 {PII_PREFIX} 开头（这是加密存储的密文前缀）")
 
 
 def _pid13_phone(raw: str) -> str:
@@ -482,6 +496,8 @@ def parse_fhir_patient(resource: dict) -> dict:
         if telecom.get("system") == "phone" and telecom.get("value"):
             phone = telecom["value"]
             break
+    _refuse_ciphertext("identifier 身份证号", id_card)   # 同 PID-3 / PID-13，解析即拒（P2-1723）
+    _refuse_ciphertext("telecom 电话", phone)
 
     # 性别同 PID-8（P2-1078）：原先只认全小写的 male / female，Male、FEMALE 都成了「未知」
     raw_gender = resource.get("gender")

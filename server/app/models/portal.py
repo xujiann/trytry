@@ -16,10 +16,10 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, validates
 
 from ..database import Base
-from ..pii import EncryptedPII, register_pii_index_sync
+from ..pii import PII_PREFIX, EncryptedPII, looks_like_ciphertext, register_pii_index_sync
 from ._base import utcnow
 
 
@@ -72,6 +72,14 @@ class ResidentAccount(Base):
     phone_idx: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    @validates("phone")
+    def _refuse_ciphertext_prefix(self, key: str, value: str | None) -> str | None:
+        """加密列经 ORM 赋值时不收以密文前缀开头的明文（P2-1723，与 `Patient` 同一句兜底）：居民端写手机号的入口
+        已按手机号格式卡过，这里挡脚本与以后漏网的写入口；回填脚本经 SQL 写密文，不受影响。报错不带原值（PII）。"""
+        if looks_like_ciphertext(value):
+            raise ValueError(f"ResidentAccount.{key} 不得以 {PII_PREFIX} 开头（这是加密存储的密文前缀，业务写入只收明文）")
+        return value
 
 
 register_pii_index_sync(ResidentAccount, ("phone", "phone_idx"))

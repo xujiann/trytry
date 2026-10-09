@@ -16,10 +16,10 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
 from ..database import Base
-from ..pii import EncryptedPII, register_pii_index_sync
+from ..pii import PII_PREFIX, EncryptedPII, looks_like_ciphertext, register_pii_index_sync
 from ._base import utcnow
 
 
@@ -183,6 +183,18 @@ class Patient(Base):
     # 既有业务历史（就诊、账单等按 patient_id 关联的记录）照常可查。
     deactivated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    @validates("id_card", "phone")
+    def _refuse_ciphertext_prefix(self, key: str, value: str) -> str:
+        """加密列经 ORM 赋值时不收以密文前缀开头的明文（P2-1723）——业务入口各自 422 之外的兜底。
+
+        `EncryptedPII` 见前缀就当密文：写入直通、读出解密，解不开就抛，这一行从此在清单、取档、360 视图里全部 500。
+        建档、档案更正、HL7 / FHIR 入站已在入口拒收；这里挡的是脚本（存量导入）与以后漏网的写入口：抛 ValueError、
+        不落库。回填脚本经 SQL 写密文，不走 ORM，不受影响。报错不带原值（PII）。
+        """
+        if looks_like_ciphertext(value):
+            raise ValueError(f"Patient.{key} 不得以 {PII_PREFIX} 开头（这是加密存储的密文前缀，业务写入只收明文）")
+        return value
 
 
 # 写入侧自动维护检索索引列（建档/HL7 更新/居民端回填等全部写入点一处覆盖）

@@ -4,6 +4,7 @@ from typing import Annotated
 from pydantic import AfterValidator, BaseModel, BeforeValidator, Field, FiniteFloat
 from .datetypes import DateStr, OptionalDateStr
 from .numtypes import INT4_MAX
+from .pii import PII_PREFIX, looks_like_ciphertext
 from .texttypes import NON_BLANK, normalize_gender, split_list
 
 
@@ -48,14 +49,23 @@ def _gender_input(value: object) -> object:
     return normalized
 
 
+def _not_ciphertext(value: str) -> str:
+    """证件号、电话不收以密文前缀 `pii1$` 开头的值（P2-1723）：两列都是加密列（`EncryptedPII`），见前缀就当密文——写入
+    直通、读出解密，解不开就抛。原先建档电话填 `pii1$1380…` 回 500 但这一行已经提交，之后患者清单、按卡号取档、360 视图
+    全部 500，任何接口都改不回来。正常号码不会这么写，在建档之前 422。"""
+    if looks_like_ciphertext(value):
+        raise ValueError(f"不得以 {PII_PREFIX} 开头（这是加密存储的密文前缀，请按证件 / 号码原样填写）")
+    return value
+
+
 class PatientCreate(BaseModel):
     name: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
-    id_card: str = Field(min_length=15, max_length=18, pattern=NON_BLANK)
+    id_card: Annotated[str, AfterValidator(_not_ciphertext)] = Field(min_length=15, max_length=18, pattern=NON_BLANK)
     gender: Annotated[str, BeforeValidator(_gender_input)] = "未知"
     # 年龄全靠它现算（审方的儿童/老年规则、未满 14 周岁须监护人、慢专病的年龄纳入规则），
     # 算不出的一律当"不知道"放过：`2016/03/05` 建档的 10 岁孩子登记知情同意不要监护人（P1-61，实测）
     birth_date: OptionalDateStr = ""
-    phone: str = ""
+    phone: Annotated[str, AfterValidator(_not_ciphertext)] = ""
 
 
 class PatientOut(PatientCreate):
@@ -70,6 +80,8 @@ class PatientOut(PatientCreate):
     # 患者列表对所有人 500，入站接口自己也回 422 却已建档（P1-65，实测）
     name: str
     id_card: str
+    # 出参不带入参的密文前缀校验（P2-1723）：只挡写入，读出照原样
+    phone: str = ""
 
     model_config = {"from_attributes": True}
 

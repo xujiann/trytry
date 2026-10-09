@@ -76,6 +76,7 @@ from .config import settings
 
 __all__ = [
     "PII_PREFIX",
+    "looks_like_ciphertext",
     "encrypt_pii",
     "decrypt_pii",
     "pii_index",
@@ -86,6 +87,18 @@ __all__ = [
 ]
 
 PII_PREFIX = "pii1$"
+
+
+def looks_like_ciphertext(value: object) -> bool:
+    """值以密文前缀 ``pii1$`` 开头——`EncryptedPII` 会把它当成密文（P2-1723）。纯判定：不解密、不查库。
+
+    `EncryptedPII` 认前缀不认来历：写入时前缀值直通落库（留给回填脚本经 SQL 写入），读出时一律解密、解不开就抛。
+    于是一个以 ``pii1$`` 开头的**明文**电话 / 证件号一旦经业务入口写进去，这一行在清单、按卡号取档、360 视图里
+    全部 500，任何接口都改不回来（取档那一步就抛），加密开关开、关两态一样。正常的证件号、电话不会这么写：
+    业务写入口（建档、档案更正、HL7 / FHIR 入站）与 ORM 赋值兜底都拿它拒收；加解密本身不动（读出侧遇坏密文
+    要不要降级另议，P2-1749）。与 `EncryptedPII` 同一个判据（区分大小写、只看开头），前后带空白的不算。
+    """
+    return isinstance(value, str) and value.startswith(PII_PREFIX)
 
 
 def _enc_key(secret: str | None = None) -> bytes:
