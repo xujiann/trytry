@@ -10,7 +10,7 @@
 import zlib
 from contextlib import AbstractContextManager, nullcontext
 from datetime import date, timedelta
-from typing import Any, cast
+from typing import Any, NamedTuple, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -53,7 +53,7 @@ from ..models import (
     SpdTask,
 )
 from ..reporting import compose_section, default_period_label
-from ..rules import RuleError, as_validated, grade_abnormal
+from ..rules import RuleError, abnormal_hits, as_validated
 from ..service import (CALL_SETTLEABLE_STATUSES, FOLLOWUP_OPEN_STATUSES, REVISIT_OPEN_STATUSES, adjust_followup_record,
                        close_followup_record,
                        followup_abnormal, answers_problem, followup_overdue, note_call_dispatch_failure,
@@ -87,6 +87,41 @@ ABNORMAL_LEVEL_NAMES = {"none": "无异常", "low": "轻度", "mid": "中度", "
 #: 平台 `admissions.status` → 中文：措辞与平台住院页一致（该页的文案表还在前端，平台出参尚未带文案）。
 #: 随访前置资料的住院一栏原先把英文状态码原样显示。
 ADMISSION_STATUS_NAMES = {"admitted": "在院", "discharged": "已出院"}
+
+
+class AbnormalOutcome(NamedTuple):
+    """随访问卷作答的判级结果（P2-1635），医护执行与居民自助作答共用 `abnormal_outcome`。"""
+
+    #: 命中的最高级别；一条没命中是 none
+    level: str
+    #: 回执与居民端提示：最高级别各条的处置措施以「；」合并（同级按书写顺序）；没写措施的规则不列，都没写是空串
+    action: str
+    #: 处置任务标题里的处置措施：同 `action`；都没写措施时是「重度异常」这样的级别名
+    headline: str
+    #: 命中明细（含低级别），一条一行、带级别；命中多于一条时写进处置任务的 `form`
+    lines: list[str]
+
+
+def abnormal_outcome(rules: list[dict], answers: dict) -> AbnormalOutcome:
+    """按问卷的异常规则判级，并列出命中的处置措施（P2-1635）。
+
+    原先取 `grade_abnormal` 的一条：同级不替换，命中两条重度时处置任务标题只带先写的那条的措施——规则换个书写顺序，
+    派出的就从「胸痛：立即120转上级医院」变成「切口渗液：安排返院清创」，另一条一字不提；命中的中度那条（「发热：24小时
+    内回访」）两种顺序都丢。作答在页面上看不到（P2-698），任务标题是唯一的交接内容。
+
+    现在标题、回执与居民端提示取**最高级别各条合并**（同级按书写顺序）；命中的全部规则（含低一级的）只逐条写进处置
+    任务的 `form`。低一级的不进回执：同一道题分档写的规则（收缩压 ≥180 重度「立即上转评估」、≥160 中度「两周内复诊调整
+    用药」）190 两档都命中，把「两周内复诊」拼进回执就与重度的处置自相矛盾。最高级别只命中一条时与原先一字不差：标题、
+    回执照旧；只命中一条时 `form` 也不写。
+    """
+    hits = abnormal_hits(rules, answers)
+    if not hits:
+        return AbnormalOutcome("none", "", "", [])
+    level = hits[0][0]
+    named = [(lv, str(act) if act else "") for lv, act in hits]
+    top = "；".join(act for lv, act in named if lv == level and act)
+    lines = [f"{ABNORMAL_LEVEL_NAMES.get(lv, lv)}异常" + (f"：{act}" if act else "") for lv, act in named]
+    return AbnormalOutcome(level, top, top or f"{ABNORMAL_LEVEL_NAMES.get(level, level)}异常", lines)
 
 
 # ============================================================ 响应契约
@@ -1084,10 +1119,10 @@ def execute_followup(
         record.answers = body.answers
         action = ""
         if questionnaire is not None:
-            level, action = grade_abnormal(questionnaire.abnormal_rules or [], body.answers)
-            record.abnormal_level = level
-            spawn_followup_abnormal_task(
-                db, record, level, f"随访异常处置：{action or ABNORMAL_LEVEL_NAMES.get(level, level) + '异常'}")
+            # 最高级别的各条措施进标题与回执、命中的全部进处置任务的 form（P2-1635）：原先只带同级先写的那一条
+            outcome = abnormal_outcome(questionnaire.abnormal_rules or [], body.answers)
+            record.abnormal_level, action = outcome.level, outcome.action
+            spawn_followup_abnormal_task(db, record, outcome.level, f"随访异常处置：{outcome.headline}", outcome.lines)
         db.commit()
     out = _record_out(record)
     out["action"] = action

@@ -464,15 +464,19 @@ def is_suspect_risk(risk_level: str) -> bool:
     return risk_level in SUSPECT_RISK_LEVELS
 
 
-def grade_abnormal(rules: list[dict], answers: dict) -> tuple[str, str]:
-    """随访问卷异常分级：返回 (级别, 处置措施)，取命中的最高级别。
+#: 随访问卷异常级别序：none < low < mid < high（none 是「没命中」；表外的级别同 none，不算命中）
+_ABNORMAL_ORDER = {"none": 0, "low": 1, "mid": 2, "high": 3}
 
-    级别序 none < low < mid < high。命中多条时取最重的那条，
-    而不是最后一条——规则的书写顺序不该决定病人的分级。
+
+def abnormal_hits(rules: list[dict], answers: dict) -> list[tuple[str, Any]]:
+    """随访问卷命中的**全部**异常规则：[(级别, 处置措施), …]，先按级别降序、同级按书写顺序（P2-1635）。
+
+    `grade_abnormal` 只回一条：同级不替换，命中两条重度时只剩先写的那条的处置措施——处置任务标题只带它，规则换个
+    书写顺序派出的内容就变（「胸痛：立即120」与「切口渗液：返院清创」谁先写谁上任务），命中的中度那条两种顺序都丢。
+    分级仍是最高的那一级（列表第一条），与 `grade_abnormal` 同一个判法；处置措施原样（存量里可能不是文本），调用方拼。
     """
-    order = {"none": 0, "low": 1, "mid": 2, "high": 3}
-    best_level, best_action = "none", ""
-    for rule in rules or []:
+    hits: list[tuple[int, int, str, Any]] = []
+    for seq, rule in enumerate(rules or []):
         cond = rule.get("when") or {}
         if not cond:
             continue
@@ -480,6 +484,17 @@ def grade_abnormal(rules: list[dict], answers: dict) -> tuple[str, str]:
         if not hit:
             continue
         level = rule.get("level", "low")
-        if order.get(level, 0) > order.get(best_level, 0):
-            best_level, best_action = level, rule.get("action", "")
-    return best_level, best_action
+        if _ABNORMAL_ORDER.get(level, 0) > 0:
+            hits.append((-_ABNORMAL_ORDER[level], seq, level, rule.get("action", "")))
+    return [(level, action) for _, _, level, action in sorted(hits, key=lambda h: (h[0], h[1]))]
+
+
+def grade_abnormal(rules: list[dict], answers: dict) -> tuple[str, str]:
+    """随访问卷异常分级：返回 (级别, 处置措施)，取命中的最高级别。
+
+    级别序 none < low < mid < high。命中多条时取最重的那条，
+    而不是最后一条——规则的书写顺序不该决定病人的分级。
+    同级的只回先写的那条；要命中的全部处置措施用 `abnormal_hits`（P2-1635）。
+    """
+    hits = abnormal_hits(rules, answers)
+    return hits[0] if hits else ("none", "")

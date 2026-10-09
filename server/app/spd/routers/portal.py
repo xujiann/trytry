@@ -58,7 +58,7 @@ from ..service import (ENROLL_STATUS_LABELS, ENROLLMENT_PAUSED_STATUSES, SCALE_A
                        exclusion_problem, feedback_appended, scale_program_mismatch, scale_unusable,
                        scale_version_problem,
                        spawn_followup_abnormal_task, touch_device_sync, unknown_program)
-from .followup import ABNORMAL_LEVEL_NAMES, FOLLOWUP_SCENE_NAMES
+from .followup import ABNORMAL_LEVEL_NAMES, FOLLOWUP_SCENE_NAMES, abnormal_outcome
 from fastapi import File, Form, UploadFile
 
 from ..platform import (
@@ -1167,8 +1167,6 @@ def self_answer_followup(
     db: Session = Depends(get_db),
 ):
     """线上自助随访作答。异常分级与派单逻辑与医护执行时完全一致。"""
-    from ..rules import grade_abnormal
-
     patient = _patient(db, account, body.patient_id, resource=None)  # 写走 AuditLog
     record = db.get(SpdFollowupRecord, record_id)
     if record is None or record.patient_id != patient.id:
@@ -1199,10 +1197,10 @@ def self_answer_followup(
     record.executed_at = clock.today().isoformat()
     action = ""
     if questionnaire is not None:
-        level, action = grade_abnormal(questionnaire.abnormal_rules or [], body.answers)
-        record.abnormal_level = level
-        spawn_followup_abnormal_task(
-            db, record, level, f"自助随访异常处置：{action or ABNORMAL_LEVEL_NAMES.get(level, level) + '异常'}")
+        # 与医护执行同一个判级（P2-1635）：手机上的提示列最高级别的各条措施，命中的全部进处置任务的 form
+        outcome = abnormal_outcome(questionnaire.abnormal_rules or [], body.answers)
+        record.abnormal_level, action = outcome.level, outcome.action
+        spawn_followup_abnormal_task(db, record, outcome.level, f"自助随访异常处置：{outcome.headline}", outcome.lines)
     db.commit()
     return {"id": record.id, "abnormal_level": record.abnormal_level,
             "abnormal_level_name": ABNORMAL_LEVEL_NAMES.get(record.abnormal_level, record.abnormal_level),

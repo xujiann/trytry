@@ -887,7 +887,9 @@ def feedback_appended(current: str | None, text: str, limit: int = 512) -> str:
     return merged[-limit:]
 
 
-def spawn_followup_abnormal_task(db: Session, record: SpdFollowupRecord, level: str, title: str) -> SpdTask | None:
+def spawn_followup_abnormal_task(
+    db: Session, record: SpdFollowupRecord, level: str, title: str, hits: list[str] | None = None,
+) -> SpdTask | None:
     """随访答卷命中中度 / 重度异常时派一条处置任务；医护执行与居民自助作答共用这一处（P2-131）。
 
     原先两条通道各写一份：居民那份不挂纳管档案、重度中度一律次日到期，而它的说明写着「异常分级与派单逻辑与医护
@@ -901,6 +903,11 @@ def spawn_followup_abnormal_task(db: Session, record: SpdFollowupRecord, level: 
     不落主管医生、不落团队，处置任务停在待接收、谁的待办里都没有；预置问卷的处置动作写的正是「通知主管医师」「立即联系
     手术医师」。重度异常另给责任人发一条站内消息（与催办同一个 `notify_user`）：居民自助作答的重度异常，原先要等有人去
     翻任务中心才看得见。
+
+    `hits` 是命中的全部异常规则（一条一行、带级别，`followup.abnormal_outcome` 拼好）：多于一条时写进任务的 `form`
+    （P2-1635）。标题列 128 字只放得下最高级别的措施，原先命中两条重度只带先写的那条、中度的一条不带；`form` 是任务的
+    JSON 列，办理（提交 / 办结写的是 `result`）不会盖掉它，任务详情页的「表单」一栏照原样显示。只命中一条的不写，任务与
+    原先一字不差。
     """
     if level not in FOLLOWUP_ABNORMAL_LEVELS:
         return None
@@ -910,6 +917,8 @@ def spawn_followup_abnormal_task(db: Session, record: SpdFollowupRecord, level: 
         enrollment=enrollment, org_id=record.org_id, due_days=1 if level == "high" else 3,
         priority=3 if level == "high" else 2, source="followup",
     )
+    if hits and len(hits) > 1:
+        task.form = {"abnormal_actions": list(hits)}
     if level == "high" and task.assignee_id is not None:
         notify_user(
             db, task.assignee_id, category="spd_task", title=SEVERE_ABNORMAL_NOTICE,
