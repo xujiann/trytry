@@ -1146,9 +1146,10 @@ async function renderSpdCenter() {
          <td>${esc(a.note || "—")}</td><td>${spdTag(SPD_APPLY_STATUS, a.status)}</td>
          <td>${esc(a.created_at || "")}</td>
          <td>${a.status === "pending"
-           // 病种已停用的只能驳回（P2-796，后端 409「……只能驳回」）：`acceptable` 由后端按受理的同一判据现算
+           // 病种已停用的只能驳回（P2-796，后端 409「……只能驳回」）：`acceptable` 由后端按受理的同一判据现算。命中病种排除规则的
+           // 同样只能驳回（P2-1575）：病种还在用（目录带启用标志）却不能受理，就是命中了排除规则，照受理 409 的说法写
            ? `${a.acceptable ? `<button class="btn secondary" data-apply="${a.id}" data-decision="accepted">受理</button>`
-               : '<span class="desc">病种已停用，只能驳回</span>'}
+               : `<span class="desc">${catalog.programs.some((p) => p.code === a.program_code && p.active) ? "按病种规则不纳入" : "病种已停用"}，只能驳回</span>`}
               <button class="btn secondary" data-apply="${a.id}" data-decision="rejected">拒绝</button>`
            : esc(a.handle_note || "—")}</td></tr>`)}`)}
     ${panel("召回跟进", `

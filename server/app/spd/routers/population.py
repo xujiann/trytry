@@ -366,7 +366,8 @@ class ServiceApplyOut(BaseModel):
     birth_date: str | None = None
     ehc_no: str | None = None
     phone: str | None = None
-    #: 待受理的这一条现在能不能受理（P2-796）：病种已停用 / 不在目录里的只能驳回（`handle_service_apply` 同一判据，P2-762）
+    #: 待受理的这一条现在能不能受理（P2-796）：病种已停用 / 不在目录里的只能驳回（`handle_service_apply` 同一判据，P2-762）；
+    #: 命中病种排除规则的同样只能驳回（P2-935 / P2-1575）
     acceptable: bool = False
 
 
@@ -2303,12 +2304,18 @@ def list_service_applies(
     briefs = _patient_brief(db, [r.patient_id for r in rows])
     # 受理按钮按 `acceptable` 摆（P2-796）：病种停用后页面原先照给「受理」，点了 409「……只能驳回」
     problems = {code: unknown_program(db, code, active_only=True) for code in {r.program_code for r in rows}}
+    # 命中病种排除规则的同样只能驳回（P2-1575，受理按 P2-935 判它）：清单原先只看病种停用——P2-935 之前递交的申请、档案事实后来
+    # 变了的（补了出生日期、新出 E10），页面照画「受理」、点下去 409。只对待受理、病种在用的现算，与受理同一判据
+    programs = {p.code: p for p in db.query(SpdProgram).filter(
+        SpdProgram.code.in_([code for code, problem in problems.items() if not problem] or [""]))}
+    excluded = {r.id for r in rows if r.status == "pending" and r.program_code in programs
+                and exclusion_problem(db, r.patient_id, programs[r.program_code])}
     return [
         {"id": r.id, "patient_id": r.patient_id, "program_code": r.program_code,
          "note": r.note, "status": r.status, "handle_note": r.handle_note,
          "created_at": r.created_at.isoformat(),
          **(briefs.get(r.patient_id) or {}),
-         "acceptable": r.status == "pending" and not problems[r.program_code]}
+         "acceptable": r.status == "pending" and not problems[r.program_code] and r.id not in excluded}
         for r in rows
     ]
 
