@@ -728,6 +728,7 @@ def expiring_drug_batches(
     days: int = Query(default=90, ge=1, le=3650),
     org_id: int | None = None,
     today: str | None = None,
+    expired: bool | None = None,
     offset: int = 0,
     limit: int = 500,
     db: Session = Depends(get_db),
@@ -758,6 +759,13 @@ def expiring_drug_batches(
     （退回本批次但已不可发的量）。两者不一致——本端点可能把"库房里还有、但一片也发不出去"
     的批次也列进预警。**这是另一件事**：改谓词会改返回集合，属口径变更而非分页整改，
     已登记进 `docs/TECH_DEBT.md`，别在这里顺手动它。
+
+    **可选 `expired` 把已过期的分开取（P2-1672）**：同一个道理换了一端。已过期（或召回封存）而仍有余量的批次
+    没有出口（报废另议，见 P1-159），只增不减，又按效期升序永远排在最前——县里几年累积过了 500 条，
+    缺省一页就全是已过期的行，20 天后到期的批次不在页面数据里，和上面那段写的是同一个后果。
+    `false` 只取未过期（效期 ≥ 今天）、`true` 只取已过期，判据与出参 `expired` 同一句、同一个「今天」，
+    同样下推到 SQL（`X-Total-Count` 与体是同一批行）。召回封存而还没过效期的仍归 `false`：它们只在 `days`
+    窗口里待到效期那天，不会越积越多。缺省不传，返回集合、排序与字节都与原先一致。
     """
     today_d = resolve_business_date(today)
     limit_date = (today_d + timedelta(days=days)).isoformat()
@@ -765,6 +773,9 @@ def expiring_drug_batches(
         DrugBatch.expire_date <= limit_date,
         DrugBatch.quantity - DrugBatch.used_quantity > 0,
     )
+    if expired is not None:
+        q = q.filter(DrugBatch.expire_date < today_d.isoformat() if expired
+                     else DrugBatch.expire_date >= today_d.isoformat())
     q = scope_org_list(db, user, q, DrugBatch, org_id)
     rows = paginate(
         q.order_by(DrugBatch.expire_date, DrugBatch.id), response, offset, limit

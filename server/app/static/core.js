@@ -2180,11 +2180,17 @@ async function renderRx() {
 async function renderPharmacy() {
   $("#page-desc").textContent =
     "库存管理、批号效期、西药发药、县乡村余缺调拨、缺药预警、批次召回与按批号反查、采购建议";
-  const [stocks, alerts, expiring, dispenses, batchRows, suggestions] = await Promise.all([
+  // 近效期分两段取（P2-1672）：原先一句不分过没过期（缺省 500 条、按效期升序）——已过期 / 召回封存而仍有余量的批次没有
+  // 出口、只增不减，又永远排在最前，过了 500 条，20 天后到期的批次就不在页面数据里。窗口内未过期的在前；已过期仍有余量的
+  // 另列一段，读总数（同 P2-1547），列不全时标题写明
+  const [stocks, alerts, expiring, expiredList, dispenses, batchRows, suggestions] = await Promise.all([
     api("/api/pharmacy/stocks"), api("/api/pharmacy/alerts"),
-    api("/api/pharmacy/batches/expiring"), api("/api/dispense"),
+    api("/api/pharmacy/batches/expiring?expired=false"),
+    api("/api/pharmacy/batches/expiring?expired=true", { withTotal: true }), api("/api/dispense"),
     api("/api/pharmacy/batches?limit=200"), api("/api/pharmacy/purchase-suggestions"),
   ]);
+  const expiredCount = expiredList.total !== null && expiredList.rows.length < expiredList.total
+    ? `已列 ${expiredList.rows.length} / 共 ${expiredList.total}` : `${expiredList.rows.length}`;
   // 台账默认只列前 200 个批次（按机构、药品、效期排）；召回与反查总是冲着某一个药、某一个批号去的，
   // 按编码 / 批号查一遍就能找到那一批——原先第 201 个起的批次在页面上召不回、也查不出发给了谁（P1-148）
   let batches = batchRows;
@@ -2221,6 +2227,11 @@ async function renderPharmacy() {
          ? `<br><span class="desc">${esc(b.recall_reason)}</span>` : ""}</td>
        <td>${b.status === "normal" && canRecall ? `<button class="btn danger" data-recall="${b.id}">召回</button>` : ""}
            <button class="btn" data-trace="${b.id}">发给了谁</button></td></tr>`);
+  // 近效期两段（未过期 / 已过期仍有余量，P2-1672）共用一份行模板
+  const expiringRow = (b) =>
+    `<tr><td>${b.org_id}</td><td>${esc(b.drug_name)}（${esc(b.drug_code)}）</td><td>${esc(b.batch_no)}</td>
+     <td>${esc(b.expire_date)}</td><td>${b.remaining}</td>
+     <td>${b.expired ? '<span class="tag red">已过期</span>' : `${b.remaining_days} 天`}</td></tr>`;
   const DISPENSE_STATUS = { dispensed: ["已发药", "green"], reversed: ["已冲销", "red"] };
   // 发药明细「药名 批号×数量」的纯文本：发药记录表（转义后插入）与退药确认框（spdModal 自己转义）共用一份（P2-1539）
   const dispenseItems = (d) => d.items.map((i) => `${i.drug_name} ${i.batch_no}×${i.quantity}`).join("，");
@@ -2269,10 +2280,10 @@ async function renderPharmacy() {
         `<tr><td>${s.org_id}</td><td>${esc(s.drug_name)}（${esc(s.drug_code)}）</td><td>${stockQty(s)}</td><td>${s.threshold}</td>
          <td>${stockTag(s)}</td></tr>`)}
       <h3 style="margin-top:14px">近效期批次（90 天）</h3>
-      ${table(["机构ID", "药品", "批号", "效期", "余量", "剩余天数"], expiring, (b) =>
-        `<tr><td>${b.org_id}</td><td>${esc(b.drug_name)}（${esc(b.drug_code)}）</td><td>${esc(b.batch_no)}</td>
-         <td>${esc(b.expire_date)}</td><td>${b.remaining}</td>
-         <td>${b.expired ? '<span class="tag red">已过期</span>' : `${b.remaining_days} 天`}</td></tr>`)}
+      ${table(["机构ID", "药品", "批号", "效期", "余量", "剩余天数"], expiring, expiringRow)}
+      <h3 style="margin-top:14px">已过期仍有余量（${esc(expiredCount)}）</h3>
+      <p class="desc">过了效期的批次发药一片不取，余量请按报废流程处理。</p>
+      ${table(["机构ID", "药品", "批号", "效期", "余量", "剩余天数"], expiredList.rows, expiringRow)}
       <h3 style="margin-top:14px">发药记录</h3>
       ${table(["ID", "处方ID", "患者", "发药时间", "发药人", "状态", "明细（批号×数量）", "冲销时间 / 冲销人 / 冲销原因"]
         .concat(canOperate ? ["操作"] : []), dispenses, (d) =>

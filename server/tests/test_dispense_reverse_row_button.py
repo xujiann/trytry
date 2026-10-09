@@ -123,13 +123,14 @@ def _function_source(source: str, head: str) -> str:
 
 
 def _page_gets(client, headers) -> dict:
-    """药房页写死的 GET 地址（`api("…")`），以 `headers` 的身份取一遍真接口，留给 node 里的 `api` 回放。"""
+    """药房页写死的 GET 地址（`api("…")`），以 `headers` 的身份取一遍真接口，留给 node 里的 `api` 回放。
+    带 `{ withTotal: true }` 的（已过期仍有余量那一段，P2-1672）照 `api()` 的形状回放成 `{ rows, total }`。"""
     body = _function_source((STATIC / "core.js").read_text(encoding="utf-8"), "async function renderPharmacy(")
     out = {}
-    for path in re.findall(r'\bapi\("([^"]+)"\)', body):
+    for path, with_total in re.findall(r'\bapi\("([^"]+)"(, \{ withTotal: true \})?\)', body):
         resp = client.get(path, headers=headers)
         assert resp.status_code == 200, (path, resp.text)
-        out[path] = resp.json()
+        out[path] = {"rows": resp.json(), "total": int(resp.headers["X-Total-Count"])} if with_total else resp.json()
     return out
 
 

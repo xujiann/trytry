@@ -90,10 +90,12 @@ def _pharmacy_page_block() -> str:
 def test_页面对账面与可发不等的每一行注明可发量_相等的不注明(client, admin, town):
     block = _pharmacy_page_block()
     responses = {}
-    for path in re.findall(r'\bapi\("([^"]+)"\)', block):
+    # 带 `{ withTotal: true }` 的（已过期仍有余量那一段，P2-1672）照 `api()` 的形状回放成 `{ rows, total }`
+    for path, with_total in re.findall(r'\bapi\("([^"]+)"(, \{ withTotal: true \})?\)', block):
         resp = client.get(path, headers=admin)
         assert resp.status_code == 200, (path, resp.text)
-        responses[path] = resp.json()
+        responses[path] = ({"rows": resp.json(), "total": int(resp.headers["X-Total-Count"])} if with_total
+                           else resp.json())
     with open(os.path.join(STATIC, "shared.js"), encoding="utf-8") as fh:
         shared = fh.read()
     script = (
