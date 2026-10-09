@@ -24,7 +24,7 @@ from ..models import (
     PrescriptionItem,
     User,
 )
-from ..texttypes import code_key, split_list, text_key
+from ..texttypes import code_key, is_blank_text, split_list, text_key
 from ..visibility import assert_org_writable
 from ..schemas import (
     SPECIAL_GROUP_NAMES,
@@ -634,7 +634,9 @@ def comment_prescription(
         PrescriptionComment.prescription_id == prescription_id
     ).first():
         raise HTTPException(status_code=409, detail="该处方已点评")
-    if body.grade == "unreasonable" and not (body.issues or body.comment):
+    # 判看得见的字（P2-1662，同 P2-309 一族）：原先判 `not (issues or comment)`，只填空格、全角空格、零宽字符照收——点评结论
+    # 「不合理」却没写问题，之后想更正又是 409「该处方已点评」
+    if body.grade == "unreasonable" and is_blank_text(body.issues) and is_blank_text(body.comment):
         raise HTTPException(status_code=422, detail="不合理处方须注明问题类型或点评意见")
     record = insert_or_conflict(db, PrescriptionComment(
             prescription_id=prescription_id, reviewer_id=user.id, **body.model_dump()
