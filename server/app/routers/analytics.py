@@ -534,7 +534,9 @@ def _efficiency_rows(db: Session, period: str, scope: list[int] | None) -> list[
     result = []
     # 有数据的机构取并集，再按范围过滤。只过滤 org_names 是不够的——
     # 结果行是从各数据字典的键拼出来的，不经过 org_names。
-    candidates = set(bed_counts) | set(visits) | set(occupied_days) | set(discharged_count)
+    # 医师数也算「有数据」（P2-1703）：原先漏了它，没床位、本期又没有门诊住院的机构（只做随访的村卫生室）整行消失，
+    # 期末综合绩效报告的公式变量 doctors 跟着取 0，人均公式除零按 0 计
+    candidates = set(bed_counts) | set(visits) | set(occupied_days) | set(discharged_count) | set(doctor_counts)
     if scope is not None:
         candidates &= set(scope)
     for oid in candidates:
