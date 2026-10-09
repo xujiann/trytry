@@ -350,8 +350,9 @@ def usage_stats(db: Session = Depends(get_db)):
 
 
 class SupplyRiskItemOut(BaseModel):
-    """供应风险行：仅缺药登记出现的药品 `drug_name` 是空串（不回填库存名，照抄
-    现状）；`open_shortages` 数的是还缺着的登记（已登记 / 采购中，P2-127）。"""
+    """供应风险行：有库存告警的 `drug_name` 取库存行的名字；仅缺药登记出现的药品取这些还缺着的登记上按字典序最小的
+    那个写法（口径同用药地图，P2-354）——原先写死空串，登记表上明明有药名，页面却印「—」（P2-1664）。
+    `open_shortages` 数的是还缺着的登记（已登记 / 采购中，P2-127）。"""
 
     drug_code: str
     drug_name: str
@@ -379,14 +380,15 @@ def supply_risk(db: Session = Depends(get_db)):
     low_stocks = [
         s for s, _ in q_dispensable_shortage(db).filter(DrugStock.threshold > 0).order_by(DrugStock.id).all()
     ]
+    # 药名在同一条查询里顺手取（P2-1664）：同编码的登记药名是各自手填的，取字典序最小的那个写法，稳定、可复现
     open_shortage_rows = (
-        db.query(DrugShortage.drug_code, func.count(DrugShortage.id))
+        db.query(DrugShortage.drug_code, func.count(DrugShortage.id), func.min(DrugShortage.drug_name))
         .filter(DrugShortage.status.in_(_SHORTAGE_SHORT))
         .group_by(DrugShortage.drug_code)
         .order_by(DrugShortage.drug_code)
         .all()
     )
-    shortage_by_code = {code: n for code, n in open_shortage_rows}
+    shortage_by_code = {code: (n, name) for code, n, name in open_shortage_rows}
     risks: dict[str, dict[str, Any]] = {}
     for s in low_stocks:
         entry = risks.setdefault(
@@ -394,9 +396,9 @@ def supply_risk(db: Session = Depends(get_db)):
             {"drug_code": s.drug_code, "drug_name": s.drug_name, "low_stock_orgs": 0, "open_shortages": 0},
         )
         entry["low_stock_orgs"] += 1
-    for code, n in shortage_by_code.items():
+    for code, (n, name) in shortage_by_code.items():
         entry = risks.setdefault(
-            code, {"drug_code": code, "drug_name": "", "low_stock_orgs": 0, "open_shortages": 0}
+            code, {"drug_code": code, "drug_name": name, "low_stock_orgs": 0, "open_shortages": 0}
         )
         entry["open_shortages"] = n
     results = []

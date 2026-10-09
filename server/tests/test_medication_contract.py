@@ -20,7 +20,8 @@
 - `supply-risk` 的 `open_shortages` 数的是**还缺着**的登记（已登记 / 采购中）。
   原先口径是 `status != "delivered"`，已取药 / 未取药 / 已取消的登记也计入——本网当时照抄了现状；
   P2-127 修掉之后，下面「三行各有来历」那条的期望随之改写（见那条的注释）。
-  仅缺药登记出现的药品 `drug_name` 是空串（不回填库存表的名字）。
+  仅缺药登记出现的药品 `drug_name` 原先是空串，P2-1664 起取这些登记上的药名（字典序最小的写法，同用药地图）——
+  只改这一个值，键序不动。
 """
 import pytest
 from fastapi.testclient import TestClient
@@ -67,7 +68,7 @@ def seed(client, admin):
     缺药登记终态铺满五种状态（collected/no_show/cancelled/purchasing/registered），
     药品编码的分布刻意让 supply-risk 各行有来历：CT-INS 库存告警 + 一条已取药的登记（P2-127 之后只剩库存告警，
     中风险）、CT-AML 两条登记都已结案（未取药 / 已取消，P2-127 之后不再是供应风险）、CT-GAP 两条还缺着（中风险，
-    drug_name 空串）。
+    drug_name 取登记上的药名，P2-1664 之前是空串）。
     处方混铺整数剂量（5/10 → 读回 float）与小数剂量（1.5）。
     """
     data: dict = {}
@@ -285,8 +286,8 @@ def test_供应风险精确_各行各有来历(client, seed):
     assert body == {
         "total": 2,
         "risks": [
-            # 仅登记出现的药品：drug_name 是空串（不回填库存名），中风险；同为中风险按编码排序
-            {"drug_code": "CT-GAP", "drug_name": "",
+            # 仅登记出现的药品：drug_name 取登记上的药名（P2-1664 之前是空串），中风险；同为中风险按编码排序
+            {"drug_code": "CT-GAP", "drug_name": "缺供药甲(契约)",
              "low_stock_orgs": 0, "open_shortages": 2, "risk_level": "medium"},
             # 库存告警、登记已取药：只剩库存告警，中风险
             {"drug_code": "CT-INS", "drug_name": "胰岛素(契约)",
