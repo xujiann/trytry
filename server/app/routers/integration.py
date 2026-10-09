@@ -1101,8 +1101,8 @@ def hl7v2_oru(
     - **申请单定位**：OBR-2（下单方单号）即平台申请单号（ExamRequest.id，对接规范
       映射表"检查检验申请→ServiceRequest"）；OBR-2 缺失回退 OBR-3（执行方单号），回退时必须带 PID
       段核对患者（P2-986）；
-    - **OBX 逐条解析**：标识（OBX-3）/值（OBX-5）/单位（OBX-6）/参考范围（OBX-7）/
-      异常标志（OBX-8），逐行拼入报告 finding；异常标志 HH/LL/AA 判**危急值**，
+    - **OBX 逐条解析**：标识（OBX-3）/值（OBX-5，按 OBX-2 值类型取文字、附件类不收正文，P2-1758）/
+      单位（OBX-6）/参考范围（OBX-7）/异常标志（OBX-8），逐行拼入报告 finding；异常标志 HH/LL/AA 判**危急值**，
       复用报告发布的危急值闭环（通知→确认→处置留痕）；标志按 `~` 拆开逐个判，认不得的
       在结论里写明、不当正常（P1-213）；
     - **找不到申请单一律 404 拒收，不建独立报告**：对接规范§四将 404 定义为
@@ -1196,6 +1196,37 @@ def _oru_conclusion_text(text: str) -> str:
     return text if len(text) <= ORU_CONCLUSION_MAX else text[:ORU_CONCLUSION_MAX - 1] + "…"
 
 
+#: OBX-2 值类型里的编码类（`码^文字^码表^…`）：所见里印文字组件（P2-1758）
+_OBX_CODED_TYPES = {"CE", "CWE", "CNE"}
+#: OBX-2 值类型里的附件类：ED 封装数据（PDF 报告单的 base64）、RP 引用指针——正文不进所见（P2-1758；附件怎么收随 P2-1137）
+_OBX_ATTACHMENT_TYPES = {"ED", "RP"}
+
+
+def _obx_value(value_type: str, raw: str) -> str:
+    """OBX-5 按 OBX-2 值类型取所见里印的文字（P2-1758）。
+
+    原先不看值类型、整串还原转义就印：CE / CWE 印成「P^阳性^99LAB」、SN 印成「>^250」、重复值印成「第一行~第二行」；
+    ED（PDF 报告单的 base64）整段灌进所见，把后面的结果行挤出 2048 字的截断——危急的血钾行没了。
+    编码类取文字组件（第 2 组件，空则第 1）；SN（比较符^数值^分隔符或后缀^数值）各组件拼起来（「>250」「1:128」）；
+    重复值用「；」连；附件类不印正文，只印一句说明（PDF 正文怎么收随 P2-1137）；其余类型照旧整个重复还原转义。
+    都是先按分隔符拆、再还原转义（P2-724）。异常 / 危急照旧只按 OBX-8 判，与值类型无关。
+    """
+    if value_type in _OBX_ATTACHMENT_TYPES:
+        return f"附件类结果（{value_type}），平台未收" if raw.strip() else ""
+    texts: list[str] = []
+    for rep in raw.split("~"):
+        parts = rep.split("^")
+        if value_type in _OBX_CODED_TYPES:
+            text = _hl7_unescape((parts[1].strip() if len(parts) > 1 else "") or parts[0].strip())
+        elif value_type == "SN":
+            text = "".join(_hl7_unescape(part.strip()) for part in parts[:4])
+        else:
+            text = _hl7_unescape(rep.strip())
+        if text:
+            texts.append(text)
+    return "；".join(texts)
+
+
 def _oru_report(obr: str, obx_segments: list[str], request: ExamRequest,
                 reported_by: str) -> tuple[ExamReportCreate, int, int]:
     """一组 OBX 拼成一份报告，返回 (报告, 结果项数, 异常项数)。"""
@@ -1208,7 +1239,7 @@ def _oru_report(obr: str, obx_segments: list[str], request: ExamRequest,
         code_parts = _hl7_field(seg, 3).split("^")
         # 先按分隔符拆、再还原转义（P2-724）
         label = _hl7_unescape((code_parts[1].strip() if len(code_parts) > 1 else "") or code_parts[0].strip())
-        value = _hl7_unescape(_hl7_field(seg, 5).strip())
+        value = _obx_value(_hl7_field(seg, 2).strip().upper(), _hl7_field(seg, 5))   # 按 OBX-2 值类型拆（P2-1758）
         unit = _hl7_unescape(_hl7_field(seg, 6).split("^")[0].strip())
         ref_range = _hl7_unescape(_hl7_field(seg, 7).strip())
         flag = _hl7_field(seg, 8).strip().upper()
