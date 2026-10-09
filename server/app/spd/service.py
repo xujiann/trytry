@@ -70,12 +70,19 @@ MEASURE_FIELDS = (
 #: 百分数指标的上限（P1-101）
 _PERCENT_MEASURES = {"spo2": 100.0, "hba1c": 100.0}
 
+#: 血压的生理上界（P2-1602）：与平台慢病随访 `app/schemas.py::FollowUpCreate` 的 `sbp le=300, dbp le=200` 同值（P1-101，
+#: 那边注明与住院体征 `clinical_docs.VitalIn` 同口径）。子系统边界不许直取平台 schemas（`tests/test_spd_boundary.py`），
+#: 在这里写同值常量。原先只拦 ≤0：多敲一个 0 的收缩压 1900 照收、判偏高、派紧急处置任务、把趋势均值拉到上千。
+#: 其余指标的上限由慢病科定，未定前不拦
+_BP_CAPS = {"bp_sys": 300.0, "bp_dia": 200.0}
+
 
 def measure_value_problem(metric: str, value: float) -> str | None:
     """监测值的生理可能性（P1-101）：有问题返回一句人话（调用方报 422），没问题返回 None。
 
     上面这些指标测出 0 / 负数只能是设备失败或录错；管理目标多数只设上限（收缩压 ≤ 140、糖化 ≤ 7），
     按目标判级时 0 就判成「正常」，该有的异常提醒就此漏掉。不在指标目录里的键不管——那些指标的口径由配置决定。
+    百分数指标不超过 100；血压另有上界（`_BP_CAPS`，P2-1602）。医护录入、批量上传、居民自测与随访问卷的数值题都走这一句。
     """
     if metric not in MEASURE_FIELDS:
         return None
@@ -85,6 +92,9 @@ def measure_value_problem(metric: str, value: float) -> str | None:
     cap = _PERCENT_MEASURES.get(metric)
     if cap is not None and value > cap:
         return f"{name}不得超过 {cap:g}%（收到 {value:g}）"
+    cap = _BP_CAPS.get(metric)   # 血压上界（P2-1602）
+    if cap is not None and value > cap:
+        return f"{name}不得超过 {cap:g}（收到 {value:g}）"
     return None
 
 
