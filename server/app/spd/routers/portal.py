@@ -822,6 +822,9 @@ class SpdJourneyProgramOut(BaseModel):
     paths: list[SpdJourneyPathOut]
     tasks: list[SpdJourneyTaskOut]
     referrals: list[SpdJourneyReferralOut]
+    # 这份档案的任务总数（P2-1674）：`tasks` 只回最近 30 条，居民端卡片标题原先拿它的条数当总数印「任务（30）」。
+    # 新增字段只加在末尾
+    tasks_total: int
 
 
 class SpdJourneyOut(BaseModel):
@@ -863,6 +866,8 @@ def journey(
             .limit(30)
             .all()
         )
+        # 任务只列最近 30 条（嵌套上限，刻意的），总数另给（P2-1674）：与上面同一个口径（按档案），卡片标题原先印截断后的条数
+        tasks_total = db.query(SpdTask).filter(SpdTask.enrollment_id == enrollment.id).count()
         # 转诊按它挂的档案取，与上面的任务同一个口径（P2-1182）：原先按病种取——跨机构迁出确认（或排除后再签约）之后同病种
         # 两份档案，同一张转诊单在「已迁出」「在管」两张卡片里各列一次
         referral_scope = SpdReferralCase.enrollment_id == enrollment.id
@@ -901,6 +906,7 @@ def journey(
                  "created_at": r.created_at.isoformat()}
                 for r in referrals
             ],
+            "tasks_total": tasks_total,
         })
     return {"programs": out}
 

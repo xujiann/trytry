@@ -267,8 +267,10 @@ def test_全流程视图的三层嵌套(client, auth):
     body = client.get(f"{B}/journey", headers=auth).json()
     assert set(body) == {"programs"}
     prog = body["programs"][0]
+    # tasks_total：这份档案的任务总数，tasks 只回最近 30 条（P2-1674 只加字段、加在末尾）
     assert set(prog) == {"program_code", "program_name", "stage", "risk_level", "status",
-                         "paths", "tasks", "referrals"}
+                         "paths", "tasks", "referrals", "tasks_total"}
+    assert list(prog)[-1] == "tasks_total"
     assert set(prog["paths"][0]) == {"id", "template_code", "template_name", "current_node_key",
                                      "current_node_name", "progress", "status"}   # 两个名称 P2-372 加
     assert isinstance(prog["paths"][0]["progress"], int)   # Integer 列，不是百分比 float

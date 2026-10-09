@@ -44,6 +44,12 @@ async function api(path, options = {}) {
     err.status = resp.status;
     throw err;
   }
+  // 要总数的清单带上 `withTotal`（P2-1674，与管理端 core.js 的 P2-1547 同一写法）：连同 X-Total-Count 一起回
+  // `{ rows, total }`，接口没发这个头时 total 为 null。缺省照旧只回响应体——全部调用点共用这个返回形状
+  if (options.withTotal) {
+    const total = resp.headers.get("X-Total-Count");
+    return { rows: data, total: total === null ? null : Number(total) };
+  }
   return data;
 }
 
@@ -1381,10 +1387,37 @@ async function renderSpdMeasure(box, days = 90) {
     .catch((err) => { $("#spd-measure-msg").textContent = err.message; }));
 }
 
+/* 居民端任务的「未结束」：与后端 `service.TASK_OPEN_STATUSES` 同一串（P2-1674），含提交了在等审核的 */
+const SPD_TASK_OPEN_STATUSES = ["pending", "claimed", "doing", "submitted", "rejected", "overdue"];
+
+/** 健康任务清单取数（P2-1674）：未结束的排在最前，其后接最近办结的，按 id 去重；回 `{ rows, total }`。
+ *  接口缺省按到期日正序、一页 100 条、办完与取消的照列——老患者办结的任务攒过 100 条，新派的待办被挤出这一页，首页
+ *  「待办任务 1」点进来只有 100 条「已完成」、没有一个能办的按钮。照任务中心 P2-827 的做法：未结束的单独取（接口 `status`
+ *  只收单值，逐个状态取、`fetchAllPages` 续页取全），按到期日、编号排；办结的取缺省清单，列不全时取它的末一页（到期最近的
+ *  那些），新的在前。接口缺省排序不动。total 是该患者任务总数（X-Total-Count），读不到为 null。 */
+async function fetchSpdTasks() {
+  const path = `/api/portal/spd/tasks${spdQuery()}`;
+  const [first, ...open] = await Promise.all([
+    authApi(path, { withTotal: true }),
+    ...SPD_TASK_OPEN_STATUSES.map((status) => fetchAllPages(authApi, `/api/portal/spd/tasks${spdQuery({ status })}`)),
+  ]);
+  let { rows: recent, total } = first;
+  if (total !== null && total > recent.length && recent.length) {
+    ({ rows: recent, total } = await authApi(`${path}${path.includes("?") ? "&" : "?"}offset=${total - recent.length}`,
+      { withTotal: true }));
+  }
+  const unfinished = open.flat().sort((a, b) => (a.due_date === b.due_date ? a.id - b.id : a.due_date < b.due_date ? -1 : 1));
+  const ids = new Set(unfinished.map((t) => t.id));
+  return { rows: [...unfinished, ...recent.reverse().filter((t) => !ids.has(t.id))], total };
+}
+
 async function renderSpdTasks(box) {
   // 退回的任务回到居民手里重做（P1-127）：原先卡片上只看得到审核意见，没有重新填报 / 上传的按钮
-  const rows = await authApi(`/api/portal/spd/tasks${spdQuery()}`);
-  box.innerHTML = rows.map((t) => `<div class="m-card">
+  // 未结束的排在最前，列不全时写明「最近 N 条（共 X 条）」（P2-1674，取数见 fetchSpdTasks）
+  const { rows, total } = await fetchSpdTasks();
+  const head = total !== null && rows.length < total
+    ? `<p class="hint">最近 ${rows.length} 条（共 ${total} 条），未结束的排在最前</p>` : "";
+  box.innerHTML = head + (rows.map((t) => `<div class="m-card">
     ${kv("任务", esc(t.title))}
     ${kv("截止", esc(t.due_date || "—"))}
     ${kv("状态", esc({ pending: "待办", claimed: "待办", doing: "办理中",
@@ -1394,7 +1427,7 @@ async function renderSpdTasks(box) {
     ${["pending", "claimed", "doing", "rejected", "overdue"].includes(t.status)
       ? `<button type="button" class="ghost-btn" data-spd-task="${t.id}">填报并提交</button>
          <button type="button" class="ghost-btn" data-spd-evidence="${t.id}">上传凭证</button>` : ""}
-    </div>`).join("") || '<p class="empty">暂无健康任务</p>';
+    </div>`).join("") || '<p class="empty">暂无健康任务</p>');
   box.querySelectorAll("[data-spd-task]").forEach((btn) => {
     btn.addEventListener("click", async () => {
       // 请求放进表单的提交回调（P2-1014）：提交失败时原因写在表单里、填的字还在
@@ -1678,6 +1711,13 @@ async function renderSpdAssessments(box) {
 
 async function renderSpdJourney(box) {
   const j = await authApi(`/api/portal/spd/journey${spdQuery()}`);
+  // 任务每份档案只回最近 30 条（P2-1674）：标题原先印这一页的条数，121 条任务的居民看到「任务（30）」。总数取后端给的
+  // tasks_total（取不到回落到条数），列不全时写「最近 30 条（共 N 条）」，与签约履约记录（P2-1550）同一写法
+  const tasksTitle = (p) => {
+    const shown = (p.tasks || []).length;
+    const total = p.tasks_total ?? shown;
+    return shown < total ? `任务：最近 ${shown} 条（共 ${total} 条）` : `任务（${shown}）`;
+  };
   box.innerHTML = (j.programs || []).map((p) => `<div class="m-card">
     <h3>${esc(p.program_name || p.program_code)}</h3>
     ${kv("阶段", esc(p.stage || "—"))}
@@ -1686,7 +1726,7 @@ async function renderSpdJourney(box) {
     <div class="sec-title">管理路径（${(p.paths || []).length}）</div>
     ${(p.paths || []).map((i) => kv(i.template_name || i.template_code,
       `${esc(i.current_node_name || i.current_node_key || "—")} · ${i.progress}% ${spdTagOf(SPD_INST_STATUS_TAGS, i.status)}`)).join("") || '<p class="empty">尚未启动路径</p>'}
-    <div class="sec-title">任务（${(p.tasks || []).length}）</div>
+    <div class="sec-title">${esc(tasksTitle(p))}</div>
     ${(p.tasks || []).map((t) => kv(t.title, `${esc(t.due_date || "—")} ${spdTagOf(SPD_TASK_STATUS_TAGS, t.status)}`)).join("") || '<p class="empty">暂无任务</p>'}
     <div class="sec-title">转诊（${(p.referrals || []).length}）</div>
     ${(p.referrals || []).map((r) => kv(r.direction === "up" ? "上转" : "下转",
