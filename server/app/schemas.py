@@ -229,7 +229,10 @@ class CriticalActionOut(BaseModel):
 
 
 class CriticalResolveBody(BaseModel):
-    note: str = Field(default="", max_length=512)
+    # 处置说明必填（P2-1710）：「处置反馈」一落库危急值就算闭环，原先说明缺省空串——空 body、纯空格照样 200，轨迹只记「处置反馈完成」
+    # 或「处置反馈：   」，数据质控的「危急值闭环」只认 resolved、查不出来。两个页面的注释都把「处置说明一个字没有」写成 P2-38 要消除
+    # 的害处，用户手册写「处置后反馈处置结果（附说明）」。仓内只有管理端危急值操作台、医生移动端两处调用，都送说明
+    note: str = Field(min_length=1, max_length=512, pattern=NON_BLANK)
 
 
 #: 审方规则「特殊人群」的取值是闭集（P2-198）：审方按这三个键匹配患者所属人群（`prescriptions._patient_groups`），

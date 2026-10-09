@@ -3188,8 +3188,9 @@ async function renderCritical() {
       if (resolve) {
         // P2-38：原先弹窗输入框点"取消"照样提交——危急值就此"闭环"，处置说明一个字没有。
         // 框自己提交（P2-607）：反馈写超了（后端 512 字）、别人已先处置，报错写在框里、框不关，写好的反馈不用重填
+        // 说明必填（P2-1710）：原先留空照样提交、照样闭环，轨迹只记「处置反馈完成」；只填空格的由后端 422、报错写在框里
         const done = await spdModal("处置反馈", [
-          { name: "note", label: "处置反馈说明", type: "textarea", placeholder: "如：已复查、已调整治疗" },
+          { name: "note", label: "处置反馈说明", type: "textarea", placeholder: "如：已复查、已调整治疗", required: true },
         ], { submit: (form) => api(`/api/exams/reports/${resolve}/resolve`,
           { method: "POST", body: JSON.stringify({ note: form.note }) }) });
         if (done) { route(); pollTodos(); }

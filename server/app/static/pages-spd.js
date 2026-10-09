@@ -129,8 +129,9 @@ function spdModal(title, fields, opts = {}) {
         ).join("")}</select>`;
       }
       if (f.type === "textarea") {
+        // 多行框同样认 required（P2-1710）：原先只有单行框带上，字段表写了 `required: true` 的多行框照样空着就能交
         return `<textarea name="${esc(f.name)}" rows="3" style="width:100%"
-          placeholder="${esc(f.placeholder || "")}">${esc(val)}</textarea>`;
+          placeholder="${esc(f.placeholder || "")}"${f.required ? " required" : ""}>${esc(val)}</textarea>`;
       }
       // 复选框组（P2-1636，执行随访的多选题）：交上去是勾中的 value 列表，与居民端 inlineQuestions 的多选同一个写法
       if (f.type === "checks") {

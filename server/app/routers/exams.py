@@ -571,7 +571,8 @@ def resolve_critical(
     db.add(
         CriticalAction(
             report_id=report.id,
-            action=_critical_action_text(f"处置反馈：{body.note}") if body.note else "处置反馈完成",
+            # 说明必填（P2-1710，见 CriticalResolveBody）：原先空串记一句「处置反馈完成」，处置了什么无从查起
+            action=_critical_action_text(f"处置反馈：{body.note}"),
             actor=user.full_name or user.username,
         )
     )

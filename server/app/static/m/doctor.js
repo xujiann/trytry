@@ -736,8 +736,9 @@ $("#critical-list").addEventListener("click", async (e) => {
     }
     if (resolve) {
       // 原先 prompt 点"取消"照样提交：危急值就此"闭环完成"，处置措施一个字没有。
+      // 说明必填（P2-1710）：原先留空照样提交、照样闭环；只填空格的 trim 后是空串，由后端 422、报错写在这张卡的表单里
       return cardForm(e.target.closest(".m-card"), "crit-resolve-form",
-        '<textarea name="note" rows="2" placeholder="处置措施（如：已联系患者并调整治疗方案）"></textarea>',
+        '<textarea name="note" rows="2" placeholder="处置措施（如：已联系患者并调整治疗方案）" required></textarea>',
         "提交处置反馈", async (f) => {   // 失败时 cardForm 把报错写在这张卡的表单里（P2-1093）
           await api(`/api/exams/reports/${resolve}/resolve`, { method: "POST",
             body: JSON.stringify({ note: f.note.value.trim() }) });
