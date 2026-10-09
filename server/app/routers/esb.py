@@ -533,6 +533,28 @@ def _parse_payload(payload: dict, config: dict) -> dict:
     return parse_fhir_patient(resource)
 
 
+class _TargetPaused(ValueError):
+    """路由目标接入方已停用（P2-1728，第五十一批扫描 AO1-1）。
+
+    仍是 ValueError（`_run_step` 的失败约定），`run_flow` 先把这一类接住：停用是临时的（`_steps_problem`），不是这条消息的
+    错——这一次执行记失败，消息不计次、放回认领前的状态，启用后再执行照常投。"""
+
+
+def _paused_route_target(db: Session, steps: list) -> tuple[int, str] | None:
+    """编排里第一个已停用的路由目标（步序, 接入方编码），没有为 None（P2-1728）。
+
+    `run_flow` 在认领与执行任何一步之前先查它：停用的目标要到路由步才碰上的话，前面各步（路由到别的接入方、落库交换日志、
+    建档）每执行一次就重做一次，而这一次又不计次——点几次就给别的对端重投几次。找目标的写法同 `_run_step`。"""
+    for idx, step in enumerate(steps, start=1):
+        if not isinstance(step, dict) or step.get("type") != "route":
+            continue
+        target_code = (step.get("config") or {}).get("target_endpoint", "")
+        target = db.query(EsbEndpoint).filter(EsbEndpoint.code == target_code).first()
+        if target is not None and not target.active:
+            return idx, target_code
+    return None
+
+
 def _run_step(db: Session, step: dict, context: dict) -> str:
     """执行单个编排步骤；返回可读结果说明，失败以 ValueError/HTTPException 抛出。"""
     step_type = step.get("type", "")
@@ -558,8 +580,8 @@ def _run_step(db: Session, step: dict, context: dict) -> str:
         target = db.query(EsbEndpoint).filter(EsbEndpoint.code == target_code).first()
         if target is None:
             raise ValueError(f"路由目标接入方 {target_code or '(空)'} 不存在")
-        if not target.active:
-            raise ValueError(f"路由目标接入方 {target_code} 已停用")
+        if not target.active:   # 停用是临时的：单列一类，`run_flow` 不拿它记消息的失败（P2-1728）
+            raise _TargetPaused(f"路由目标接入方 {target_code} 已停用")
         context["routed_to"] = target.code
         # 真实投递：目标配置了 endpoint_url 才 POST（报文取 transform 产物，
         # 未经 transform 时投原始 payload）；未配置保持"仅登记"现状并在结果说明。
@@ -611,6 +633,14 @@ def _claim(db: Session, message: EsbMessage, expect: ColumnElement[bool]) -> boo
     崩溃的随事务回滚到抢之前。入站建档那一步会中途提交（`create_patient_idempotent`），之后别处读到的是「处理中」；
     手工消费不拒「处理中」——崩溃后卡在这一态的消息只有这条出路，要不要改成「处理中超过时限才可重领」待裁定（P2-406）。"""
     return move_row(db, EsbMessage, message.id, expect, status="processing")
+
+
+def _release(db: Session, message: EsbMessage, status: str) -> None:
+    """放回认领：「处理中」改回认领前的状态，重试次数、下次重试时间、错误说明都不动——这一次不算这条消息的失败（P2-1728）。
+
+    认领走的是 Core UPDATE（`_claim`），会话里那份对象没跟着变成「处理中」，照对象赋值改回原值是空操作，同样压成一条
+    带条件的 UPDATE。编排里建档那一步会中途提交（见 `_claim`），之后别处可能已把它消费完——不是「处理中」了就不动。"""
+    move_row(db, EsbMessage, message.id, EsbMessage.status == "processing", status=status)
 
 
 def _as_read(message: EsbMessage) -> ColumnElement[bool]:
@@ -864,7 +894,8 @@ def _steps_problem(db: Session, steps: list) -> str:
     `_validate_steps` 只查形状：转换格式写成 `fhir`、落库实体写成 `patients`、路由到不存在的接入方、落库患者档案前面
     没有 transform，原先都照存——编排写错是配置问题，却在运行期记成每条被执行消息的一次失败（`_record_failure`），
     到重试上限转死信，死信不可再消费，修好编排也救不回来。四处取值就是 `_run_step` 运行期认的那几种；路由目标只查
-    存在，启用与否留到运行期判（停用是临时的，启用回来照常投）。建 / 改编排拦成 422，执行前对存量编排拦成 409。
+    存在，启用与否留到运行期判（停用是临时的，启用回来照常投：运行期碰上停用的目标只记这一次执行失败，消息不计次，
+    P2-1728）。建 / 改编排拦成 422，执行前对存量编排拦成 409。
     存量编排可能连形状都不对（P1-176 之前存的），这里只挑认得出的取值看，形状问题照旧留给运行期。"""
     transformed = False
     for idx, step in enumerate(steps, start=1):
@@ -1011,15 +1042,40 @@ def run_flow(code: str, message_id: int, db: Session = Depends(get_db)):
     if endpoint is not None and endpoint.direction == "outbound" and not endpoint.active:
         raise HTTPException(status_code=409, detail="出站接入方已停用，不投递——启用后再消费")
 
+    # 路由目标临时停用：拦在认领与执行任何一步之前（P2-1728）——一步都不做，消息原样留在队里；照旧回 200 与一条失败的
+    # 执行记录，写明消息未计次。查过之后、走到路由步之前才停用的，由循环里接住 `_TargetPaused` 放回认领
+    stopped_target = _paused_route_target(db, flow.steps or [])
+    if stopped_target is not None:
+        step_no, target_code = stopped_target
+        error = f"路由目标接入方 {target_code} 已停用，消息未计次——启用后再执行"
+        run = EsbFlowRun(flow_id=flow.id, message_id=message.id, status="failed",
+                         step_results=[{"step": step_no, "type": "route", "status": "failed", "detail": error}],
+                         error=error[:1024])
+        db.add(run)
+        db.commit()
+        db.refresh(run)
+        return _flow_run_reply(flow, message, run)
+
+    held = message.status   # 认领前的状态：路由目标停用时原样放回（P2-1728）
     if not _claim(db, message, _as_read(message)):
         _claim_lost(db, message)
     context: dict = {"payload": message.payload or {}, "msg_type": message.msg_type}
     step_results: list[dict] = []
     error = ""
+    paused = False
     for idx, step in enumerate(flow.steps or [], start=1):
         step_type = step.get("type", "")
         try:
             detail = _run_step(db, step, context)
+        except _TargetPaused as exc:
+            # 路由目标临时停用不是这条消息的错（P2-1728，第五十一批扫描 AO1-1）：原先照失败记账，重试次数 +1，点三次进死信，
+            # 启用回来执行编排与手工消费都 409「死信不可再消费」，对端一条也收不到。这一次照旧记失败的执行记录，消息不计次
+            error = f"{exc}，消息未计次——启用后再执行"
+            paused = True
+            step_results.append(
+                {"step": idx, "type": step_type, "status": "failed", "detail": error}
+            )
+            break
         except (ValueError, HTTPException) as exc:
             error = str(exc.detail if isinstance(exc, HTTPException) else exc)
             step_results.append(
@@ -1036,7 +1092,9 @@ def run_flow(code: str, message_id: int, db: Session = Depends(get_db)):
             {"step": idx, "type": step_type, "status": "succeeded", "detail": detail}
         )
 
-    if error:
+    if paused:
+        _release(db, message, held)   # 不转失败 / 死信、不排下次重试，回到执行前的样子
+    elif error:
         _record_failure(db, message, f"第 {len(step_results)} 步（{step_results[-1]['type']}）失败：{error}")
     else:
         _record_success(message)
@@ -1051,6 +1109,11 @@ def run_flow(code: str, message_id: int, db: Session = Depends(get_db)):
     db.add(run)
     db.commit()
     db.refresh(run)
+    return _flow_run_reply(flow, message, run)
+
+
+def _flow_run_reply(flow: EsbFlow, message: EsbMessage, run: EsbFlowRun) -> dict:
+    """编排执行回执（`run_flow` 两处出口共用，P2-1728）：执行记录本身加上消息此刻的状态与重试次数。"""
     return {
         "id": run.id,
         "flow_code": flow.code,
