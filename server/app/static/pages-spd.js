@@ -2652,7 +2652,9 @@ async function renderSpdReferral() {
     api("/api/spd/referrals?open_only=false&limit=30"),
     api("/api/spd/referrals?open_only=true&limit=200"),
     api("/api/spd/referrals-alerts?hours=48"),
-    api("/api/spd/referral-rules"),
+    // 规则续页取全（P2-1610，同 P2-1546 的写法）：清单原先截在 200 条、不带总数，第 201 条起这里看不到、停不了，
+    // 试算却照样过全部启用规则；规则是配置项、数量级小，取全而不是只标「已列 N / 共 total」
+    fetchAllPages(api, "/api/spd/referral-rules"),
     spdCatalog(),
   ]);
   const cases = actionableFirst(recentCases, openCases);

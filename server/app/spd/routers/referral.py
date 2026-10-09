@@ -231,14 +231,23 @@ def create_referral_rule(body: ReferralRuleIn, db: Session = Depends(get_db)):
 
 @router.get("/referral-rules", response_model=list[ReferralRuleOut])
 def list_referral_rules(
-    program_code: str | None = None, active: bool | None = None, db: Session = Depends(get_db)
+    response: Response,
+    program_code: str | None = None,
+    active: bool | None = None,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
 ):
+    """转诊规则清单，按规则编号升序（与试算同一个次序，P2-304）。
+
+    分页走 `deps.paginate`、总数在 X-Total-Count（P2-1610）：原先 `.limit(200)`、不带总数也不收 offset——第 201 条起页面上
+    看不到、停不了，试算却照样过全部启用规则、照样命中开单。缺省一页仍是 200 条，前 200 条与原先逐字节相同。"""
     query = db.query(SpdReferralRule)
     if program_code:
         query = query.filter(SpdReferralRule.program_code == program_code)
     if active is not None:
         query = query.filter(SpdReferralRule.active.is_(active))
-    return [_rule_out(r) for r in query.order_by(SpdReferralRule.id).limit(200).all()]
+    return [_rule_out(r) for r in paginate(query.order_by(SpdReferralRule.id), response, offset, limit)]
 
 
 class ReferralRulePatch(BaseModel):

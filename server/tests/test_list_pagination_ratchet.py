@@ -91,7 +91,8 @@ import warnings
 #: → 90（2026-09-27 P2-619：判据认出提成模块常量的上限——实测一度掉到 87，其中 4 格是盲区不是修好：危急值清单、
 #:   规则总目录回到计数里，审计日志归档导出也被认出来（它是批读游标、读完全量，记进下方误报名单，照样计数）；
 #:   L-J 图与测定清单的上限在帮手函数里，仍看不见。87 + 3 = 90，基线收紧到实测值，不留空档）
-BASELINE_SILENT_TRUNCATION = 90
+#: → 89（2026-10-09 第四十七批 P2-1610：慢专病转诊规则清单切到 paginate）
+BASELINE_SILENT_TRUNCATION = 89
 
 ROUTER_DIRS = (
     (os.path.join(os.path.dirname(__file__), "..", "app", "routers"), ""),
