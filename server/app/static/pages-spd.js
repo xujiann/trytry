@@ -1283,7 +1283,8 @@ async function renderSpdTeam() {
   const role = stored && Object.prototype.hasOwnProperty.call(roleNames, stored) ? stored : "member";
   const [wb, teams, villageDoctors] = await Promise.all([
     api(`/api/spd/workbench/team?role=${role}`),
-    api("/api/spd/teams?limit=100"),
+    // 团队连停用的一起取（P2-1580，照随访问卷 P2-294）：「团队维护」表要能把停用的再启用；各页选团队的下拉取自目录，照旧只列启用的
+    api("/api/spd/teams?limit=100&include_inactive=true"),
     api("/api/spd/village-doctors?limit=100"),
   ]);
   // ADR-0009 第四批：面板外壳改用 `panel()`（定义见 core.js），迁一页、人工过一页。
@@ -1333,10 +1334,11 @@ async function renderSpdTeam() {
         <input name="leader_user_id" type="number" placeholder="组长用户ID">
         <button>新建团队</button>
       </form><p class="msg" id="spd-team-msg"></p>
-      ${table(["ID", "团队", "层级", "机构", "服务病种", "组长", "成员数", "操作"], teams, (t) =>
+      ${table(["ID", "团队", "层级", "机构", "服务病种", "组长", "成员数", "状态", "操作"], teams, (t) =>
         `<tr><td>${t.id}</td><td>${esc(t.name)}</td><td>${esc(SPD_TEAM_LEVELS[t.level] || t.level)}</td>
          <td>${t.org_id}</td><td>${esc((t.program_codes || []).join("、") || "—")}</td>
          <td>${t.leader_user_id ?? "—"}</td><td>${t.member_count ?? "—"}</td>
+         <td>${t.active === false ? '<span class="tag">停用</span>' : '<span class="tag green">启用</span>'}</td>
          <td><button class="btn secondary" data-team-members="${t.id}">成员</button>
              <button class="btn secondary" data-team-edit="${t.id}" data-name="${esc(t.name)}" data-level="${esc(t.level)}"
                data-active="${t.active === false ? "0" : "1"}">编辑</button></td></tr>`)}
@@ -2867,7 +2869,8 @@ async function renderSpdAssess() {
     "指标库 → 分级考核方案 → 自动取数计分 → 扣分下钻与得分分析；工作量统计；村医积分规则、商品兑换与核销";
   const [indicators, plans, scores, goods, accounts, pointRules, redeems, workload, meta] = await Promise.all([
     api("/api/spd/indicators?limit=50"), api("/api/spd/assess-plans"),
-    api("/api/spd/scores?limit=30"), api("/api/spd/goods"),
+    // 商品连下架的一起取（P2-1580，照随访问卷 P2-294）：管理表要能把下架的再上架；村医端兑换页照旧只取上架的
+    api("/api/spd/scores?limit=30"), api("/api/spd/goods?include_inactive=true"),
     api("/api/spd/point-accounts?limit=20"),
     api("/api/spd/point-rules"), api("/api/spd/redeems?limit=50"), api("/api/spd/workload"), spdMeta(),
   ]);
@@ -2994,9 +2997,10 @@ async function renderSpdAssess() {
         <input name="verify_code" placeholder="核销码" required>
         <button class="secondary">核销</button>
       </form><p class="msg" id="spd-goods-msg"></p>
-      ${table(["ID", "编码", "名称", "所需积分", "库存", "操作"], goods, (g) =>
+      ${table(["ID", "编码", "名称", "所需积分", "库存", "状态", "操作"], goods, (g) =>
         `<tr><td>${g.id}</td><td>${esc(g.code)}</td><td>${esc(g.name)}</td><td>${g.points}</td>
          <td>${g.stock}</td>
+         <td>${g.active ? '<span class="tag green">上架</span>' : '<span class="tag">下架</span>'}</td>
          <td><button class="btn secondary" data-goods-edit="${g.id}" data-name="${esc(g.name)}" data-points="${g.points}"
               data-stock="${g.stock}" data-active="${g.active ? "1" : "0"}">编辑</button></td></tr>`)}`)}
     ${panel("兑换记录", `

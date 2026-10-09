@@ -1629,12 +1629,17 @@ def create_goods(body: GoodsIn, db: Session = Depends(get_db)):
 
 
 @router.get("/goods", response_model=list[GoodsOut])
-def list_goods(db: Session = Depends(get_db)):
+def list_goods(include_inactive: bool = False, db: Session = Depends(get_db)):
+    """积分商品。缺省只列上架的（村医端兑换页用）；`include_inactive` 连下架的一起列（P2-1580，照随访问卷 P2-294）——
+    管理端商品表原先也只拿得到上架的，下架的当场从表里消失，编辑弹窗里的「上架」永远用不上，同编码重建又 409（编码唯一），
+    补货后只能换编码另建。"""
+    query = db.query(SpdGoods)
+    if not include_inactive:
+        query = query.filter(SpdGoods.active.is_(True))
     return [
         {"id": g.id, "code": g.code, "name": g.name, "points": g.points,
          "stock": g.stock, "image_url": g.image_url, "active": g.active}
-        for g in db.query(SpdGoods).filter(SpdGoods.active.is_(True))
-        .order_by(SpdGoods.id).limit(200).all()
+        for g in query.order_by(SpdGoods.id).limit(200).all()
     ]
 
 

@@ -188,11 +188,17 @@ def list_teams(
     org_id: int | None = None,
     level: str | None = None,
     program_code: str | None = None,
+    include_inactive: bool = False,
     offset: int = 0,
     limit: int = 100,
     db: Session = Depends(get_db),
 ):
-    query = db.query(SpdTeam).filter(SpdTeam.active.is_(True))
+    """服务团队清单。缺省只列启用的（修前就是）；`include_inactive` 连停用的一起列（P2-1580，照随访问卷 P2-294）——服务团队
+    页的「团队维护」表原先也只拿得到启用的，停用（撤并）的当场从表里消失，编辑弹窗里的「启用」永远用不上，停了就启不回来。
+    各页选团队的下拉取自目录（`/api/spd/catalog`），那里自己只列启用的，不受这个参数影响。"""
+    query = db.query(SpdTeam)
+    if not include_inactive:
+        query = query.filter(SpdTeam.active.is_(True))
     if org_id is not None:
         query = query.filter(SpdTeam.org_id == org_id)
     if level:
