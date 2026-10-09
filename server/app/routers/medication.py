@@ -5,11 +5,11 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import func
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Query, Session
 
 from ..concurrency import move_row
 from ..numtypes import INT4_MAX
-from ..texttypes import NON_BLANK
+from ..texttypes import NON_BLANK, code_key
 from ..visibility import assert_obj_org_writable, assert_org_writable, assert_patient_visible, can_write_org
 from ..database import get_db
 from ..deps import get_current_user, require_roles, row_dict
@@ -289,11 +289,17 @@ def medication_profile(
     # 「次」按处方数（P2-354）：同一张处方里同一味药可以有两行（审方后补开、分次用法），原先每行记一次
     prescriptions: dict[str, set[int]] = {}
     for item, prescribed_at in rows:
+        # 同一味药按编码的比对键归并（P2-1773，与审方认规则的 P1-218 同一个 `code_key`）：编码是开方时的手输框，续方写成
+        # `c09aa02`、`C08CA05 `、全角的原样落库，原先按原样分组——一味药算成两种在用，在用品种数虚高、误报多重用药。显示的
+        # 编码与药名取组内字典序最小的写法：药名原先取无序查询里先遇到的那一行，换个库、换个执行计划就换一个
+        key = code_key(item.drug_code)
         entry = drugs.setdefault(
-            item.drug_code, {"drug_code": item.drug_code, "drug_name": item.drug_name, "times": 0,
-                             "max_daily_dose": 0.0, "in_use": False}
+            key, {"drug_code": item.drug_code, "drug_name": item.drug_name, "times": 0,
+                  "max_daily_dose": 0.0, "in_use": False}
         )
-        seen = prescriptions.setdefault(item.drug_code, set())
+        entry["drug_code"] = min(entry["drug_code"], item.drug_code)
+        entry["drug_name"] = min(entry["drug_name"], item.drug_name)
+        seen = prescriptions.setdefault(key, set())
         if item.prescription_id not in seen:
             seen.add(item.prescription_id)
             entry["times"] += 1
@@ -327,26 +333,56 @@ def usage_stats(db: Session = Depends(get_db)):
 
     按药品编码归并、「方」数按处方数（P2-354）：原先按（编码, 药名）分组、数处方明细行——药名是每行自由填的，同一味药
     换个写法就拆成两行排名；同一张处方里这味药有两行就记成两张方。药名取同编码里按字典序最小的那个写法（稳定、可复现）。
+
+    编码也按比对键归并（P2-1773，与审方认规则的 P1-218 同一个 `code_key`）：编码是开方时的手输框，`c09aa02`、`C09AA02 `、
+    全角的原样落库，原先 SQL 按原样分组，同一味药又拆成几行排名。比对键（全角转半角、去零宽字符）SQL 里算不出来：先按原样
+    编码分组计数，再在这里按比对键并组，显示的编码与药名都取组内字典序最小的写法；排序（方数降序、同数按编码）与前 50 名的
+    上限照旧，挪到并组之后做。
     """
-    rx_count = func.count(func.distinct(PrescriptionItem.prescription_id))
-    rows = (
-        db.query(
+    by_code = (
+        _counted_items(db.query(
             PrescriptionItem.drug_code,
-            func.min(PrescriptionItem.drug_name).label("drug_name"),
-            rx_count.label("rx_count"),
-            func.count(func.distinct(Prescription.patient_id)).label("patient_count"),
-        )
-        .join(Prescription, PrescriptionItem.prescription_id == Prescription.id)
-        .filter(Prescription.status.in_(["auto_passed", "approved"]), prescription_not_reversed())   # P2-624
+            func.min(PrescriptionItem.drug_name),
+            func.count(func.distinct(PrescriptionItem.prescription_id)),
+            func.count(func.distinct(Prescription.patient_id)),
+        ))
         .group_by(PrescriptionItem.drug_code)
-        .order_by(rx_count.desc(), PrescriptionItem.drug_code)
-        .limit(50)
+        .order_by(PrescriptionItem.drug_code)   # 分组键排成全序（test_groupby_order）：并组时各写法的先后两个库一致
         .all()
     )
-    return [
-        {"drug_code": r.drug_code, "drug_name": r.drug_name, "rx_count": r.rx_count, "patient_count": r.patient_count}
-        for r in rows
-    ]
+    groups: dict[str, list[tuple[str, str, int, int]]] = {}
+    for code, name, rx_count, patient_count in by_code:
+        groups.setdefault(code_key(code), []).append((code, name, rx_count, patient_count))
+    # 一组只有一种写法的（绝大多数）SQL 的去重计数就是答案；有几种写法的，方数与人数要跨写法去重——同一张方里两种写法
+    # 各一行、同一位患者两种写法都开过，按写法各数再相加就多算了。只对这几组回表取（处方, 患者）
+    spelled = [spelling[0] for spellings in groups.values() if len(spellings) > 1 for spelling in spellings]
+    rx_ids: dict[str, set[int]] = {}
+    patient_ids: dict[str, set[int]] = {}
+    if spelled:
+        for code, rx_id, patient_id in (
+            _counted_items(
+                db.query(PrescriptionItem.drug_code, PrescriptionItem.prescription_id, Prescription.patient_id))
+            .filter(PrescriptionItem.drug_code.in_(spelled))
+            .distinct()
+        ):
+            rx_ids.setdefault(code_key(code), set()).add(rx_id)
+            patient_ids.setdefault(code_key(code), set()).add(patient_id)
+    stats: list[dict[str, Any]] = []
+    for key, spellings in groups.items():
+        if len(spellings) == 1:
+            code, name, rx_count, patient_count = spellings[0]
+        else:
+            code, name = min(s[0] for s in spellings), min(s[1] for s in spellings)
+            rx_count, patient_count = len(rx_ids[key]), len(patient_ids[key])
+        stats.append({"drug_code": code, "drug_name": name, "rx_count": rx_count, "patient_count": patient_count})
+    stats.sort(key=lambda s: (-s["rx_count"], s["drug_code"]))
+    return stats[:50]
+
+
+def _counted_items(query: Query) -> Query:
+    """用药地图数的处方明细：审方通过、没有退药冲销的处方（P2-624）。并组前后两次取数共用这一个口径（P2-1773）。"""
+    return query.join(Prescription, PrescriptionItem.prescription_id == Prescription.id).filter(
+        Prescription.status.in_(["auto_passed", "approved"]), prescription_not_reversed())
 
 
 class SupplyRiskItemOut(BaseModel):
@@ -376,6 +412,11 @@ def supply_risk(db: Session = Depends(get_db)):
     「库存告警」按**可发量**低于阈值判，与缺药预警同一个构造（`dispense.q_dispensable_shortage`，P2-1250）：原先比汇总，
     批次过了效期汇总一片不少，发药 409，这里照旧不算风险。按库存行编号排：左连之后库给的先后不再是表序，同一药品在
     几家机构的药名不一时，取哪家的名字要稳定。
+
+    同一味药按编码的比对键认（P2-1773，与审方认规则的 P1-218 同一个 `code_key`）：库存与缺药登记的编码都是手输框，小写、
+    尾随空格、全角原样落库，原先按原样分组——甲院库存告警写 `A10AE04`、乙院登记写 `Ａ１０ＡＥ０４`，拆成两条「中」，漏报
+    「高」。按比对键并组：库存告警数机构（同一家几种写法只算 1 家），登记条数相加；显示的编码取组内字典序最小的写法，药名
+    照旧——有库存告警的取库存行的名字，否则取登记上字典序最小的写法。
     """
     low_stocks = [
         s for s, _ in q_dispensable_shortage(db).filter(DrugStock.threshold > 0).order_by(DrugStock.id).all()
@@ -388,19 +429,24 @@ def supply_risk(db: Session = Depends(get_db)):
         .order_by(DrugShortage.drug_code)
         .all()
     )
-    shortage_by_code = {code: (n, name) for code, n, name in open_shortage_rows}
     risks: dict[str, dict[str, Any]] = {}
+    low_orgs: dict[str, set[int]] = {}
     for s in low_stocks:
+        key = code_key(s.drug_code)
         entry = risks.setdefault(
-            s.drug_code,
-            {"drug_code": s.drug_code, "drug_name": s.drug_name, "low_stock_orgs": 0, "open_shortages": 0},
+            key, {"drug_code": s.drug_code, "drug_name": s.drug_name, "low_stock_orgs": 0, "open_shortages": 0},
         )
-        entry["low_stock_orgs"] += 1
-    for code, (n, name) in shortage_by_code.items():
+        entry["drug_code"] = min(entry["drug_code"], s.drug_code)
+        low_orgs.setdefault(key, set()).add(s.org_id)
+        entry["low_stock_orgs"] = len(low_orgs[key])
+    for code, n, name in open_shortage_rows:
         entry = risks.setdefault(
-            code, {"drug_code": code, "drug_name": name, "low_stock_orgs": 0, "open_shortages": 0}
+            code_key(code), {"drug_code": code, "drug_name": name, "low_stock_orgs": 0, "open_shortages": 0}
         )
-        entry["open_shortages"] = n
+        entry["drug_code"] = min(entry["drug_code"], code)
+        if not entry["low_stock_orgs"]:
+            entry["drug_name"] = min(entry["drug_name"], name)
+        entry["open_shortages"] += n
     results = []
     for entry in risks.values():
         # 既有缺药登记又库存告警=高风险；仅其一=中风险

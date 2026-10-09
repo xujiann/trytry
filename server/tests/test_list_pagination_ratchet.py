@@ -95,7 +95,10 @@ import warnings
 #: → 88（同日第五十批 P2-1711：危急值清单加可选 `open`，未处置 / 已处置分开取走 paginate；缺省那一页照旧封顶 100 条、
 #:   字节不变——HIS 轮询的是它，两个危急值页改为未处置的续页取全）
 #: → 87（同日第五十一批 P2-1733：统一编码字典条目清单切到 paginate，对接方「下载对照」能翻页取全）
-BASELINE_SILENT_TRUNCATION = 87
+#: → 86（同日第五十二批 P2-1773：用药地图改为按编码比对键并组之后在 Python 里排名取前 50，SQL 不再 `.limit(50)`——上限照旧在，
+#:   判据看不见它（与帮手函数里的上限同属盲区）。它是品种排名的展示上限，与卫健工作台的前 20 名同类、不是列表分页缺陷；
+#:   基线收紧到实测值，不留空档）
+BASELINE_SILENT_TRUNCATION = 86
 
 ROUTER_DIRS = (
     (os.path.join(os.path.dirname(__file__), "..", "app", "routers"), ""),
