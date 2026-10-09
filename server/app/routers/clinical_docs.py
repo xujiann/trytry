@@ -531,8 +531,12 @@ def create_handover(
         .filter(Admission.ward_id == body.ward_id, Admission.status == "admitted")
         .count()
     )
+    # 交班人留空取登录人（P2-1769）：原先三项缺省空串原样落库，交班人、接班人、内容全空也 201，清单印「— → —」，出参又不带
+    # 录入账号，事后谁交的无从查起。同文件病程、护理、体征的署名留空都取登录人，门急诊护理同形已修（P2-1308）；账号没填姓名的
+    # 取用户名。接班人照旧可空——是否必填、要不要接班人确认随 P2-280
     handover = ShiftHandover(
-        **body.model_dump(), patient_count=patient_count, created_by=user.id
+        **body.model_dump(exclude={"from_staff"}), from_staff=body.from_staff or user.full_name or user.username,
+        patient_count=patient_count, created_by=user.id,
     )
     db.add(handover)
     db.commit()
