@@ -100,6 +100,8 @@ class InpatientOrder(Base):
     __table_args__ = (
         # 部分唯一索引：同一次住院里，内容相同的**长期医嘱**同时只能有一条在执行。
         # 临时医嘱按次开立（同内容多条合法），停用后重开也合法，故只锁 long+active。
+        # 按原文比，只兜字面完全相同的并发 / 双击；写法不同（空格、全半角、大小写）的同一条由 `create_order` 按
+        # `text_key` 查重（P2-1697）。
         Index(
             "uq_inpatient_order_active_long",
             "admission_id", "content",

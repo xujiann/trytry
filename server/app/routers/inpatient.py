@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 from ..concurrency import insert_or_conflict, serialized_on
 from ..datetypes import OptionalDateTimeStr
 from ..numtypes import MONEY_MAX, MoneyFloat
-from ..texttypes import NON_BLANK
+from ..texttypes import NON_BLANK, text_key
 from ..visibility import (
     assert_obj_org_writable,
     assert_org_writable,
@@ -730,16 +730,18 @@ def create_order(
         # 长期医嘱按"一条一直执行"开立，同一次住院里内容一模一样的在执行长期医嘱只该有一条：
         # 两条就是两行医嘱单、两笔执行登记，最后要主管医师回头人工仲裁停掉一条。
         # 临时医嘱按次开立（同内容多条合法）、停用后重开也合法，故只查 long+active。
+        # 「一模一样」按比对键 `text_key` 认（P2-1697）：原先按字面比，多一个空格、全角空格或大小写不同（`bid` / `BID`），同一条
+        # 长期医嘱就能并存——页面只去首尾空白。两层各管一段：这里在这次住院执行中的长期医嘱里按比对键查（顺序重复、写法不同）；
+        # 库里的部分唯一索引按原文，只兜字面完全相同的并发 / 双击（写法不同又恰好并发的，不在它管的范围里）。存量不动
         if body.order_type == "long":
-            duplicate = (
-                db.query(InpatientOrder.id)
-                .filter(
+            key = text_key(body.content)
+            duplicate = any(
+                text_key(content) == key
+                for (content,) in db.query(InpatientOrder.content).filter(
                     InpatientOrder.admission_id == body.admission_id,
                     InpatientOrder.order_type == "long",
                     InpatientOrder.status == "active",
-                    InpatientOrder.content == body.content,
                 )
-                .first()
             )
             if duplicate:
                 db.rollback()
