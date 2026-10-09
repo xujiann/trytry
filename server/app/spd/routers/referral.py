@@ -818,6 +818,11 @@ def down_referral(
     _assert_holds_case(user, case)
     if db.get(Organization, body.target_org_id) is None:
         raise HTTPException(status_code=404, detail="下转目标机构不存在")
+    # 下转目标不能是这张单此刻的持有机构本身（P2-1608）：持有方与 `_holds_case` 同一列（`current_org_id`）。原先只查目标
+    # 在不在，县医院「下转」给自己 200、`current_org` 原地不动，再由自己点「随访接收」闭环、记下转承接积分——患者根本
+    # 没回基层。同级之间（县 → 另一家县级）算不算下转随 P2-481 待裁定，这里不拦
+    if body.target_org_id == case.current_org_id:
+        raise HTTPException(status_code=422, detail="下转目标不能是当前接诊机构本身")
     # 期望态保持 IN ("accepted", "arrived")：下转输给并发的到院登记时（accepted 已变
     # arrived）本条 UPDATE 仍应命中——那正是 accepted→arrived→down_referred 这条合法
     # 顺序路径；只有输给另一路下转（已是 down_referred）才该 409。

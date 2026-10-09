@@ -3733,7 +3733,10 @@ def test_转诊审核与随访接收由框自己提交_意见写超了框不关(
         "reason": "E2E 框内提交·随访接收"})
     for _ in range(2):   # submitted → township_reviewed → accepted
         admin_call("POST", f"/api/spd/referrals/{down['id']}/review", {"action": "pass"})
-    admin_call("POST", f"/api/spd/referrals/{down['id']}/down", {"target_org_id": seed["org"]["id"]})
+    # 下转给下级卫生院（P2-1608）：单子此刻在县医院手上，下转给县医院自己 422
+    town = admin_call("POST", "/api/organizations", {"name": "E2E转诊框内提交卫生院", "org_type": "township",
+                                                     "level": "township", "parent_id": seed["org"]["id"]})
+    admin_call("POST", f"/api/spd/referrals/{down['id']}/down", {"target_org_id": town["id"]})
 
     def status(case_id):
         return next(c for c in admin_read(f"/api/spd/referrals?patient_id={patient['id']}&open_only=false")

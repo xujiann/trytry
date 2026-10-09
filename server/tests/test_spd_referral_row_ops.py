@@ -43,12 +43,15 @@ def world(client, admin):
                                current_org_id=village.id, current_level="village", target_org_id=county.id)
         db.add(case)
         db.commit()
-        return {"case": case.id, "county": county.id}
+        return {"case": case.id, "county": county.id, "village": village.id}
 
 
-def _set_status(case_id: int, status: str) -> None:
+def _set_status(world, status: str) -> None:
+    """持有机构一并拨回村卫生室（P2-1608）：前面某一格下转成功后单子已在县医院手上，再拿县医院当下转目标是「下转给
+    自己」，那一格 422 与这里要对的状态维无关。"""
     with SessionLocal() as db:
-        db.get(SpdReferralCase, case_id).status = status
+        case = db.get(SpdReferralCase, world["case"])
+        case.status, case.current_org_id = status, world["village"]
         db.commit()
 
 
@@ -64,7 +67,7 @@ ACTIONS = {
 @pytest.mark.parametrize("op", sorted(ACTIONS))
 @pytest.mark.parametrize("status", STATUSES)
 def test_页面给不给这个动作恰好等于后端收不收(client, admin, world, op, status):
-    _set_status(world["case"], status)
+    _set_status(world, status)
     offered = op in _row_actions(client, admin, world["case"])
     path, body = ACTIONS[op](world)
     resp = client.post(f"/api/spd/referrals/{world['case']}/{path}", headers=admin, json=body)
