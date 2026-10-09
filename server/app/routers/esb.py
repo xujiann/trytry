@@ -37,7 +37,7 @@ from ..models import EsbEndpoint, EsbFlow, EsbFlowRun, EsbMessage, ExchangeLog, 
 from ..numtypes import non_finite_path
 from ..security import hash_password, verify_password
 from ..state_store import SlidingWindowRateLimiter
-from ..texttypes import NON_BLANK
+from ..texttypes import NON_BLANK, is_blank_text
 from .integration import parse_fhir_patient, parse_hl7v2_patient
 from .patients import create_patient_idempotent
 
@@ -555,6 +555,15 @@ def _paused_route_target(db: Session, steps: list) -> tuple[int, str] | None:
     return None
 
 
+def _unfilled(value) -> bool:
+    """校验步的「必填缺失」：键不存在（取到 None）、None，或文字里一个看得见的字符都没有（P2-1731，第五十一批扫描 AO1-5）。
+
+    原先按 `not str(value or "").strip()` 判，`or ""` 把所有假值折成空串：检验结果 `abnormal_flag: 0`、`result: 0.0`、
+    `false` 都判成缺失，消息记失败、扣次数，按编排重试永远过不去，最后进死信。0 / 0.0 / false 是填了的值；「没填」与
+    数据质控的「为空」同一个判据（`dataquality._is_blank`，空白串用 `is_blank_text` 判，P2-1148）。"""
+    return value is None or (isinstance(value, str) and is_blank_text(value))
+
+
 def _run_step(db: Session, step: dict, context: dict) -> str:
     """执行单个编排步骤；返回可读结果说明，失败以 ValueError/HTTPException 抛出。"""
     step_type = step.get("type", "")
@@ -568,9 +577,7 @@ def _run_step(db: Session, step: dict, context: dict) -> str:
 
     if step_type == "validate":
         data = context.get("data") or context["payload"]
-        missing = [
-            f for f in config.get("required", []) if not str(data.get(f, "") or "").strip()
-        ]
+        missing = [f for f in config.get("required", []) if _unfilled(data.get(f))]
         if missing:
             raise ValueError(f"必填字段缺失：{'、'.join(missing)}")
         return f"校验通过（{len(config.get('required', []))} 项必填）"
