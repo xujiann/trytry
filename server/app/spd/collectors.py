@@ -118,11 +118,16 @@ def collect_publichealth(db: Session, source: SpdDataSource) -> int:
     窗口按 id 翻页**取完**（每页 `PUBLICHEALTH_PAGE` 条）。原先只取窗口里最早的一页：窗口里多于一页时，
     每一轮取到的都是同一批最早的——头一轮落库、之后全被判重跳过——其余的一轮都轮不到，窗口移过去就永远
     出了窗口，同步日志照写成功（P2-94）。判重只查这一页的来源键；原先每轮把全部监测值的来源键读进内存。
+
+    源带机构的只采该机构管理的慢病档案下的随访，不带机构的照采全县——与 `collect_encounter_probe` 按 `source.org_id`
+    取数同一口径（P2-1642）。原先不看机构：按乡镇各登记一个公卫源，先跑的那个把全县随访都采走，另一个永远「正常、
+    0 行」；停用某镇的源也挡不住该镇的数据（别的镇的源照样采进来）。
     """
     since = lookback_since(db, source)
     written, after_id = 0, 0
     while True:
-        rows = iter_recent_chronic_followups(db, since, limit=PUBLICHEALTH_PAGE, after_id=after_id)
+        rows = iter_recent_chronic_followups(db, since, limit=PUBLICHEALTH_PAGE, after_id=after_id,
+                                             org_id=source.org_id)
         if not rows:
             return written
         refs = [f"chronic_fu:{followup.id}:{metric}" for followup, _ in rows for metric, *_ in _PUBLICHEALTH_METRICS]

@@ -406,21 +406,25 @@ def evidence_urls(evidence: list) -> list[dict]:
     return out
 
 
-def iter_recent_chronic_followups(db: Session, since, limit: int = 500, after_id: int = 0):
+def iter_recent_chronic_followups(
+    db: Session, since, limit: int = 500, after_id: int = 0, org_id: int | None = None,
+):
     """公卫慢病随访记录（含 patient_id），供 publichealth 采集器同步体征。
 
     联表在这里做——FollowUp 挂在 chronic_patients 下，没有 patient_id 列，
     这是平台数据的形状，不该让采集器知道。按 id 升序一页 `limit` 条，`after_id` 翻下一页
     （调用方要把窗口取完——只取第一页，窗口里多于一页的随访永远轮不到，P2-94）。
+
+    给了 `org_id` 的只取该机构管理的慢病档案（`chronic_patients.managed_by_org_id`）下的随访，缺省不筛（P2-1642）：
+    随访表自己没有机构列，归属看档案的管理机构——与绩效考核按机构数慢病随访（`routers/performance.py`）同一列。
     """
     from ..models import ChronicPatient
 
-    rows = (
+    query = (
         db.query(FollowUp, ChronicPatient.patient_id)
         .join(ChronicPatient, ChronicPatient.id == FollowUp.chronic_id)
         .filter(FollowUp.created_at >= since, FollowUp.id > after_id)
-        .order_by(FollowUp.id)
-        .limit(limit)
-        .all()
     )
-    return rows
+    if org_id is not None:
+        query = query.filter(ChronicPatient.managed_by_org_id == org_id)
+    return query.order_by(FollowUp.id).limit(limit).all()
