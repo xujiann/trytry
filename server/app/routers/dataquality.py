@@ -561,13 +561,19 @@ def rule_config_problem(target_table: str, rule_type: str, config: dict) -> str:
                 # diagnosis）原先 201，扫描时字典查不到、合法集合为空，字典里明明有的诊断全判 error；引用表写错早就 422
                 return f"字典 {config['ref_code_system']} 未登记（可选：{'、'.join(sorted(SYSTEM_CODES))}）"
         else:
-            ref_model = _TABLE_MODELS.get(config.get("ref_table", ""))
+            # 引用表名只收文字（P2-1582）：写成列表 / 对象时原先拿去查表名字典，抛 TypeError——建规则 500，存量里有一条这样的，
+            # 汇总与运行检查整体 500（P2-1123 同一类）
+            ref_table = config.get("ref_table", "")
+            ref_model = _TABLE_MODELS.get(ref_table) if isinstance(ref_table, str) else None
             if ref_model is None:
                 return f"引用表 {config.get('ref_table') or '空'} 未登记"
             if not _is_field(ref_model, config.get("ref_field", "code")):
                 return f"ref_field（{config.get('ref_field', 'code')}）不是 {config['ref_table']} 的字段"
     if rule_type == "logic":
         check = config.get("check", "")
+        if not isinstance(check, str):
+            # 校验名只收文字（P2-1582）：写成列表 / 对象时下面的 `in` 抛 TypeError，建规则 500、存量让汇总与运行检查整体 500
+            return f"check 要写成逻辑校验名（可选：{'、'.join(sorted(_LOGIC_CHECKS))}）"
         if check not in _LOGIC_CHECKS:
             return f"逻辑校验 {check or '空'} 未实现（可选：{'、'.join(sorted(_LOGIC_CHECKS))}）"
         own = _OWN_TABLE_CHECKS.get(check)
