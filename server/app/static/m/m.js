@@ -725,13 +725,32 @@ async function loadService() {
 /** 号源清单每次最多给这么多（与后端 `/me/slots` 默认 limit 一致）：拿满了就提示按机构 / 日期筛 */
 const SLOT_PAGE = 200;
 
+/** 我的预约取数（P2-1702）：待就诊的排在最前，其后接最近约的，按 id 去重；回 `{ rows, total }`。
+ *  接口缺省按编号倒序、一页 100 条：本人加家属约过 100 个号以后，最早约下、最近要去的那几个被挤出这一页，看不到也取消不了。
+ *  照健康任务 P2-1674 的做法：「已预约」的按 `status=booked` 续页取全（`fetchAllPages`），按号源日期、时段、编号排；其后接
+ *  缺省清单。接口缺省不动。total 是全部预约数（缺省清单的 X-Total-Count），读不到为 null。 */
+async function fetchMyAppointments() {
+  // 两处地址写字面量：孤儿端点闸门按字面量认页面入口
+  const [{ rows: recent, total }, booked] = await Promise.all([
+    authApi("/api/portal/me/appointments", { withTotal: true }),
+    fetchAllPages(authApi, "/api/portal/me/appointments?status=booked"),
+  ]);
+  const upcoming = booked.sort((a, b) => (a.slot_date !== b.slot_date ? (a.slot_date < b.slot_date ? -1 : 1)
+    : a.slot_time !== b.slot_time ? (a.slot_time < b.slot_time ? -1 : 1) : a.id - b.id));
+  const ids = new Set(upcoming.map((a) => a.id));
+  return { rows: [...upcoming, ...recent.filter((a) => !ids.has(a.id))], total };
+}
+
 async function renderAppointments(box) {
   // 可约号源按机构 / 日期筛（P2-376）：原先不带参数，只拿到全县最早的 200 个号——机构一多，后面几天的号、
   // 某家医院的门诊在手机上看不到、约不上；清单接口早就能按机构 / 日期筛，页面没有入口
-  const [mine, orgs] = await Promise.all([
-    authApi("/api/portal/me/appointments"),
+  // 我的预约待就诊的排最前、标题写全量（P2-1702，取数见 fetchMyAppointments）：原先印本页条数 `mine.length`，
+  // 106 条预约只列 100 条、标题「我的预约（100）」，最近要去的那几个号不在页上
+  const [{ rows: mine, total }, orgs] = await Promise.all([
+    fetchMyAppointments(),
     authApi("/api/portal/me/slot-orgs"),
   ]);
+  const partial = total !== null && mine.length < total;
   const list = mine.map((a) => `<div class="m-card">
     ${kv("就诊人", esc(a.patient_name))}
     ${kv("机构", esc(a.org_name))}
@@ -741,7 +760,8 @@ async function renderAppointments(box) {
     ${a.status === "booked" ? `<button class="cancel-appt" data-id="${a.id}">取消预约</button>` : ""}
   </div>`).join("");
   box.innerHTML = `
-    <div class="sec-title">我的预约（${mine.length}）</div>
+    <div class="sec-title">我的预约（${partial ? `已列 ${mine.length} / 共 ${total}` : mine.length}）</div>
+    ${partial ? '<p class="hint">待就诊的全部列出、排在最前，其余只列最近约的</p>' : ""}
     ${list || '<p class="empty">暂无预约</p>'}
     <div class="sec-title">可约号源</div>
     <div class="m-card">

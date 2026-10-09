@@ -24,7 +24,7 @@ import secrets
 from datetime import timedelta
 from typing import Callable, Iterable
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 from sqlalchemy import func
@@ -1372,10 +1372,17 @@ def portal_my_appointments(
     response: Response,
     offset: int = 0,
     limit: int = 100,
+    # 按状态筛（P2-1702）：取值照预约状态列注释，写错 422，不静默当成「不筛」。形参不叫 `status`——本文件顶上 import 了
+    # fastapi 的 `status` 模块，查询参数名经 alias 仍是 `?status=`，与管理端预约清单（P2-1300）同名
+    appointment_status: str | None = Query(default=None, alias="status", pattern="^(booked|cancelled|fulfilled)$"),
     account: ResidentAccount = Depends(current_resident),
     db: Session = Depends(get_db),
 ):
     """我的预约：含代管家庭成员的预约。
+
+    可按状态筛（P2-1702）：缺省 100 条、按编号倒序，本人加家属约过 100 个号以后，最早约下、最近要去的那几个被挤出这一页，
+    居民端看不到也取消不了。页面现在先按 `status=booked` 续页取全、排在最前（同管理端 P2-1300）；筛选叠在「本人 + 代管
+    成员」之后，只收窄；缺省（不带 `status`）的出参、排序与分页不变。
 
     两处与分页有关的口径：
     - **空名单那条早退要自己补 `X-Total-Count: 0`**：它不经过 `paginate`，
@@ -1395,16 +1402,15 @@ def portal_my_appointments(
             account.id, pid, resource="appointment",
             basis="self" if pid == account.patient_id else "delegate",
         )
-    rows = paginate(
+    query = (
         db.query(Appointment, AppointmentSlot, Patient)
         .join(AppointmentSlot, Appointment.slot_id == AppointmentSlot.id)
         .join(Patient, Appointment.patient_id == Patient.id)
         .filter(Appointment.patient_id.in_(ids))
-        .order_by(Appointment.id.desc()),
-        response,
-        offset,
-        limit,
     )
+    if appointment_status:
+        query = query.filter(Appointment.status == appointment_status)
+    rows = paginate(query.order_by(Appointment.id.desc()), response, offset, limit)
     org_names = {o.id: o.name for o in db.query(Organization).all()}
     return [
         {
