@@ -94,16 +94,23 @@ def _active_rule(db: Session, drug_code: str) -> DrugRule | None:
     编码原样对不上的，再按比对键（`texttypes.code_key`：全角转半角、去首尾空白、大写）找一遍（P1-218）：原先开方编码写成
     `b01aa03`、`B01AA03 `、`Ｂ０１ＡＡ０３`，这味药就等于「规则库里没有」——超量、相互作用、禁忌诊断、特殊人群一律不判，
     处方直接系统审通过、不进药师队列。原样命中的照旧（快路径），只在对不上时多认一种写法，审方只会更严、不会放过。"""
-    rule = (
-        db.query(DrugRule)
-        .filter(DrugRule.drug_code == drug_code, DrugRule.active.is_(True))
-        .first()
-    )
+    return _find_rule(db, drug_code, active_only=True)
+
+
+def _find_rule(db: Session, drug_code: str, *, active_only: bool) -> DrugRule | None:
+    """按药品编码找规则行：先原样找，对不上再按比对键（`code_key`）找一遍，撞上多条取 id 最小的（P1-218）。
+
+    `active_only=False` 不滤生效位：点评要点、肝肾提示是给点评人看的说明文字，停用的规则行也要回溯得到（P2-1660）。
+    按比对键撞上多条时生效的排在前面：开方那一刻系统审认的是生效的那条（`_active_rule`），别让一条 id 更小的停用旧行
+    顶替它的说明文字；只有停用的行对得上时才取停用的。`active_only=True` 时全是生效行，次序仍是 id。"""
+    query = db.query(DrugRule)
+    if active_only:
+        query = query.filter(DrugRule.active.is_(True))
+    rule = query.filter(DrugRule.drug_code == drug_code).first()
     if rule is not None:
         return rule
     key = code_key(drug_code)
-    return next((r for r in db.query(DrugRule).filter(DrugRule.active.is_(True)).order_by(DrugRule.id)
-                 if code_key(r.drug_code) == key), None)
+    return next((r for r in query.order_by(DrugRule.active.desc(), DrugRule.id) if code_key(r.drug_code) == key), None)
 
 
 def _rule_snapshot(rule: DrugRule | None) -> dict:
@@ -554,7 +561,9 @@ def prescription_review_points(prescription_id: int, db: Session = Depends(get_d
     for item in items:
         max_dose: float | None
         if item.rule_max_daily_dose is not None:
-            text_rule = db.query(DrugRule).filter(DrugRule.drug_code == item.drug_code).first()
+            # 说明文字的规则行与开方时认规则同一个找法（原样找不到再按比对键，P1-218），只是不滤生效位：原先只按原样找，
+            # 编码写成 `b01aa03`、`Ｂ０１ＡＡ０３` 的方系统审照规则拦下、快照有值，点评页却印「规则库未维护」、肝肾提示空（P2-1660）
+            text_rule = _find_rule(db, item.drug_code, active_only=False)
             max_dose, unit = item.rule_max_daily_dose, item.rule_dose_unit
         else:
             text_rule = _active_rule(db, item.drug_code)
