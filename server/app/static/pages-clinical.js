@@ -3309,6 +3309,7 @@ async function renderInpatient() {
     <div class="panel hidden" id="inp-orders-panel"><h3 id="inp-orders-title">医嘱单</h3><div id="inp-orders"></div>
       <div id="inp-exec"></div></div>`;
   let ordersSeq = 0;
+  let drawnOrders = [];   // 医嘱面板上正画着的医嘱：「停止」的确认框据它写明是哪一条（P2-1695）
   const drawExecutions = async (orderId) => {
     // 只按行上的 id 取（行本身来自按住院单查的医嘱列表），不做"输入任意医嘱ID"的入口
     // 执行记录只看最近的一页（按记录号倒序），列不全时标题写明「已列 N / 共 M」（P2-1693，同 P2-1547）：长期医嘱一天执行几次，
@@ -3413,7 +3414,18 @@ async function renderInpatient() {
         ].join("\n") })) return;
         await api(`/api/inpatient/admissions/${d.discharge}/discharge`, { method: "POST" }); route();
       }
-      if (d.stopOrder) { await api(`/api/inpatient/orders/${d.stopOrder}/stop`, { method: "POST" }); route(); }
+      if (d.stopOrder) {
+        // 停医嘱先确认（P2-1695，P2-43 的规矩，同上面「出院」的 P2-1334）：原先点一下就停，而停了撤不回——只能另开一条新医嘱，
+        // 执行记录从此分在两条医嘱上；红色「停止」又紧挨「登记执行」，点完整页重画，点错了哪一行当场看不到。
+        // 写明是哪一条：intro 由 spdModal 自己 esc()，这里不再转义（再转就成了双重转义）
+        const o = drawnOrders.find((x) => x.id === Number(d.stopOrder));
+        if (!await spdModal(`停止医嘱（医嘱 ${d.stopOrder}）`, [], { intro: [
+          o ? `${o.order_type === "long" ? "长期医嘱" : "临时医嘱"}：${o.content}` : `医嘱 ${d.stopOrder}`,
+          "停止后不可恢复：要接着执行只能重新开立一条医嘱，执行记录从此分在两条医嘱上。",
+          "点「确定」即停止，点「取消」不停。",
+        ].join("\n") })) return;
+        await api(`/api/inpatient/orders/${d.stopOrder}/stop`, { method: "POST" }); route();
+      }
       if (d.execList) return await drawExecutions(d.execList);
       if (d.execAdd) {
         const picked = await spdModal(`登记执行（医嘱 ${d.execAdd}）`, [
@@ -3447,6 +3459,7 @@ async function renderInpatient() {
         // 患者原先被挤出去的正是入院当天开的长期医嘱——它的「登记执行」「停止」都没了按钮。一次住院的医嘱以住院天数封顶
         const orders = await fetchAllPages(api, `/api/inpatient/orders?admission_id=${d.orders}`);
         if (seq !== ordersSeq) return;
+        drawnOrders = orders;
         $("#inp-orders-panel").classList.remove("hidden");
         $("#inp-orders-title").textContent = `医嘱单 · 住院 #${d.orders}`;
         $("#inp-exec").innerHTML = "";

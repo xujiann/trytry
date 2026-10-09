@@ -5622,6 +5622,36 @@ def test_住院页出院先确认_取消仍在院_确定才出院(page, base_url
                   lambda: status() == "admitted", lambda: status() == "discharged")   # 修前一点就出院，等不到确认框
 
 
+def test_住院页停医嘱先确认_取消仍执行中_确定才停止(page, base_url, seed, admin_read, admin_call):
+    """P2-1695（第五十批扫描 AN4-3）：医嘱单上的「停止」原先点一下就停，而停了撤不回（只能重新开立一条）。现在先弹确认，写明
+    是哪条医嘱与「停止后不可恢复」：先点取消，按接口核对仍执行中；再点确定才停止。"""
+    ward = admin_call("POST", "/api/inpatient/wards", {"org_id": seed["org"]["id"], "name": "E2E停医嘱病区"})
+    bed = admin_call("POST", "/api/inpatient/beds", {"ward_id": ward["id"], "bed_no": "S-01"})
+    patient = admin_call("POST", "/api/patients", {"name": "E2E停医嘱患者", "id_card": "320981198205056955", "gender": "男"})
+    adm = admin_call("POST", "/api/inpatient/admissions", {
+        "patient_id": patient["id"], "ward_id": ward["id"], "bed_id": bed["id"], "diagnosis_name": "社区获得性肺炎"})
+    order = admin_call("POST", "/api/inpatient/orders", {
+        "admission_id": adm["id"], "order_type": "long", "content": "E2E停医嘱 头孢呋辛 1.5g ivgtt bid"})
+
+    def status():
+        (row,) = [o for o in admin_read(f"/api/inpatient/orders?admission_id={adm['id']}") if o["id"] == order["id"]]
+        return row["status"]
+
+    _login(page, base_url)
+    _open_page(page, "inpatient", "住院管理")
+    page.click(f'button[data-orders="{adm["id"]}"]')
+    stop = page.locator(f'button[data-stop-order="{order["id"]}"]')
+    expect(stop).to_be_visible()
+    stop.click()
+    expect(_modal(page)).to_contain_text("E2E停医嘱 头孢呋辛 1.5g ivgtt bid")   # 写明是哪一条
+    expect(_modal(page)).to_contain_text("停止后不可恢复")
+    _cancel_modal(page)
+    assert status() == "active", "点了取消却照样停了"   # 修前一点就停，等不到确认框
+    stop.click()
+    _redrawn(page, lambda: _spd_modal(page, {}))
+    assert status() == "stopped"
+
+
 @pytest.fixture(scope="session")
 def consent_seed(base_url, seed):
     """两份待签的门诊告知书：一份用来记签署，一份用来记拒签。"""
