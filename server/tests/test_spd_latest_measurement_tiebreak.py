@@ -38,6 +38,27 @@ def test_按测定时刻倒序的都以编号倒序收尾():
     assert not bad, bad   # 修前 3 处：spd/service.py、spd/routers/portal.py、spd/routers/population.py
 
 
+def _measured_asc_orderings() -> list[tuple[str, int, str]]:
+    """升序的那一形（P2-1603，第四十七批扫描 AK2-12）：参数含裸 `SpdMeasurement.measured_at` 的 order_by。
+
+    趋势按测定时刻升序取全部、`latest` 取末行（`rows[-1]`）——与倒序取首行是同一件事，上面只认 `.desc()` 的钉看不到。"""
+    found = []
+    for path in sorted(APP.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "order_by"
+                    and any(ast.unparse(a) == "SpdMeasurement.measured_at" for a in node.args)):
+                found.append((str(path.relative_to(APP)), node.lineno, ast.unparse(node)))
+    return found
+
+
+def test_按测定时刻升序的也以编号收尾():
+    sites = _measured_asc_orderings()
+    assert sites, sites   # 至少有趋势这一处（spd/routers/care.py::measurement_trend）
+    bad = [s for s in sites if not s[2].endswith("SpdMeasurement.measured_at, SpdMeasurement.id)")]
+    assert not bad, bad   # 修前 1 处：spd/routers/care.py 的趋势
+
+
 def test_同一时刻两条读数_规则事实取后录的那条(client, admin):
     """行为上记下约定的次序（SQLite 上修前修后都绿，见模块文档）。"""
     from app.spd.models import SpdMeasurement

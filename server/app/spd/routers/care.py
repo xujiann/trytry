@@ -616,7 +616,9 @@ def measurement_trend(
             SpdMeasurement.metric == metric,
             SpdMeasurement.measured_at >= since,
         )
-        .order_by(SpdMeasurement.measured_at)
+        # 以编号收尾（P2-1603）：`latest` 取的是末行，同一测定时刻几条读数时取后录的那条，与监测清单、规则事实同一个次序
+        # （P2-707）；原先只按测定时刻升序，PG 上并列的几条谁排最后由执行计划定
+        .order_by(SpdMeasurement.measured_at, SpdMeasurement.id)
         .all()
     )
     buckets: dict[str, list[float]] = {}
