@@ -41,14 +41,15 @@ async function renderClinicalDocs() {
   const current = pickedId("medplat_doc_adm", inHospital)
     || (inHospital[0] && inHospital[0].id) || 0;
   // 在用医嘱给护理记录的「关联医嘱」下拉（P2-863）：执行某条医嘱产生的护理记录挂到那条医嘱上，医嘱执行视图的
-  // 「关联护理记录 N 条」才数得到——原先表单没有这一项，按界面用法恒为 0
+  // 「关联护理记录 N 条」才数得到——原先表单没有这一项，按界面用法恒为 0。续页取全（P2-1693，照 P2-1333）：原先只取缺省一页
+  // 200 条（按医嘱号倒序），临时医嘱执行过也一直「执行中」（P2-281），住得久的患者入院当天开的长期医嘱被挤出去、选不到
   const [notes, nursing, vitals, completeness, activeOrders] = current
     ? await Promise.all([
         api(`/api/inpatient/admissions/${current}/progress-notes`),
         api(`/api/inpatient/admissions/${current}/nursing-records`),
         api(`/api/inpatient/admissions/${current}/vitals`),
         api(`/api/inpatient/admissions/${current}/document-completeness`),
-        api(`/api/inpatient/orders?admission_id=${current}&status=active`),
+        fetchAllPages(api, `/api/inpatient/orders?admission_id=${current}&status=active`),
       ])
     : [[], [], [], null, []];
   // 交接班清单（P2-476）：原先只记得进、没有一个页面看得见——接班的人无从读起。交接班按病区、不挂某次住院，

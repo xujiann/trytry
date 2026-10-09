@@ -33,7 +33,8 @@ def test_医嘱单只画最后点的那一次住院_标题写住院号():
     src = _src("pages-clinical.js")
     assert "let ordersSeq = 0;" in src
     body = _after(src, "if (d.orders) {")
-    _guarded(body, "ordersSeq", "await api(`/api/inpatient/orders?admission_id=")
+    # 医嘱单续页取全（P2-1693）：取数那一句换成 `fetchAllPages(api, …)`，序号照旧包住它
+    _guarded(body, "ordersSeq", "await fetchAllPages(api, `/api/inpatient/orders?admission_id=")
     assert '$("#inp-orders-title").textContent = `医嘱单 · 住院 #${d.orders}`;' in body
     assert 'id="inp-orders-title"' in src
 

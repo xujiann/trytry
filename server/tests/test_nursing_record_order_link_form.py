@@ -13,5 +13,6 @@ def test_护理记录表单有关联医嘱_按数送():
     start = PAGE.index('<form class="inline" id="nursing-form">')
     form = PAGE[start:PAGE.index("</form>", start)]
     assert '<select name="inpatient_order_id">' in form and "activeOrders.map((o) =>" in form   # 修前没有
-    assert "api(`/api/inpatient/orders?admission_id=${current}&status=active`)" in PAGE
+    # 在用医嘱续页取全（P2-1693）：只取一页时住得久的患者入院当天的长期医嘱选不到
+    assert "fetchAllPages(api, `/api/inpatient/orders?admission_id=${current}&status=active`)" in PAGE
     assert 'formJson(e.target, ["inpatient_order_id"])' in PAGE

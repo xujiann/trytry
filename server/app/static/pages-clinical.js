@@ -3311,8 +3311,11 @@ async function renderInpatient() {
   let ordersSeq = 0;
   const drawExecutions = async (orderId) => {
     // 只按行上的 id 取（行本身来自按住院单查的医嘱列表），不做"输入任意医嘱ID"的入口
-    const rows = await api(`/api/inpatient/orders/${encodeURIComponent(orderId)}/executions`);
-    $("#inp-exec").innerHTML = `<h3 style="margin-top:14px">医嘱 ${esc(orderId)} 的执行记录</h3>
+    // 执行记录只看最近的一页（按记录号倒序），列不全时标题写明「已列 N / 共 M」（P2-1693，同 P2-1547）：长期医嘱一天执行几次，
+    // 住上几个月就过了一页，原先不读总数，看不出前面还有
+    const { rows, total } = await api(`/api/inpatient/orders/${encodeURIComponent(orderId)}/executions`, { withTotal: true });
+    const listed = total !== null && rows.length < total ? `（已列 ${rows.length} / 共 ${total}）` : "";
+    $("#inp-exec").innerHTML = `<h3 style="margin-top:14px">医嘱 ${esc(orderId)} 的执行记录${listed}</h3>
       ${table(["记录", "执行人", "执行时间", "皮试", "说明"], rows, (x) =>
         `<tr><td>${x.id}</td><td>${esc(x.executed_by_name) || x.executed_by}</td>
          <td>${esc((x.executed_at || "").slice(0, 16).replace("T", " "))}</td>
@@ -3434,7 +3437,9 @@ async function renderInpatient() {
         const seq = ++ordersSeq;
         $("#inp-orders").innerHTML = "";
         $("#inp-exec").innerHTML = "";
-        const orders = await api(`/api/inpatient/orders?admission_id=${d.orders}`);
+        // 续页取全（P2-1693，照 P2-1333）：接口一页缺省 200 条、按医嘱号倒序，临时医嘱执行过也一直「执行中」（P2-281），住得久的
+        // 患者原先被挤出去的正是入院当天开的长期医嘱——它的「登记执行」「停止」都没了按钮。一次住院的医嘱以住院天数封顶
+        const orders = await fetchAllPages(api, `/api/inpatient/orders?admission_id=${d.orders}`);
         if (seq !== ordersSeq) return;
         $("#inp-orders-panel").classList.remove("hidden");
         $("#inp-orders-title").textContent = `医嘱单 · 住院 #${d.orders}`;

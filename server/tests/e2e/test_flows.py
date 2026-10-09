@@ -4366,7 +4366,8 @@ def test_医嘱单面板只画最后点的那一次住院_标题写住院号(pag
     _login(page, base_url)
     _open_page(page, "inpatient", "住院管理")
     held = []
-    pattern = f"**/api/inpatient/orders?admission_id={a['id']}"
+    # 医嘱单续页取全（P2-1693）：地址后面跟着 `&limit=500&offset=0`
+    pattern = f"**/api/inpatient/orders?admission_id={a['id']}&*"
     page.route(pattern, lambda route: held.append(route))
     page.click(f'[data-orders="{a["id"]}"]')   # 甲那次被扣住
     page.click(f'[data-orders="{b["id"]}"]')
