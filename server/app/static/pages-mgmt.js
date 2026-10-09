@@ -1016,9 +1016,13 @@ async function renderRules() {
   $("#eval-form").onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
+    // 先清空、原因写在试算这一块（P2-1738，同 P2-1010）：原先 JSON 解析失败、接口报错都写进上方「新增统一规则」面板的
+    // #rule-msg，试算结果区照旧挂着上一次的命中表与「存在拦截级命中」——看的人会当成这一组变量也被拦截了
+    $("#eval-result").innerHTML = "";
+    const fail = (text) => { $("#eval-result").innerHTML = `<p class="msg err">${esc(text)}</p>`; };
     let variables;
     try { variables = JSON.parse(f.get("variables")); }
-    catch { setMsg("#rule-msg", "变量必须是合法 JSON", false); return; }
+    catch { fail("变量必须是合法 JSON"); return; }
     try {
       const r = await api("/api/rules/evaluate", { method: "POST",
         body: JSON.stringify({ domain: f.get("domain"), variables }) });
@@ -1030,7 +1034,7 @@ async function renderRules() {
            <td>${esc(h.message)}</td><td>${h.deduct_points}</td></tr>`)}
         ${r.errors.length ? `<p class="msg err">求值失败的规则：${
           r.errors.map((x) => `${esc(x.key)}（${esc(x.error)}）`).join("、")}</p>` : ""}`;
-    } catch (err) { setMsg("#rule-msg", err.message, false); }
+    } catch (err) { fail(err.message); }
   };
   $("#page-body").onclick = async (e) => {
     if (!e.target.dataset.off) return;
