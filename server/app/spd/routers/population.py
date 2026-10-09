@@ -1050,6 +1050,14 @@ def set_candidate_status(
     assert_org_writable(db, user, candidate.org_id)
     if candidate.status == "enrolled":
         raise HTTPException(status_code=409, detail="已纳管患者请走生命周期接口调整")
+    if body.status in ("target", "suspect"):
+        # 改成目标 / 疑似也过病种排除规则（P2-1573，与受理、复核同一判据 P2-935）：原先不查——排除规则挡在门外的人（池里原因
+        # 写着「未成年人不纳入…」）一改就成了目标人群，随后签约建档。改成排除不判
+        program = db.query(SpdProgram).filter(SpdProgram.code == candidate.program_code).first()
+        excluded = exclusion_problem(db, candidate.patient_id, program) if program is not None else ""
+        if excluded:
+            label = "目标人群" if body.status == "target" else "疑似人群"
+            raise HTTPException(status_code=409, detail=f"{excluded}，不能改为{label}")
     # 条件写（P2-1177）：上面「已纳管」的预检是锁外读的——读到之后别人刚签约建档、把池行置为已纳管并提交，原先这里照旧整行
     # 写回疑似 / 目标 / 排除：档案在管、池行却是排除，此后这道 409 也挡不住了（实测再改照样 200）。「不是已纳管」压进同一条
     # UPDATE（同认领 P2-253 的写法），抢输了回滚、409（与顺序发生时同一句）
@@ -1202,6 +1210,11 @@ def create_enrollment(
         raise HTTPException(status_code=409, detail=(
             f"该患者此病种有一份{ENROLL_STATUS_LABELS.get(paused.status, paused.status)}的档案（#{paused.id}），"
             "请在原档案上恢复在管，不要另建"))
+    # 命中病种排除规则的不建档（P2-1573，与受理、复核同一判据 P2-935）：建档是最后一道门，原先不看排除规则——16 岁的居民直接
+    # 签进「成人高血压管理」201，池里原因写着「未成年人不纳入…」的那一行还被下面改成已纳管；没进过池的未成年人同样直接建档
+    excluded = exclusion_problem(db, body.patient_id, program)
+    if excluded:
+        raise HTTPException(status_code=409, detail=f"{excluded}，不能签约建档")
     if body.package_id is not None:
         _usable_package(db, body.package_id, body.program_code)
     _check_enroll_refs(db, body.model_dump())
