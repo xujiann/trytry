@@ -1474,6 +1474,8 @@ async function renderPatients() {
       `<tr><td>${p.id}</td><td><span class="tag">${esc(p.ehc_no)}</span></td><td>${esc(p.name)}</td>
        <td>${esc(p.id_card)}</td><td>${esc(p.gender)}</td><td>${esc(p.phone)}</td></tr>`);
   };
+  // 授权有效期用日期控件、最早只能选本地今天（P2-1726，后端同样拒早于今天的）：原先是「有效期至 YYYY-MM-DD」文本框，
+  // 年份敲错成过去的日期照样登记，授权当场就是「已过期」、一天也不生效
   $("#page-body").innerHTML = `
     ${panel("建档（重复身份证号幂等返回既有档案）", `
       <form class="inline" id="patient-form">
@@ -1502,7 +1504,7 @@ async function renderPatients() {
         <input name="patient_id" type="number" placeholder="患者ID" required>
         <input name="grantee_org_id" type="number" placeholder="被授权机构ID" required>
         <select name="scope"><option value="all">全部档案</option><option value="encounter">就诊记录</option><option value="exam">检查报告</option></select>
-        <input name="expire_date" placeholder="有效期至 YYYY-MM-DD" required pattern="\\d{4}-\\d{2}-\\d{2}">
+        <label style="font-size:13px">有效期至 <input name="expire_date" type="date" required min="${localToday()}"></label>
         <button>授权</button></form>
       <form class="inline" id="auth-list-form">
         <input name="patient_id" type="number" placeholder="患者ID" required><button>查授权记录</button></form>

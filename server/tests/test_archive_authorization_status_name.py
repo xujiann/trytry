@@ -21,19 +21,21 @@ def world(client, admin):
     patient = client.post("/api/patients", headers=admin, json={
         "name": "P2214 患者", "id_card": "330106197404041669"}).json()["id"]
     ids = {}
-    for key, expire in (("expired", "2020-01-01"), ("live", "2099-12-31"), ("revoked", "2099-12-31")):
+    for key, expire in (("live", "2099-12-31"), ("revoked", "2099-12-31")):
         resp = client.post(f"/api/patients/{patient}/authorizations", headers=admin,
                            json={"grantee_org_id": grantee, "scope": "all", "expire_date": expire})
         assert resp.status_code == 201, resp.text
         ids[key] = resp.json()["id"]
-    # 不设到期日（空串）的只存在于存量数据里（接口现要求填到期日）：直接落库，钉住「空 = 长期有效」与调阅判定一致
+    # 不设到期日（空串）的只存在于存量数据里（接口现要求填到期日）；过了有效期的是「发放时有效、日子过了」才有的（接口不收
+    # 早于今天的有效期，P2-1726）：两种都直接落库，钉住「过期 = 已过期」「空 = 长期有效」与调阅判定一致
     with SessionLocal() as db:
         admin_id = db.query(User.id).filter(User.username == "admin").scalar()
-        row = ArchiveAuthorization(patient_id=patient, grantee_org_id=grantee, scope="all", expire_date="",
-                                   created_by=admin_id)
-        db.add(row)
-        db.commit()
-        ids["open"] = row.id
+        for key, expire in (("expired", "2020-01-01"), ("open", "")):
+            row = ArchiveAuthorization(patient_id=patient, grantee_org_id=grantee, scope="all", expire_date=expire,
+                                       created_by=admin_id)
+            db.add(row)
+            db.commit()
+            ids[key] = row.id
     assert client.post(f"/api/patients/{patient}/authorizations/{ids['revoked']}/revoke", headers=admin).status_code == 200
     return {"patient": patient, "ids": ids}
 

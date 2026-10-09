@@ -1791,8 +1791,8 @@ def test_撤销调阅授权先确认(page, base_url, seed, admin_read, admin_cal
     pid = seed["patient"]["id"]
     grantee = admin_call("POST", "/api/organizations",
                          {"name": "E2E被授权卫生院", "org_type": "township", "level": "township"})
-    auth = admin_call("POST", f"/api/patients/{pid}/authorizations",
-                      {"grantee_org_id": grantee["id"], "scope": "all", "expire_date": "2027-12-31"})
+    auth = admin_call("POST", f"/api/patients/{pid}/authorizations",   # 有效期不得早于今天（P2-1726）：取远期
+                      {"grantee_org_id": grantee["id"], "scope": "all", "expire_date": "2099-12-31"})
 
     def status():
         (row,) = [a for a in admin_read(f"/api/patients/{pid}/authorizations") if a["id"] == auth["id"]]

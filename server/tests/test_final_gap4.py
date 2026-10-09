@@ -1,7 +1,9 @@
 """终审轮批4：血液管理、档案调阅授权、直播申请审核、老年健康预警、HL7 ACK、登录限速。"""
+from datetime import date
+
 import pytest
 
-from conftest import login
+from conftest import freeze_business_date, login
 
 from app.routers.auth import IP_FAIL_LIMIT, _reset_login_failures
 
@@ -102,11 +104,13 @@ def test_blood_management_flow(client, setup):
 def test_archive_authorization_model(client, setup):
     doc = setup["doctor"]
     pid = setup["patient"]["id"]
-    grant = client.post(
-        f"/api/patients/{pid}/authorizations",
-        json={"grantee_org_id": setup["township"]["id"], "scope": "encounter", "expire_date": "2026-12-31"},
-        headers=doc,
-    )
+    # 有效期不得早于今天（P2-1726）：发放时业务日冻在下面校验传的 today 那天，过了 2026-12-31 照样发得出去
+    with freeze_business_date(date(2026, 8, 11)):
+        grant = client.post(
+            f"/api/patients/{pid}/authorizations",
+            json={"grantee_org_id": setup["township"]["id"], "scope": "encounter", "expire_date": "2026-12-31"},
+            headers=doc,
+        )
     assert grant.status_code == 201
     aid = grant.json()["id"]
     # 范围内允许、范围外拒绝

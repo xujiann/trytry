@@ -24,7 +24,7 @@ from datetime import date
 import pytest
 from fastapi.testclient import TestClient
 
-from conftest import reset_database
+from conftest import business_today, freeze_business_date, reset_database
 
 from app.database import SessionLocal
 from app.main import app
@@ -134,22 +134,26 @@ def test_档案脱敏_admin明文非admin掩码逐字节(client, admin, base):
 
 @pytest.fixture(scope="module")
 def grants(client, admin, base):
-    """admin 与 doctor 各发一笔授权（角色矩阵：doctor/operator 可代录，admin 直通）。"""
+    """admin 与 doctor 各发一笔授权（角色矩阵：doctor/operator 可代录，admin 直通）。
+
+    发放时把业务日冻在 2026-09-01（下面校验用例传的 today 就是这一天）：有效期不得早于今天（P2-1726），不冻的话
+    过了 2026-12-31 这组固定日期就发不出去了。"""
     pid = base["patient"]["id"]
-    g1 = client.post(
-        f"/api/patients/{pid}/authorizations",
-        json={"grantee_org_id": base["township"]["id"], "scope": "encounter",
-              "expire_date": "2026-12-31"},
-        headers=admin,
-    )
-    assert g1.status_code == 201, g1.text
-    g2 = client.post(
-        f"/api/patients/{pid}/authorizations",
-        json={"grantee_org_id": base["township"]["id"], "scope": "all",
-              "expire_date": "2027-06-30"},
-        headers=base["doctor"],
-    )
-    assert g2.status_code == 201, g2.text
+    with freeze_business_date(date(2026, 9, 1)):
+        g1 = client.post(
+            f"/api/patients/{pid}/authorizations",
+            json={"grantee_org_id": base["township"]["id"], "scope": "encounter",
+                  "expire_date": "2026-12-31"},
+            headers=admin,
+        )
+        assert g1.status_code == 201, g1.text
+        g2 = client.post(
+            f"/api/patients/{pid}/authorizations",
+            json={"grantee_org_id": base["township"]["id"], "scope": "all",
+                  "expire_date": "2027-06-30"},
+            headers=base["doctor"],
+        )
+        assert g2.status_code == 201, g2.text
     return {"g1": g1.json(), "g2": g2.json()}
 
 
@@ -166,8 +170,10 @@ def test_授权回执精确形状与键序(base, grants):
 
 
 def _in_effect(expire_date: str) -> dict:
-    """未撤销的授权此刻算不算数按今天现算（P2-214）：钉死 True 的话，过了 2026-12-31 这条用例自己就过期了。"""
-    live = date.today().isoformat() <= expire_date
+    """未撤销的授权此刻算不算数按今天现算（P2-214）：钉死 True 的话，过了 2026-12-31 这条用例自己就过期了。
+
+    今天取 `business_today()`、不裸调 `date.today()`：本档冻过业务日期（P2-1726，发放夹具），判据要与服务端同一把尺子。"""
+    live = business_today().isoformat() <= expire_date
     return {"effective": live, "status_name": "有效" if live else "已过期"}
 
 

@@ -231,6 +231,11 @@ def grant_authorization(
         raise HTTPException(status_code=404, detail="患者不存在")
     if db.get(Organization, body.grantee_org_id) is None:
         raise HTTPException(status_code=404, detail="被授权机构不存在")
+    # 有效期不得早于今天（P2-1726，与知识库「有效期至」P2-1668 同一句）：原先填了已过去的日期照收 201、status active，页面报
+    # 「授权已登记」，清单当场「已过期」、校验 allowed=false，一天也不生效，患者却以为授权办好了。今天按业务日（`clock.today()`），
+    # 与调阅判定 `visibility.active_authorization_grants` 同一把尺子：当天照收、当天有效。只判新发放的，存量不动
+    if body.expire_date < resolve_business_date(None).isoformat():
+        raise HTTPException(status_code=422, detail=f"有效期不得早于今天（填的是 {body.expire_date}）")
     # 与同文件清单、校验同一口径：可问责而非可阻断（见 visibility.log_patient_access）。
     # 原先发授权、撤授权两处都不留痕——恰恰是改变"谁能调阅这个人"的两个动作，居民在
     # 「谁看过我的档案」里却看不到是谁办的。

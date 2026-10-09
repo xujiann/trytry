@@ -57,8 +57,8 @@ def _trace(patient_id: int) -> list[tuple[str, str, str]]:
 def test_窗口发授权按设计不阻断_但必留痕(client, auth_world):
     pid = auth_world["patient_id"]
     before = _trace(pid)
-    r = client.post(f"/api/patients/{pid}/authorizations",
-                    json={"grantee_org_id": auth_world["grantee"], "scope": "all", "expire_date": "2027-12-31"},
+    r = client.post(f"/api/patients/{pid}/authorizations",   # 有效期不得早于今天（P2-1726）：取远期，别让用例自己过期
+                    json={"grantee_org_id": auth_world["grantee"], "scope": "all", "expire_date": "2099-12-31"},
                     headers=auth_world["op_b"])
     assert r.status_code == 201, r.text
     assert _trace(pid) == before + [("p172_op_b", "authorization", "consent_admin")]
