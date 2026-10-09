@@ -966,8 +966,15 @@ function bindReferralDetails(box) {
           ? [`转出：${d.from_org || "—"}　转入：${d.to_org || "—"}`, d.down_to_org ? `下转至：${d.down_to_org}` : ""]
             .filter(Boolean).join("\n") + "\n"
           : "";
+        // 触发依据与转诊资料（P2-1609，慢专病转诊详情才有）：原先只弹机构与轨迹，接口早就给了这两项。与管理端、医生端
+        // 同一处帮手（shared.js）；这里是 alert 的纯文本，不经 innerHTML，不做 esc()、也不画链接。没有的不出这一行
+        const basis = referralEvidenceLines(d.trigger_evidence,
+          { fields: Object.entries(SPD_METRIC_NAMES).map(([key, name]) => ({ key, name })) });
+        const materials = referralMaterialLines(d.materials);
+        const extra = [basis.length ? `触发依据：${basis.join("；")}` : "",
+          materials.length ? `转诊资料：${materials.join("；")}` : ""].filter(Boolean).map((x) => x + "\n").join("");
         // 环节名不等于结论（P2-1022）：县级医院那一格通过与退回共用「县级医院接收」，环节名里没带出结论的补上动作名
-        alert(orgs + ((d.steps || []).map((s) =>
+        alert(orgs + extra + ((d.steps || []).map((s) =>
           `${s.created_at.slice(0, 16).replace("T", " ")} ${s.step}${
             s.action_name && !s.step.includes(s.action_name) ? `（${s.action_name}）` : ""}${s.opinion ? "：" + s.opinion : ""}`
         ).join("\n") || "暂无环节记录"));
@@ -1229,6 +1236,9 @@ const SPD_RISK_TAGS = {
   high: ["高危", "red"], very_high: ["极高危", "red"],
 };
 const SPD_LEVEL_TAGS = { normal: ["正常", "green"], high: ["偏高", "red"], low: ["偏低", "orange"] };
+/* 首页「最近指标」认得的几项监测指标的中文名；转诊详情的触发依据（P2-1609）共用这一份——居民端调不到管理端的
+ * /api/spd/meta（规则字段目录），认不得的字段照原样印编码 */
+const SPD_METRIC_NAMES = { bp_sys: "收缩压", bp_dia: "舒张压", glucose_fasting: "空腹血糖", bmi: "体质指数", spo2: "血氧饱和度" };
 
 /* 与 `pages-spd.js` 的 `spdTag` 是同一件事（两份实现此前逐字相同），
  * 现在都委托给 shared.js 的 `statusTag()`。名字保持各自原样：这两个前端不共享
@@ -1291,8 +1301,7 @@ async function renderSpdHome(box) {
     return;
   }
   const metrics = Object.entries(home.latest_metrics || {}).map(([key, m]) => kv(
-    { bp_sys: "收缩压", bp_dia: "舒张压", glucose_fasting: "空腹血糖",
-      bmi: "体质指数", spo2: "血氧饱和度" }[key] || key,
+    SPD_METRIC_NAMES[key] || key,
     `${esc(m.value)}${esc(m.unit)} ${spdTagOf(SPD_LEVEL_TAGS, m.level)}`)).join("");
   const programs = home.programs.map((p) => `<div class="m-card">
     ${kv("管理病种", esc(p.program_name || p.program_code))}

@@ -2632,6 +2632,16 @@ function spdReferralRowOps(c) {
   ].filter(Boolean).join("\n      ");
 }
 
+/** 全轨迹上方的「触发依据」与「转诊资料」（P2-1609）：原先只画轨迹，审核人看不到规则开单命中了哪几条、交了什么资料。
+ *  依据逐条转成「字段 比较符 阈值」（中文名取 /api/spd/meta，`meta` 取不到时照原样印编码），资料链接只给 http(s) 画——
+ *  都经 shared.js 的同一处帮手（医生端、居民端共用）；两项都空写「—」，与轨迹表的空格同一写法。 */
+function spdReferralBasis(c, meta) {
+  const basis = referralEvidenceLines(c.trigger_evidence, meta).map(esc).join("；");
+  const rule = c.trigger_rule_code ? `（规则 ${esc(c.trigger_rule_code)}）` : "";
+  return `<p class="desc">触发依据${rule}：${basis || "—"}</p>
+    <p class="desc">转诊资料：${referralMaterialsHtml(c.materials) || "—"}</p>`;
+}
+
 async function renderSpdReferral() {
   $("#page-desc").textContent =
     "村医 → 乡镇卫生院 → 区市县医院三级转诊：分级审核、到院有效判定、下转随访接收闭环";
@@ -2750,8 +2760,10 @@ async function renderSpdReferral() {
     const ruleEdit = e.target.closest("[data-refrule-edit]");
     if (detail) {
       try {
-        const c = await api(`/api/spd/referrals/${detail.dataset.refDetail}`);
+        const [c, meta] = await Promise.all([api(`/api/spd/referrals/${detail.dataset.refDetail}`),
+          spdMeta().catch(() => null)]);
         $("#spd-ref-detail").innerHTML = panel(`转诊单 #${c.id} 全轨迹 · ${c.patient_name}`,
+          spdReferralBasis(c, meta) +
           table(["环节", "动作", "经办人", "机构", "意见", "时间"], c.steps, (s) =>
             `<tr><td>${esc(s.step)}</td><td>${esc(s.action_name || s.action)}</td><td>${s.actor_id ?? "—"}</td>
              <td>${s.org_id ?? "—"}</td><td>${esc(s.opinion) || "—"}</td>

@@ -92,10 +92,77 @@ function statusTag(map, key) {
  * 与居民端「我的宣教」的资料链接（P2-1465）共用，一处判据、一处审查点。
  *
  * 原先放在 core.js（用它的三处都在管理端），注释里写明了「居民端哪天也要判，再挪过来」——居民端的宣教资料链接就是那一天。
- * 医生端眼下不画接口给的外链；它也加载本文件，哪天要画直接用，别再抄一份正则。
+ * 医生端经下面的 `referralMaterialsHtml` 画慢专病转诊资料的链接（P2-1609），同样用这一处，别再抄一份正则。
  */
 function isHttpUrl(url) {
   return /^https?:\/\//i.test(url || "");
+}
+
+/* 慢专病转诊单的「触发依据」与「转诊资料」（P2-1609）：管理端全轨迹、医生端转诊卡片、居民端转诊详情三处共用一处口径。
+ * 接口出参早就带着 `trigger_evidence` 与 `materials`（`spd/routers/referral.py` 与居民端 `portal.py` 的详情），三端原先
+ * 都不画：审核人看不到规则开单的依据，居民也看不到——`spd/rules.py` 的 evaluate 注释写着「转诊单要显示 trigger_evidence」。 */
+
+/** 接口给的任意取值转成一段文字：空值是空串，对象 / 数组照 JSON 印（结构不定的别吞掉）。 */
+function referralPlain(value) {
+  if (value === null || value === undefined) return "";
+  return typeof value === "object" ? JSON.stringify(value) : String(value);
+}
+
+/**
+ * 触发依据逐条转成「字段 比较符 阈值」的纯文本行（P2-1609）。
+ *
+ * 规则开单时存 `{"matched": [命中的条件…]}`，条件即 `spd/rules.validate_conditions` 规范化后的 `{field, op, value, label}`
+ * （介于的值是 [下限, 上限]、属于 / 不属于是列表）。字段与比较符的中文名取自调用方给的 `meta`——与 `GET /api/spd/meta`
+ * 同形（`fields` / `operators` 都是 `[{key, name}]`，后端 `rules.FIELD_SOURCES` / `OPERATORS` 一份），前端不另抄目录；
+ * 查不到中文名的照原样印编码。条件带了说明（`label`，如「确诊高血压」）的附在后面。手工开单照录调用方给的 JSON，
+ * `matched` 之外的键照「键：值」列出。返回纯文本：上页（innerHTML）由调用方逐行 esc()，居民端的 alert 里原样用。
+ */
+function referralEvidenceLines(evidence, meta) {
+  const names = (list) => Object.fromEntries((Array.isArray(list) ? list : []).map((x) => [x.key, x.name]));
+  const fields = names(meta && meta.fields), ops = names(meta && meta.operators);
+  const ev = evidence && typeof evidence === "object" && !Array.isArray(evidence) ? evidence : {};
+  const lines = (Array.isArray(ev.matched) ? ev.matched : []).map((c) => {
+    if (!c || typeof c !== "object" || Array.isArray(c)) return referralPlain(c);
+    const value = c.op === "exists" ? (c.value === false ? "否" : "")
+      : Array.isArray(c.value) ? c.value.map(referralPlain).join(c.op === "between" ? " ~ " : "、") : referralPlain(c.value);
+    const line = [fields[c.field] || referralPlain(c.field), ops[c.op] || referralPlain(c.op), value].filter(Boolean).join(" ");
+    return c.label ? `${line}（${referralPlain(c.label)}）` : line;
+  });
+  Object.entries(ev).forEach(([key, value]) => { if (key !== "matched") lines.push(`${key}：${referralPlain(value)}`); });
+  return lines.filter(Boolean);
+}
+
+/**
+ * 转诊资料逐条取名称 / 链接 / 说明（P2-1609）。接口只收 `list[dict]`、结构不定：认 name（或 title）、url（或 link）、
+ * note（或 description）；三样都没有的整条照 JSON 印，别吞掉。
+ */
+function referralMaterialItems(materials) {
+  return (Array.isArray(materials) ? materials : []).map((m) => {
+    if (!m || typeof m !== "object" || Array.isArray(m)) return { name: referralPlain(m), url: "", note: "" };
+    const item = { name: referralPlain(m.name ?? m.title), url: referralPlain(m.url ?? m.link),
+                   note: referralPlain(m.note ?? m.description) };
+    return item.name || item.url || item.note ? item : { name: referralPlain(m), url: "", note: "" };
+  }).filter((m) => m.name || m.url || m.note);
+}
+
+/** 转诊资料的纯文本行（居民端 alert 用）：「名称 链接（说明）」。 */
+function referralMaterialLines(materials) {
+  return referralMaterialItems(materials).map((m) =>
+    [m.name, m.url !== m.name ? m.url : ""].filter(Boolean).join(" ") + (m.note ? `（${m.note}）` : ""));
+}
+
+/**
+ * 转诊资料上页（管理端、医生端）：链接只给 http(s) 画成可点的（同 P2-1465 的写法：CSP 放行了 'unsafe-inline'，
+ * `javascript:` 链接点了会在本站执行，只做 esc() 挡不住），其余地址照原样转义成文字、不做 href；名称、说明一律 esc()。
+ * 多条用「；」隔开，一条都没有是空串（由调用方决定写「—」还是不出这一行）。
+ */
+function referralMaterialsHtml(materials) {
+  return referralMaterialItems(materials).map((m) => {
+    const name = esc(m.name || m.url);
+    const shown = isHttpUrl(m.url) ? `<a href="${esc(m.url)}" target="_blank" rel="noopener">${name}</a>`
+      : [name, m.name && m.url && m.url !== m.name ? esc(m.url) : ""].filter(Boolean).join(" ");
+    return shown + (m.note ? `（${esc(m.note)}）` : "");
+  }).join("；");
 }
 
 /**

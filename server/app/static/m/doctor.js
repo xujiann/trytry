@@ -372,6 +372,15 @@ function spdReferralOps(r) {
   return ops.join("\n    ");
 }
 
+/** 转诊卡片上的「触发依据」与「转诊资料」（P2-1609）：审核卡片原先只有理由，审核人看不到规则开单命中了哪几条、交了
+ *  什么资料（清单出参早就带着这两项）。依据的中文名取 /api/spd/meta（`meta` 取不到时照原样印编码），资料链接只给
+ *  http(s) 画——与管理端、居民端同一处帮手（shared.js）；有才出这一行，与任务卡片上「审核意见」一类可选行同一写法。 */
+function spdReferralBasis(r, meta) {
+  const basis = referralEvidenceLines(r.trigger_evidence, meta).map(esc).join("；");
+  const materials = referralMaterialsHtml(r.materials);
+  return (basis ? kv("触发依据", basis) : "") + (materials ? kv("转诊资料", materials) : "");
+}
+
 /** 发起上转的卡片内表单（P2-795）：村医手册写的是「在『转诊办理』里发起，写清理由」，原先这一页只有在途单的
  *  审核 / 到院 / 承接按钮，发起要回电脑上的管理端。患者从本人名下的在管档案里选（病种随档案带上），目标机构从
  *  县级机构里选（可空：不写目标的由审核环节定），理由必填。`prefill` 给「重新发起」用。 */
@@ -428,9 +437,10 @@ async function loadSpdReferral(box) {
   // 退回的单子（已结束）从清单里消失，退回意见在手机上看不到
   // 本人发起的由接口按发起人筛（P2-824）：原先取机构最新 50 张退回单、在这里按发起人挑，同机构别人的退回单一多，本人的
   // 整段被挤掉
-  const [rows, myRejected, patients] = await Promise.all([
+  // 规则字段与比较符的中文名（P2-1609，卡片上的触发依据用）：取不到不挡卡片，依据照原样印编码
+  const [rows, myRejected, patients, meta] = await Promise.all([
     api("/api/spd/referrals?open_only=true&limit=30"), api("/api/spd/referrals?status=rejected&mine=true&limit=10"),
-    api(`/api/spd/enrollments?limit=100&${mine}`)]);
+    api(`/api/spd/enrollments?limit=100&${mine}`), api("/api/spd/meta").catch(() => null)]);
   box.innerHTML = `<div class="m-card" id="spd-ref-new-card">
       <button type="button" class="ghost-btn" data-spd-ref-new>发起上转</button>
     </div>` + (rows.map((r) => `<div class="m-card">
@@ -440,6 +450,7 @@ async function loadSpdReferral(box) {
       township_reviewed: "待县级接收", accepted: "已接收待到院",
       arrived: "已到院", down_referred: "待承接随访" }[r.status] || r.status))}
     ${kv("理由", esc(r.reason || "—"))}
+    ${spdReferralBasis(r, meta)}
     ${spdReferralOps(r)}
   </div>`).join("") || '<p class="empty">暂无在途转诊</p>') + (myRejected.length ? `
     <p class="hint">我发起的、被退回的（最近 ${myRejected.length} 张）</p>` + myRejected.map((r) => `<div class="m-card">
