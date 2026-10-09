@@ -61,6 +61,7 @@ KEYS = {
     "medplat_acc_period": ("state", "会计期间 YYYY-MM，不是对象 id"),
     "medplat_cost_period": ("state", "成本期间 YYYY-MM，不是对象 id"),
     "medplat_ana_period": ("state", "指标期间 YYYY-MM，不是对象 id"),
+    "medplat_clinind_period": ("state", "用药结构期间 YYYY-MM，不是对象 id（P2-1708）"),
     "medplat_group_type": ("state", "分组类型枚举，取值来自本页 <select>"),
     "spd_team_role": ("state", "团队端视角枚举，取值来自本页按钮 dataset"),
     "medplat_role": ("state", "登录角色标记，不是 UI 状态（G3/P1-23）"),

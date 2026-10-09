@@ -1424,17 +1424,34 @@ async function renderNotifications() {
 async function renderClinicalIndicators() {
   $("#page-desc").textContent =
     "分子分母与口径随指标一起给出——只看一个百分比既没法核对，也看不出样本量小到不该看";
-  const period = localToday().slice(0, 7);
-  const [quality, drug] = await Promise.all([
+  // 用药结构的期间可切换（P2-1708）：原先锁死本月、没有切换框——月初打开强度和药占比几乎全是 0 或「样本不足」，上个整月的
+  // 考核数只能直接调接口。照决策指标 / 会计 / 成本页：缺省本月，存下的期间被后端拒了只对 422 回落本月并清掉坏值，切换时
+  // 先验再存（P2-586）。质量指标面板照旧不传期间、取全期（标题写明口径）：改成按月会让月初打开时多半样本为空，那是另一处口径
+  const thisMonth = localToday().slice(0, 7);
+  const load = (p) => Promise.all([
     api("/api/quality/clinical-indicators"),
-    api(`/api/analytics/drug-use?period=${period}`),
+    api(`/api/analytics/drug-use?period=${encodeURIComponent(p)}`),
   ]);
+  let period = localStorage.getItem("medplat_clinind_period") || thisMonth;
+  let loaded;
+  try {
+    loaded = await load(period);
+  } catch (err) {
+    if (err.status !== 422 || period === thisMonth) throw err;
+    localStorage.removeItem("medplat_clinind_period");
+    period = thisMonth;
+    loaded = await load(period);
+  }
+  const [quality, drug] = loaded;
   const byDimension = {};
   quality.indicators.forEach((i) => (byDimension[i.dimension] ||= []).push(i));
   // ADR-0009 第二步：面板外壳改用 `panel()`（定义见 core.js），迁一页、人工过一页。
   // 末尾的 barChart 刻意留在面板**外**——它原本就不在任何 panel 里。
   $("#page-body").innerHTML =
-    panel(`医疗质量指标（${quality.period}）`,
+    panel("用药结构期间", `
+      <form class="inline" id="clinind-period"><input name="period" value="${esc(period)}" placeholder="YYYY-MM"><button>切换</button></form>
+      <p class="msg" id="clinind-period-msg"></p>`)
+    + panel(`医疗质量指标（${quality.period}）`,
       Object.entries(byDimension).map(([dim, items]) => `<h4>${esc(dim)}</h4>${
         table(["指标", "分子", "分母", "比率", "口径"], items, (i) =>
           `<tr><td><b>${esc(i.name)}</b></td><td>${i.numerator}</td>
@@ -1458,6 +1475,15 @@ async function renderClinicalIndicators() {
     `)
     + barChart(drug.orgs.filter((o) => o.antibiotic_intensity > 0 && !o.intensity_unstable)
       .map((o) => [o.org_name, o.antibiotic_intensity]), { unit: " DDDs/百人天" });
+  $("#clinind-period").onsubmit = async (e) => {
+    e.preventDefault();
+    const value = String(new FormData(e.target).get("period") || "").trim();
+    // 先让后端判这个期间合不合法，合法才记住（与决策指标 / 会计 / 成本页同一句）：校验只有后端一份，坏值不进 localStorage
+    try {
+      await api(`/api/analytics/drug-use?period=${encodeURIComponent(value)}`);
+    } catch (err) { setMsg("#clinind-period-msg", err.message, false); return; }
+    localStorage.setItem("medplat_clinind_period", value); route();
+  };
 }
 
 /* ---------------- 运行监控（浙#47 / #46） ---------------- */

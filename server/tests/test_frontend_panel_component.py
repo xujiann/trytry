@@ -162,7 +162,7 @@ MIGRATED_PAGES = {
     "renderJobs": 2,
     "renderSurveys": 4,
     "renderNotifications": 1,
-    "renderClinicalIndicators": 2,
+    "renderClinicalIndicators": 3,  # P2-1708：+期间切换面板
     "renderMonitor": 4,
     # 第三批 2026-09-02：挑的是 render_diff 夹具**已经有**的五页——比对取证零成本，
     # 也是第一次迁出 pages-mgmt.js（clinical / public / spd 各一到两页）
