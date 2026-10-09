@@ -136,6 +136,9 @@ def search_patients(
     既有业务历史（就诊/账单等）**照常可查**，医疗记录法定保留、不物理删除。
     """
     query = db.query(Patient).filter(Patient.deactivated_at.is_(None))
+    # 关键词去首尾空白（P2-1725，与同文件按卡号取档 `find_by_ehc_no` 的 P2-791 同一句）：证件号、姓名、卡号前后多一个空格原先
+    # 就是 0 条，窗口以为此人没建过档。去完为空按没传
+    keyword = keyword.strip()
     if keyword:
         # PII 加密开态的降级口径（工程包 E3，文档见 app/pii.py）：证件号模糊检索
         # 对密文行不可用，走索引列等值让**全值**证件号仍可命中；前缀/中缀不支持。

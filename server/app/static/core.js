@@ -1601,7 +1601,8 @@ async function renderPatients() {
     // 查询失败要说出来（P2-378）：原先 draw() 抛错没人接，列表还是上一次的结果。先清空、原因写在检索这一块（P2-1010）：
     // 原先写进上方建档面板的消息行，列表照旧是上一次的
     $("#patient-table").innerHTML = "";
-    try { await draw(new FormData(e.target).get("keyword")); }
+    // 去首尾空白再查（P2-1725，同「按卡号精确查」）：证件号、姓名后面多带一个空格原先就是 0 条，窗口以为此人没建过档
+    try { await draw(new FormData(e.target).get("keyword").trim()); }
     catch (err) { $("#patient-table").innerHTML = `<p class="msg err">${esc(err.message)}</p>`; }
   };
   // 取数放最后：监听已与 innerHTML 同一同步块挂好，窗口为零（P2-31 根修，样板见 pages-spd.js renderSpdPath）
