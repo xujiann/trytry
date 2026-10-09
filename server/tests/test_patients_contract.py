@@ -32,7 +32,8 @@ from app.models import AccessLog
 
 PATIENT_KEYS = ["name", "id_card", "gender", "birth_date", "phone", "id", "ehc_no"]
 GRANT_RECEIPT_KEYS = ["id", "patient_id", "scope", "status"]
-AUTH_ROW_KEYS = ["id", "grantee_org_id", "scope", "expire_date", "status", "effective", "status_name"]  # 末两键 P2-214 加
+AUTH_ROW_KEYS = ["id", "grantee_org_id", "scope", "expire_date", "status", "effective", "status_name",  # 这两键 P2-214 加
+                 "grantee_org_name"]  # P2-1727 加：被授权机构名称，只加在末尾
 CHECK_KEYS = ["patient_id", "org_id", "scope", "allowed"]
 
 
@@ -184,9 +185,9 @@ def test_授权清单精确_id倒序且留痕(client, admin, base, grants):
     assert [list(r.keys()) for r in rows] == [AUTH_ROW_KEYS] * 2
     assert rows == [
         {"id": grants["g2"]["id"], "grantee_org_id": base["township"]["id"], "scope": "all",
-         "expire_date": "2027-06-30", "status": "active", **_in_effect("2027-06-30")},
+         "expire_date": "2027-06-30", "status": "active", **_in_effect("2027-06-30"), "grantee_org_name": "患者契约卫生院"},
         {"id": grants["g1"]["id"], "grantee_org_id": base["township"]["id"], "scope": "encounter",
-         "expire_date": "2026-12-31", "status": "active", **_in_effect("2026-12-31")},
+         "expire_date": "2026-12-31", "status": "active", **_in_effect("2026-12-31"), "grantee_org_name": "患者契约卫生院"},
     ]
     # 可问责而非可阻断：这一眼本身就要留痕（admin 也不豁免）
     after = _auth_access_rows(pid)

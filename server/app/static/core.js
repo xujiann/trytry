@@ -1474,6 +1474,11 @@ async function renderPatients() {
       `<tr><td>${p.id}</td><td><span class="tag">${esc(p.ehc_no)}</span></td><td>${esc(p.name)}</td>
        <td>${esc(p.id_card)}</td><td>${esc(p.gender)}</td><td>${esc(p.phone)}</td></tr>`);
   };
+  // 被授权机构从机构清单里选（P2-1727，同住院页建床位选病区的 P2-1696）：原先是「被授权机构ID」数字框、清单只印编号——
+  // 敲错一位就把整份档案授权给了别家（任一有效授权等于全部档案可调阅，P1-162），清单上看不出来。选项印机构名（全县唯一），
+  // 首项留空必选：不动下拉不会悄悄落在第一家机构上。只改怎么选、怎么显示，谁能授、授给谁照旧由后端判
+  const orgs = await api("/api/organizations");
+  const orgOptions = orgs.map((o) => `<option value="${o.id}">${esc(o.name)}</option>`).join("");
   // 授权有效期用日期控件、最早只能选本地今天（P2-1726，后端同样拒早于今天的）：原先是「有效期至 YYYY-MM-DD」文本框，
   // 年份敲错成过去的日期照样登记，授权当场就是「已过期」、一天也不生效
   $("#page-body").innerHTML = `
@@ -1502,7 +1507,7 @@ async function renderPatients() {
     ${panel("档案调阅授权（医师/经办代录，患者知情）", `
       <form class="inline" id="auth-grant-form">
         <input name="patient_id" type="number" placeholder="患者ID" required>
-        <input name="grantee_org_id" type="number" placeholder="被授权机构ID" required>
+        <select name="grantee_org_id" required><option value="">选择被授权机构</option>${orgOptions}</select>
         <select name="scope"><option value="all">全部档案</option><option value="encounter">就诊记录</option><option value="exam">检查报告</option></select>
         <label style="font-size:13px">有效期至 <input name="expire_date" type="date" required min="${localToday()}"></label>
         <button>授权</button></form>
@@ -1533,12 +1538,12 @@ async function renderPatients() {
   };
   const SCOPES = { all: "全部档案", encounter: "就诊记录", exam: "检查报告" };
   // 先清空（P2-1010）：原先换了患者号查不到（查无此人 404），原因写出来了，上一位的授权清单连同「撤销」按钮还挂着——
-  // 按钮上是上一位的患者号，点撤销撤的是上一位的授权
+  // 按钮上是上一位的患者号，点撤销撤的是上一位的授权。被授权机构印名称（P2-1727，后端随清单行带出）：原先只印编号
   const drawAuths = async (pid) => {
     $("#auth-table").innerHTML = "";
     const auths = await api(`/api/patients/${pid}/authorizations`);
     $("#auth-table").innerHTML = table(["ID", "被授权机构", "范围", "有效期至", "状态", "操作"], auths, (a) =>
-      `<tr><td>${a.id}</td><td>${a.grantee_org_id}</td><td>${SCOPES[a.scope] || esc(a.scope)}</td><td>${esc(a.expire_date)}</td>
+      `<tr><td>${a.id}</td><td>${esc(a.grantee_org_name) || a.grantee_org_id}</td><td>${SCOPES[a.scope] || esc(a.scope)}</td><td>${esc(a.expire_date)}</td>
        <td><span class="tag ${a.effective ? "green" : "red"}">${esc(a.status_name)}</span></td>
        <td>${a.effective ? `<button class="btn danger" data-revoke="${a.id}" data-pid="${pid}">撤销</button>` : "—"}</td></tr>`);
   };

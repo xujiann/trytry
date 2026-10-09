@@ -9,7 +9,7 @@ from sqlalchemy.exc import IntegrityError
 
 from ..visibility import active_authorization_grants, log_patient_access
 from ..database import get_db
-from ..deps import get_current_user, paginate, require_roles, resolve_business_date, keyword_like
+from ..deps import get_current_user, paginate, require_roles, resolve_business_date, keyword_like, rows_by_id
 from pydantic import BaseModel, Field
 
 from ..models import ArchiveAuthorization, Organization, Patient, User
@@ -204,6 +204,9 @@ class AuthorizationOut(BaseModel):
     effective: bool
     #: 有效 / 已过期 / 已撤销（状态文案取自后端，§13）
     status_name: str
+    #: 被授权机构名称（P2-1727，只加在末尾、原有键与次序不动）：原先清单只印机构编号——录错一位就把整份档案授权给了别家
+    #: （任一有效授权等于全部档案可调阅，P1-162），清单上录错的与录对的看不出区别。机构名全县唯一
+    grantee_org_name: str
 
 
 class AuthorizationCheckOut(BaseModel):
@@ -293,6 +296,7 @@ def list_authorizations(
         for org_id in sorted({a.grantee_org_id for a in rows})
         for g in active_authorization_grants(db, patient_id, org_id)
     }
+    orgs = rows_by_id(db, Organization, (a.grantee_org_id for a in rows))   # 被授权机构名一次 IN 取回（P2-1727）
     return [
         {
             "id": a.id,
@@ -302,6 +306,7 @@ def list_authorizations(
             "status": a.status,
             "effective": a.id in effective_ids,
             "status_name": "有效" if a.id in effective_ids else ("已过期" if a.status == "active" else "已撤销"),
+            "grantee_org_name": orgs[a.grantee_org_id].name if a.grantee_org_id in orgs else "",
         }
         for a in rows
     ]
