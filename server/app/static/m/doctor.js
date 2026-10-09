@@ -31,6 +31,12 @@ async function api(path, options = {}) {
   // 当会话失效，口令敲错了登录框却写「登录已失效，请重新登录」
   if (resp.status === 401 && path !== "/api/auth/login") { logout(); throw new Error("登录已失效，请重新登录"); }
   if (!resp.ok) throw new Error(errorText(data.detail, `请求失败(${resp.status})`));
+  // 要总数的清单带上 `withTotal`（P2-1771，与管理端 core.js 的 P2-1547、居民端 m.js 的 P2-1674 同一写法）：连同 X-Total-Count
+  // 一起回 `{ rows, total }`，接口没发这个头时 total 为 null。缺省照旧只回响应体——全部调用点共用这个返回形状
+  if (options.withTotal) {
+    const total = resp.headers.get("X-Total-Count");
+    return { rows: data, total: total === null ? null : Number(total) };
+  }
   return data;
 }
 
@@ -1016,12 +1022,12 @@ let roundSeq = 0;
 async function refreshRoundDetail() {
   const seq = ++roundSeq;
   const admissionId = roundAdmissionId;
-  let completeness, notes, vitals;
+  let completeness, notesPage, vitalsPage;
   try {
-    [completeness, notes, vitals] = await Promise.all([
+    [completeness, notesPage, vitalsPage] = await Promise.all([
       api(`/api/inpatient/admissions/${admissionId}/document-completeness`),
-      api(`/api/inpatient/admissions/${admissionId}/progress-notes`),
-      api(`/api/inpatient/admissions/${admissionId}/vitals`),
+      api(`/api/inpatient/admissions/${admissionId}/progress-notes`, { withTotal: true }),
+      api(`/api/inpatient/admissions/${admissionId}/vitals`, { withTotal: true }),
     ]);
   } catch (err) {
     // 取不到就说清楚、清掉上一位的区块——原先报错没人接，屏幕上一直挂着上一位的病程 / 体征
@@ -1032,13 +1038,17 @@ async function refreshRoundDetail() {
     return;
   }
   if (seq !== roundSeq) return;
+  // 条数读总数（P2-1771，同桌面住院临床文书）：病程一页 100 条、体征一页 500 次，原先印这一页的条数，过了一页恒为 100 / 500。
+  // 列不全时写「已列 N / 共 M」，列全时与原先一字不差
+  const notes = notesPage.rows, vitals = vitalsPage.rows;
+  const listed = ({ rows, total }) => (total !== null && rows.length < total ? `已列 ${rows.length} / 共 ${total}` : `${rows.length}`);
   $("#round-status").innerHTML = `<div class="m-card">
     ${kv("文书完整性", completeness.complete
       ? '<span class="tag green">完整</span>'
       : `<span class="tag orange">${esc(completeness.missing.join("、"))}</span>`)}
-    ${kv("病程记录", `${notes.length} 条`)}${kv("体征记录", `${vitals.length} 条`)}</div>`;
+    ${kv("病程记录", `${listed(notesPage)} 条`)}${kv("体征记录", `${listed(vitalsPage)} 条`)}</div>`;
 
-  $("#round-notes").innerHTML = `<div class="sec-title">病程记录（${notes.length}）</div>` + (
+  $("#round-notes").innerHTML = `<div class="sec-title">病程记录（${listed(notesPage)}）</div>` + (
     notes.length
       ? notes.slice().reverse().map((n) => card(
           `${kv("类型", esc(NOTE_TYPE_NAMES[n.note_type] || n.note_type))}

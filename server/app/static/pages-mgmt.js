@@ -57,16 +57,20 @@ async function renderClinicalDocs() {
   // 在用医嘱给护理记录的「关联医嘱」下拉（P2-863）：执行某条医嘱产生的护理记录挂到那条医嘱上，医嘱执行视图的
   // 「关联护理记录 N 条」才数得到——原先表单没有这一项，按界面用法恒为 0。续页取全（P2-1693，照 P2-1333）：原先只取缺省一页
   // 200 条（按医嘱号倒序），临时医嘱执行过也一直「执行中」（P2-281），住得久的患者入院当天开的长期医嘱被挤出去、选不到。
-  // 只读查看不画护理表单，也就不取医嘱
-  const [notes, nursing, vitals, completeness, activeOrders] = shown
+  // 只读查看不画护理表单，也就不取医嘱。
+  // 病程、护理、体温单三张清单都只回最近一页（病程、护理 100 条，体征 500 次），读总数（P2-1771）：三块标题原先印这一页的
+  // 条数，过了一页恒为「（100）」「（500）」。列不全时写「已列 N / 共 M」（同 P2-1550 / P2-1693），列全时与原先一字不差
+  const [notesPage, nursingPage, vitalsPage, completeness, activeOrders] = shown
     ? await Promise.all([
-        api(`/api/inpatient/admissions/${shown}/progress-notes`),
-        api(`/api/inpatient/admissions/${shown}/nursing-records`),
-        api(`/api/inpatient/admissions/${shown}/vitals`),
+        api(`/api/inpatient/admissions/${shown}/progress-notes`, { withTotal: true }),
+        api(`/api/inpatient/admissions/${shown}/nursing-records`, { withTotal: true }),
+        api(`/api/inpatient/admissions/${shown}/vitals`, { withTotal: true }),
         api(`/api/inpatient/admissions/${shown}/document-completeness`),
         readOnly ? [] : fetchAllPages(api, `/api/inpatient/orders?admission_id=${current}&status=active`),
       ])
-    : [[], [], [], null, []];
+    : [{ rows: [], total: null }, { rows: [], total: null }, { rows: [], total: null }, null, []];
+  const [notes, nursing, vitals] = [notesPage.rows, nursingPage.rows, vitalsPage.rows];
+  const listed = ({ rows, total }) => (total !== null && rows.length < total ? `已列 ${rows.length} / 共 ${total}` : `${rows.length}`);
   // 交接班清单（P2-476）：原先只记得进、没有一个页面看得见——接班的人无从读起。交接班按病区、不挂某次住院，
   // 所以不跟着上面的住院记录走，没有在院患者时照样能看、能交
   const handoverQuery = new URLSearchParams(Object.entries(HANDOVER_FILTER).filter(([, v]) => v !== ""));
@@ -109,7 +113,7 @@ async function renderClinicalDocs() {
         completeness.complete ? "文书完整" : "缺项：" + completeness.missing.join("、")}</p>` : '<p class="msg">暂无在院患者</p>'}
     `)}
     ${shown ? `
-    ${panel(`病程记录（${notes.length}）`, `
+    ${panel(`病程记录（${listed(notesPage)}）`, `
       ${readOnly ? "" : `<form class="inline" id="note-form">
         <select name="note_type">${Object.entries(NOTE_TYPES).map(([k, v]) =>
           `<option value="${k}"${k === PROGRESS_NOTE_DEFAULT ? " selected" : ""}>${v}</option>`).join("")}</select>
@@ -121,7 +125,7 @@ async function renderClinicalDocs() {
       ${table(["时间", "类型", "医师", "内容"], notes, (n) =>
         `<tr><td>${esc(n.recorded_at)}</td><td>${esc(NOTE_TYPES[n.note_type] || n.note_type)}</td>
          <td>${esc(n.doctor_name)}</td><td>${esc(n.content)}</td></tr>`)}`)}
-    ${panel(`护理记录（${nursing.length}）`, `
+    ${panel(`护理记录（${listed(nursingPage)}）`, `
       ${readOnly ? "" : `<form class="inline" id="nursing-form">
         <select name="nursing_level">${Object.entries(NURSING_LEVELS).map(([k, v]) =>
           `<option value="${k}"${k === INPATIENT_NURSING_DEFAULT ? " selected" : ""}>${v}</option>`).join("")}</select>
@@ -136,7 +140,7 @@ async function renderClinicalDocs() {
       ${table(["时间", "级别", "护士", "内容"], nursing, (r) =>
         `<tr><td>${esc(r.recorded_at)}</td><td>${esc(NURSING_LEVELS[r.nursing_level] || r.nursing_level)}</td>
          <td>${esc(r.nurse_name)}</td><td>${esc(r.content)}</td></tr>`)}`)}
-    ${panel(`体温单（${vitals.length}）`, `
+    ${panel(`体温单（${listed(vitalsPage)}）`, `
       ${readOnly ? "" : `<form class="inline" id="vital-form">
         <label style="font-size:13px">测量时刻 <input name="measured_at" type="datetime-local" required></label>
         <input name="temperature" type="number" step="0.1" placeholder="体温℃">
