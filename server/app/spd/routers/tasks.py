@@ -1370,20 +1370,37 @@ def _followup_interval(db: Session, enrollment: SpdEnrollment) -> int:
     不走 `target_for` 的第三级回落（该病种任一阶段）：那一级是给判测量值用的——配了目标就该用上；随访周期却是
     按阶段定的（治疗期一月一次、稳定期一季一次），拿别的阶段的周期就排错了下次随访。原先还按指标逐个走完三级回落：
     排在前面的指标只配在别的阶段，也会压过本阶段配了的、排在后面的指标（P2-150）。
+
+    先按下面 6 个指标的次序、本阶段 → 不分阶段取（种子病种都落在这 6 个里，存量病种的周期原样不变）；这 6 个两级都
+    没配的，再按本阶段 → 不分阶段取该级其余启用目标里编号最小的那条（P2-1639）。原先只认这 6 个：目标配在尿酸、糖化、
+    舒张压、肌酐、餐后血糖或定性指标上的病种（县里新配一个痛风病种，治疗期尿酸目标随访 30 天），配的周期一律被忽略、
+    按 90 天排。
     """
     program = db.query(SpdProgram).filter(SpdProgram.code == enrollment.program_code).first()
     if program is None:
         return 90
-    for stage in dict.fromkeys((enrollment.stage or "", "")):
+    stages = tuple(dict.fromkeys((enrollment.stage or "", "")))
+    for stage in stages:
         for metric in ("bp_sys", "glucose_fasting", "spo2", "egfr", "ldl", "bmi"):
             target = (
                 db.query(SpdTarget)
                 .filter(SpdTarget.program_id == program.id, SpdTarget.stage == stage,
                         SpdTarget.metric == metric, SpdTarget.active.is_(True))
+                .order_by(SpdTarget.id)
                 .first()
             )
             if target is not None:
                 return target.followup_interval_days
+    # 上面 6 个两级都没配：取其余启用目标里编号最小的那条（确定的次序，不由库的返回次序决定，P2-1639）
+    for stage in stages:
+        target = (
+            db.query(SpdTarget)
+            .filter(SpdTarget.program_id == program.id, SpdTarget.stage == stage, SpdTarget.active.is_(True))
+            .order_by(SpdTarget.id)
+            .first()
+        )
+        if target is not None:
+            return target.followup_interval_days
     return 90
 
 
