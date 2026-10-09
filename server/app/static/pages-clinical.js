@@ -1065,8 +1065,14 @@ async function renderMedication() {
       return;
     }
     // 预警按同时在用的品种数判（P2-144），把那个数写出来——只写「多重用药风险」，看的人得自己去 JSON 里数
+    // 画像原先整段 JSON 甩给人看（P2-1663，同「智能辨证」改表格）：英文键、`"in_use": true`；改成表格，「同时在用 N 种」放在表上方。
+    // 最大日剂量不带单位：画像出参没有单位字段，不替人编
     $("#prof-result").innerHTML = `${profile.polypharmacy_warning
-      ? `<p class="msg err">⚠ 患者 ${esc(String(profile.patient_id))} 多重用药风险：同时在用 ${profile.in_use_drugs} 种</p>` : ""}<pre class="json">${esc(JSON.stringify(profile, null, 2))}</pre>`;
+      ? `<p class="msg err">⚠ 患者 ${esc(String(profile.patient_id))} 多重用药风险：同时在用 ${profile.in_use_drugs} 种</p>`
+      : `<p class="desc">患者 ${esc(profile.patient_id)} 同时在用 ${esc(profile.in_use_drugs)} 种</p>`}`
+      + table(["药品", "编码", "次数", "最大日剂量", "是否在用"], profile.drugs, (d) =>
+        `<tr><td>${esc(d.drug_name)}</td><td>${esc(d.drug_code)}</td><td>${esc(d.times)}</td>
+         <td>${esc(d.max_daily_dose)}</td><td>${d.in_use ? "是" : "否"}</td></tr>`);
   };
   $("#page-body").onclick = async (e) => {
     const { adv, close } = e.target.dataset;
