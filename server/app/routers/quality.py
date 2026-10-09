@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, true
 from sqlalchemy.orm import Session
 
+from .. import clock
 from ..concurrency import ensure_present, insert_if_absent
 from ..numtypes import INT4_MAX, INT4_MIN
 from ..texttypes import NON_BLANK, has_keyword
@@ -425,6 +426,10 @@ def create_infection_report(
         raise HTTPException(status_code=404, detail="机构不存在")
     if db.get(Patient, body.patient_id) is None:
         raise HTTPException(status_code=404, detail="患者不存在")
+    # 上报日期不得晚于今天（P2-1571，与签约日期 P2-1548 / 接种日期 P2-1304 同一句）：记的是已经报上来的那一天，原先只查
+    # 格式——填成 2027-10-05 照收、原样回显。留空照旧不判（挂不挂住院、加感染日期、统计分期间待业务拍板，不在这里）
+    if body.report_date and body.report_date > clock.today().isoformat():
+        raise HTTPException(status_code=422, detail=f"上报日期（{body.report_date}）不得晚于今天")
     report = InfectionReport(**body.model_dump(), reported_by=user.full_name or user.username)
     db.add(report)
     db.commit()
