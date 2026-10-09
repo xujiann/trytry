@@ -643,7 +643,8 @@ def test_健康日历两天两种填充(client, auth, world):
         params={"patient_id": world["patient"]["id"], "day": world["d_today"]},
         headers=auth,
     ).json()
-    assert list(today.keys()) == ["day", "followups", "revisits", "tasks"]
+    # 宣教一段追加在末尾（P2-1606），前三段与原先逐字一致
+    assert list(today.keys()) == ["day", "followups", "revisits", "tasks", "edu"]
     assert today == {
         "day": world["d_today"],
         "followups": [
@@ -655,6 +656,7 @@ def test_健康日历两天两种填充(client, auth, world):
         "revisits": [{"id": world["revisit"]["id"], "plan_date": world["d_today"],
                       "dept": "内科", "items": "复查血压", "status": "planned"}],
         "tasks": [],
+        "edu": [],
     }
     # 重度异常自动派的处置任务落在次日
     tomorrow = client.get(

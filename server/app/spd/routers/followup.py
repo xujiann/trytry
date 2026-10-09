@@ -40,6 +40,8 @@ from ..platform import (ENCOUNTER_TYPE_NAMES, Admission, Encounter, Organization
                         role_unfit, unusable_user)
 from ..models import (
     SpdCallTask,
+    SpdEduMaterial,
+    SpdEduPush,
     SpdFollowupRecord,
     SpdFollowupRule,
     SpdQcSample,
@@ -393,11 +395,19 @@ class CalendarTaskOut(BaseModel):
     status: str
 
 
+class CalendarEduOut(BaseModel):
+    id: int
+    title: str
+    send_at: str
+    status: str
+
+
 class HealthCalendarOut(BaseModel):
     day: str
     followups: list[FollowupRecordOut]
     revisits: list[CalendarRevisitOut]
     tasks: list[CalendarTaskOut]
+    edu: list[CalendarEduOut]   # 宣教（P2-1606）：追加在末尾，前三段字节不变
 
 
 # ============================================================ 随访方案规则
@@ -1904,7 +1914,10 @@ def health_calendar(
     patient_id: int, day: str = "", db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """患者健康日历（智能随访端 #12）：某天的随访、宣教与复诊安排。"""
+    """患者健康日历（智能随访端 #12）：某天的随访、宣教与复诊安排。
+
+    出参四段：随访（计划日）、复诊（计划日）、任务（到期日）、宣教（计划推送时刻落在这一天的推送，P2-1606 追加在末尾）。
+    """
     assert_patient_visible(db, user, patient_id, resource="spd_calendar")
     # `day` 是按字符串等值匹配的：`2026-9-24` 会让这一天"什么安排都没有"，
     # 而页面上那个输入框是自由文本（P1-58）。
@@ -1927,6 +1940,21 @@ def health_calendar(
         .filter(SpdTask.patient_id == patient_id, SpdTask.due_date == target)
         .all()
     )
+    # 宣教（P2-1606）：docstring 与需求对照表（智能随访端 #12）都写「随访、宣教与复诊」，出参原先只有随访 / 复诊 / 任务三段。
+    # 取计划推送时刻落在这一天的宣教推送。`send_at` 存的是**本地**时刻字符串（页面 datetime-local 手填；立即推送记
+    # `clock.now_local`，P2-215；`T` 与空格两种写法、秒可有可无，P1-100），不是 UTC 时间戳——按本地日 [当天, 次日) 做字符串
+    # 区间比即可，不用换算 UTC 区间（换了反倒把本地 07:30 这类挪到前一天）
+    next_day = (date.fromisoformat(target) + timedelta(days=1)).isoformat()
+    edu = (
+        db.query(SpdEduPush)
+        .filter(SpdEduPush.patient_id == patient_id, SpdEduPush.send_at >= target, SpdEduPush.send_at < next_day)
+        .order_by(func.replace(SpdEduPush.send_at, "T", " "), SpdEduPush.id)
+        .all()
+    )
+    edu_titles = {
+        m.id: m.title
+        for m in db.query(SpdEduMaterial).filter(SpdEduMaterial.id.in_({e.material_id for e in edu} or {0}))
+    }
     return {
         "day": target,
         "followups": [_record_out(f) for f in followups],
@@ -1938,5 +1966,9 @@ def health_calendar(
         "tasks": [
             {"id": t.id, "title": t.title, "task_type": t.task_type, "status": t.status}
             for t in tasks
+        ],
+        "edu": [
+            {"id": e.id, "title": edu_titles.get(e.material_id, ""), "send_at": e.send_at, "status": e.status}
+            for e in edu
         ],
     }

@@ -3314,7 +3314,7 @@ async function renderSpdFollowup() {
       <div id="spd-fu-list"></div>
       <div id="spd-fu-detail"></div>`)}
     ${panel("患者健康日历", `
-      <p class="desc">某一天这位患者的随访、复诊与任务安排一屏看——随访前先看当天还有什么，别重复打扰</p>
+      <p class="desc">某一天这位患者的随访、复诊、任务与宣教安排一屏看——随访前先看当天还有什么，别重复打扰</p>
       <form class="inline" id="spd-cal-form">
         <input name="patient_id" type="number" placeholder="患者ID" required>
         <input name="day" placeholder="日期 YYYY-MM-DD（留空 = 今天）">
@@ -3433,18 +3433,21 @@ async function renderSpdFollowup() {
     e.preventDefault();
     const q = formJson(e.target, ["patient_id"]);
     // 先清空（P2-1010）：原先换了患者号查失败，只写了原因，日历区照旧是上一位的随访、复诊、任务
+    // 宣教一段（P2-1606）：接口原先没有、说明却写「随访、宣教与复诊」；状态与宣教推送清单同一张中文映射（SPD_PUSH_STATUS）
     $("#spd-cal-box").innerHTML = "";
     try {
       const cal = await api(`/api/spd/health-calendar?patient_id=${q.patient_id}${q.day ? `&day=${encodeURIComponent(q.day)}` : ""}`);
       $("#spd-cal-box").innerHTML = `
-        <p class="desc">${esc(cal.day)}：随访 ${(cal.followups || []).length} · 复诊 ${(cal.revisits || []).length} · 任务 ${(cal.tasks || []).length}</p>
+        <p class="desc">${esc(cal.day)}：随访 ${(cal.followups || []).length} · 复诊 ${(cal.revisits || []).length} · 任务 ${(cal.tasks || []).length} · 宣教 ${(cal.edu || []).length}</p>
         ${table(["随访ID", "场景", "渠道", "计划日期", "状态"], cal.followups || [], (f) =>
           `<tr><td>${f.id}</td><td>${esc(f.scene_name)}</td><td>${esc(SPD_FU_CHANNELS[f.channel] || f.channel)}</td>
            <td>${esc(f.planned_at)}</td><td>${esc(f.status_name)}</td></tr>`)}
         ${table(["复诊ID", "科室", "项目", "状态"], cal.revisits || [], (v) =>
           `<tr><td>${v.id}</td><td>${esc(v.dept || "—")}</td><td>${esc(v.items || "—")}</td><td>${spdTag(SPD_REVISIT_STATUS, v.status)}</td></tr>`)}
         ${table(["任务ID", "标题", "类型", "状态"], cal.tasks || [], (t) =>
-          `<tr><td>${t.id}</td><td>${esc(t.title)}</td><td>${esc(SPD_TASK_TYPES[t.task_type] || t.task_type)}</td><td>${spdTag(SPD_TASK_STATUS, t.status)}</td></tr>`)}`;
+          `<tr><td>${t.id}</td><td>${esc(t.title)}</td><td>${esc(SPD_TASK_TYPES[t.task_type] || t.task_type)}</td><td>${spdTag(SPD_TASK_STATUS, t.status)}</td></tr>`)}
+        ${table(["宣教推送ID", "素材", "计划推送时刻", "状态"], cal.edu || [], (d) =>
+          `<tr><td>${d.id}</td><td>${esc(d.title || "—")}</td><td>${esc(d.send_at)}</td><td>${spdTag(SPD_PUSH_STATUS, d.status)}</td></tr>`)}`;
       setMsg("#spd-cal-msg", "");
     } catch (err) { setMsg("#spd-cal-msg", err.message, false); }
   };
