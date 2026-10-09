@@ -2516,6 +2516,40 @@ def test_已结束的慢专病咨询打开会话不给回复框(page, base_url, 
     expect(page.locator("#spd-consult-reply")).to_have_count(0)   # 修前照样摆着回复框
 
 
+def test_慢专病咨询按患者查_找得回已结束的会话(page, base_url, admin_call):
+    """P2-1604：咨询清单原先不收 patient_id，页面只取最新 50 条加进行中的，已结束的会话一被挤出窗口就找不回。"""
+    import json
+    from urllib.request import Request
+
+    def post(path, payload, token):
+        req = Request(f"{base_url}{path}", data=json.dumps(payload).encode(),
+                      headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"})
+        with urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read())
+
+    name, id_card = "E2E按患者查咨询", "320981198507071604"
+    pid = admin_call("POST", "/api/patients", {"name": name, "id_card": id_card, "gender": "男"})["id"]
+    login = Request(f"{base_url}/api/portal/auth/wechat/login", headers={"Content-Type": "application/json"},
+                    data=json.dumps({"code": "mock-e2e-p21604", "state": ""}).encode())
+    with urlopen(login, timeout=10) as resp:
+        resident = json.loads(resp.read())["access_token"]
+    post("/api/portal/auth/realname", {"name": name, "id_card": id_card}, resident)
+    cid = post("/api/portal/spd/consults", {"content": "E2E按患者查", "program_code": "hypertension"},
+               resident)["consult_id"]
+    admin_call("POST", f"/api/spd/consults/{cid}/close")
+
+    _login(page, base_url)
+    _open_page(page, "spdmanager", "个案管理师端·专属衔接")
+    form = page.locator("#spd-consult-filter")
+    form.locator("input[name=patient_id]").fill(str(pid))
+    form.locator("button").click()
+    rows = page.locator("#spd-consult-list tbody tr")
+    expect(rows).to_have_count(1)   # 只剩这位患者的会话
+    expect(rows.first.locator(f'button[data-consult="{cid}"]')).to_have_count(1)
+    expect(rows.first).to_contain_text(name)
+    expect(rows.first).to_contain_text("已结束")
+
+
 def test_随访问卷在界面上录题目与异常规则_执行随访逐题作答判出异常(page, base_url, seed, admin_read, admin_call):
     """P1-122：建问卷的表单原先没有题目框，异常规则编辑器列的是 /api/spd/meta 的事实字段、交上去的是平铺条件
     （后端读 when，一条都存不进）；执行随访只填渠道与结果、answers 恒为空——问卷的异常分级从界面上一次都触发

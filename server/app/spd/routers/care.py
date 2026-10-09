@@ -1867,6 +1867,7 @@ class ConsultReplyIn(BaseModel):
 @router.get("/consults", response_model=list[CareConsultOut])
 def list_consults(
     response: Response,
+    patient_id: int | None = None,
     status: str | None = None,
     doctor_id: int | None = None,
     mine: bool = False,
@@ -1877,7 +1878,10 @@ def list_consults(
 ):
     # P0-23：原先收了调用方却不按它收口——任一职员账号都能列出全域全部会话（带患者姓名与病种）。
     # 与同组 reply / messages 同一口径：只见本机构服务过的患者的会话，全域角色不过滤。
-    query = scope_patient_list(db, user, db.query(SpdConsult), SpdConsult, None, "spd_consult")
+    # `patient_id` 按患者筛（P2-1604）：原先不收、`?patient_id=` 被静默忽略照回全部——页面只取最新 50 条加进行中的，
+    # 已结束的咨询一被新会话挤出窗口就找不回。与同文件干预 / 复诊 / 评估清单同一写法交给 `scope_patient_list`：
+    # 先判这位患者看不看得（看不见 403、不留痕）并留痕，再过滤；不带患者号照旧
+    query = scope_patient_list(db, user, db.query(SpdConsult), SpdConsult, patient_id, "spd_consult")
     if status:
         query = query.filter(SpdConsult.status == status)
     if mine:

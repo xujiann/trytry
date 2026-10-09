@@ -4159,15 +4159,11 @@ async function renderSpdManager() {
   $("#page-body").innerHTML = `
     ${panel("在线咨询（个案管理师端 #6）", `
       <p class="desc">居民端发起的专病咨询在此应答；可依据咨询记录一键转随访任务</p>
-      ${table(["ID", "患者", "病种", "消息数", "发起时间", "状态", "操作"], consults, (c) =>
-        `<tr><td>${c.id}</td><td>${esc(c.patient_name || c.patient_id)}</td>
-         <td>${esc(c.program_code || "—")}</td><td>${c.messages}</td>
-         <td>${esc(c.created_at.slice(0, 16))}</td>
-         <td>${spdTag(SPD_CONSULT_STATUS, c.status)}</td>
-         <td><button class="btn secondary" data-consult="${c.id}" data-closed="${c.status === "open" ? 0 : 1}">打开会话</button>
-          ${c.status === "open"
-            ? `<button class="btn secondary" data-consult-close="${c.id}">结束</button>` : ""}
-          <button class="btn secondary" data-consult-fu="${c.id}">转随访</button></td></tr>`)}
+      <form class="inline" id="spd-consult-filter">
+        <input name="patient_id" type="number" placeholder="患者ID（留空看最新与进行中）" style="width:220px">
+        <button class="secondary">按患者查</button>
+      </form>
+      <div id="spd-consult-list">${spdConsultTable(consults)}</div>
       <p class="msg" id="spd-consult-msg"></p>
       <div id="spd-consult-thread"></div>`)}
     ${panel("复诊计划看板（个案管理师端 #9 / 智能随访端 #7）", `
@@ -4206,6 +4202,17 @@ async function renderSpdManager() {
       </form><p class="msg" id="spd-rx-msg"></p>
       <div id="spd-rx-list"></div>`)}`;
 
+  // 按患者查咨询（P2-1604，个案管理师端 #6「患者会话查询」）：上面只取最新 50 条加进行中的，已结束的咨询一被新会话挤出
+  // 窗口就找不回。送清单的 patient_id（后端先判这位患者看不看得、留痕，看不见 403）；留空回到最新与进行中。
+  // 查询失败只在这一段说出来、不掀整页（同复诊筛选 P2-378）
+  $("#spd-consult-filter").onsubmit = async (e) => {
+    e.preventDefault();
+    const pid = e.target.patient_id.value.trim();
+    try {
+      $("#spd-consult-list").innerHTML = spdConsultTable(pid
+        ? await api(`/api/spd/consults?patient_id=${encodeURIComponent(pid)}&limit=200`) : consults);
+    } catch (err) { $("#spd-consult-list").innerHTML = `<p class="msg err">${esc(err.message)}</p>`; }
+  };
   $("#spd-revisit-form").onsubmit = (e) => {
     e.preventDefault();
     return postAction("/api/spd/revisits", formJson(e.target, ["patient_id", "doctor_user_id"]), "#spd-revisit-msg");
@@ -4287,6 +4294,18 @@ async function renderSpdManager() {
         "#spd-revisit-msg", "PATCH");
     }
   });
+}
+
+function spdConsultTable(rows) {
+  return table(["ID", "患者", "病种", "消息数", "发起时间", "状态", "操作"], rows, (c) =>
+    `<tr><td>${c.id}</td><td>${esc(c.patient_name || c.patient_id)}</td>
+     <td>${esc(c.program_code || "—")}</td><td>${c.messages}</td>
+     <td>${esc(c.created_at.slice(0, 16))}</td>
+     <td>${spdTag(SPD_CONSULT_STATUS, c.status)}</td>
+     <td><button class="btn secondary" data-consult="${c.id}" data-closed="${c.status === "open" ? 0 : 1}">打开会话</button>
+      ${c.status === "open"
+        ? `<button class="btn secondary" data-consult-close="${c.id}">结束</button>` : ""}
+      <button class="btn secondary" data-consult-fu="${c.id}">转随访</button></td></tr>`);
 }
 
 function spdRevisitTable(rows) {
