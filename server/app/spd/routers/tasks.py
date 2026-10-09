@@ -1134,7 +1134,10 @@ def submit_task(
             raise HTTPException(status_code=422, detail="；".join(problems))
         task.evidence = body.evidence
     if body.draft:
-        _submit_move(db, task, "doing")
+        # 空着的责任人补成操作人（P2-1597），与下面提交审核、办结同一个口径：原先这里在补责任人那一行之前就 return，
+        # 无人认领的待接收任务一存草稿成了「办理中 + 无责任人」——接收只收待接收 / 已超期（409）、不算无人认领、
+        # 不进任何人的待办。写在同一条条件 UPDATE 里（`coalesce`），并发里别人刚接收的不被覆盖
+        _submit_move(db, task, "doing", assignee_id=func.coalesce(SpdTask.assignee_id, user.id))
         db.commit()
         return _task_out(task)
     # 数的是没被病毒扫描隔离的佐证（P2-1251）：记进清单之后补扫才判毒的，清单不空、审核人却一张也打不开（下载 410）
@@ -1179,16 +1182,17 @@ def add_task_evidence(
             raise HTTPException(status_code=422, detail="；".join(problems))
         if str(body.attachment_id) not in {str(e) for e in task.evidence or []}:
             task.evidence = [*(task.evidence or []), body.attachment_id]
-        _submit_move(db, task, "doing")
+        # 空着的责任人补成操作人，与存草稿同一句（P2-1597）：原先翻成办理中却不落责任人，谁都接收不了
+        _submit_move(db, task, "doing", assignee_id=func.coalesce(SpdTask.assignee_id, user.id))
         db.commit()
     return _task_out(task)
 
 
-def _submit_move(db: Session, task: SpdTask, to_status: str) -> None:
+def _submit_move(db: Session, task: SpdTask, to_status: str, **values: Any) -> None:
     """提交 / 草稿的条件翻转：只从办理人还能接着办的状态翻（`TASK_COMPLETABLE_STATUSES`，含已退回，P2-758）。
     锁外读到办理中、这时别人刚提交审核的，同样 409、不覆盖——回话按库里的现状说：待审核的说须由审核人审，其余说已结束
-    （与 `_finish_task` 同一个判法）。"""
-    if not move_task(db, task.id, to_status, expect=TASK_COMPLETABLE_STATUSES):
+    （与 `_finish_task` 同一个判法）。要一并写的字段（存草稿 / 补佐证补责任人，P2-1597）放进 `values`，与状态同一条 SQL。"""
+    if not move_task(db, task.id, to_status, expect=TASK_COMPLETABLE_STATUSES, **values):
         db.rollback()
         current = db.get(SpdTask, task.id)
         raise HTTPException(status_code=409, detail=AWAITING_REVIEW if current is not None
