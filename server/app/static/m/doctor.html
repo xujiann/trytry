@@ -79,6 +79,8 @@
           <option value="consultation">会诊记录</option>
         </select>
         <textarea id="round-content" rows="3" placeholder="病程内容" required></textarea>
+        <!-- 记录时间（P2-1767，同桌面病程表单）：补记的照实填，留空按此刻；原先只送类型和内容，补记一律记成提交那一刻 -->
+        <label class="m-picker">记录时间（留空按此刻）<input id="round-at" type="datetime-local"></label>
         <button type="submit">提交病程</button>
         <p id="round-msg" class="msg"></p>
       </form>

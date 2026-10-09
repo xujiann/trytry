@@ -73,7 +73,10 @@ async function renderClinicalDocs() {
   const handoverWard = String(HANDOVER_FILTER.ward_id || (inHospital.find((a) => a.id === current) || {}).ward_id || "");
 
   // 选择框写「病区 床号 姓名」（P2-1335，与医生移动端查房同一句）：原先只有「#住院号 患者ID 诊断」，同诊断的几位分不开，
-  // 病程、护理、体温单容易写到别人名下
+  // 病程、护理、体温单容易写到别人名下。
+  // 病程、护理表单带「记录时间（留空按此刻）」（P2-1767，照门急诊处置 P2-1633、医嘱执行 P2-1694）：接口一直收 `recorded_at`，
+  // 模型注释写着「与创建时刻分开：补记时二者不同」，表单原先不送——抢救后补的病程、夜班事后补的护理，记录时间一律成了点按钮
+  // 那一刻。留空不送（formJson 跳过空值），后端按此刻；日期时间控件的 `T` 由 formJson 换成空格（P1-100）
   $("#page-body").innerHTML = `
     ${panel("选择住院记录", `
       <form class="inline" id="doc-pick"><select name="admission_id">${
@@ -89,6 +92,7 @@ async function renderClinicalDocs() {
           `<option value="${k}"${k === PROGRESS_NOTE_DEFAULT ? " selected" : ""}>${v}</option>`).join("")}</select>
         <input name="doctor_name" placeholder="记录医师">
         <input name="content" placeholder="病程内容" required style="min-width:320px">
+        <label style="font-size:13px">记录时间（留空按此刻） <input name="recorded_at" type="datetime-local"></label>
         <button>书写</button></form>
       <p class="msg" id="doc-msg"></p>
       ${table(["时间", "类型", "医师", "内容"], notes, (n) =>
@@ -102,7 +106,9 @@ async function renderClinicalDocs() {
         <select name="inpatient_order_id"><option value="">关联医嘱（执行某条医嘱时选，可空）</option>${
           activeOrders.map((o) => `<option value="${o.id}">#${o.id} ${o.order_type === "long" ? "长期" : "临时"} ${
             esc(o.content.slice(0, 30))}</option>`).join("")}</select>
-        <input name="content" placeholder="护理内容" required style="min-width:280px"><button>记录</button></form>
+        <input name="content" placeholder="护理内容" required style="min-width:280px">
+        <label style="font-size:13px">记录时间（留空按此刻） <input name="recorded_at" type="datetime-local"></label>
+        <button>记录</button></form>
       ${table(["时间", "级别", "护士", "内容"], nursing, (r) =>
         `<tr><td>${esc(r.recorded_at)}</td><td>${esc(NURSING_LEVELS[r.nursing_level] || r.nursing_level)}</td>
          <td>${esc(r.nurse_name)}</td><td>${esc(r.content)}</td></tr>`)}`)}

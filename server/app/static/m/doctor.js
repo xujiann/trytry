@@ -1074,15 +1074,19 @@ $("#round-adm").addEventListener("change", async () => {
 
 $("#round-note").addEventListener("submit", async (e) => {
   e.preventDefault();
+  const body = { note_type: $("#round-note-type").value, content: $("#round-content").value.trim() };
+  // 记录时间（P2-1767，同桌面病程表单）：补记的照实填；留空不送，后端按此刻。日期时间控件送 `T` 分隔，换成空格再送
+  // （同下面体征的测量时刻，P1-100）
+  const recordedAt = $("#round-at").value.trim().replace("T", " ");
+  if (recordedAt) body.recorded_at = recordedAt;
   try {
     await api(`/api/inpatient/admissions/${roundAdmissionId}/progress-notes`, {
       method: "POST",
-      body: JSON.stringify({
-        note_type: $("#round-note-type").value,
-        content: $("#round-content").value.trim(),
-      }),
+      body: JSON.stringify(body),
     });
+    // 记录时间一并清空（同体征录完清测量时刻，P1-231）：留着就成了下一条病程的记录时间
     $("#round-content").value = "";
+    $("#round-at").value = "";
     setMsg("#round-msg", "病程已记录", true);
     await refreshRoundDetail();
   } catch (err) { setMsg("#round-msg", err.message, false); }
