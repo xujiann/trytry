@@ -1135,7 +1135,7 @@ def portal_sign_consent(
     )
     db.add(record)
     db.commit()
-    return consent_out(record)
+    return consent_out(record, patient.name)   # 本人或代管成员（`accessible_patient` 已判），带姓名无害（P2-1774）
 
 
 @router.get("/me/consents", response_model=list[ConsentOut])
@@ -1157,7 +1157,7 @@ def portal_my_consents(
         offset,
         limit,
     )
-    return [consent_out(r) for r in rows]
+    return [consent_out(r, patient.name) for r in rows]   # 同上（P2-1774）
 
 
 class PortalCorrectionIn(BaseModel):

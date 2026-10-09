@@ -123,7 +123,7 @@ def _render_profile(client, headers, patient: int) -> str:
 def test_用药画像印成表格_表头与逐行中文(client, admin, world):
     html = _render_profile(client, admin, world["patient"])
     assert 'class="json"' not in html and '"in_use"' not in html, html   # 修前整段 JSON
-    assert f"患者 {world['patient']} 同时在用 1 种" in html, html
+    assert f"患者 P1663 患者（{world['patient']}）同时在用 1 种" in html, html   # P2-1774 起写明姓名（编号放括号里）
     assert "<th>药品</th><th>编码</th><th>次数</th><th>最大日剂量</th><th>是否在用</th>" in html, html
     rows = html.split("<tr>")
     in_use = next(r for r in rows if "P1663-AML" in r)

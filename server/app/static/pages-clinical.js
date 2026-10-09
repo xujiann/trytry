@@ -442,12 +442,17 @@ async function renderConsents() {
   const role = currentRole();
   const canReview = role === "admin" || role === "director";
   const canRevoke = role === "admin" || ["operator", "doctor", "public_health"].includes(role);
+  // 台账按手输的患者号查：行上印「姓名（编号）」、撤回前写明撤的是谁的哪项同意（P2-1774，后端随行带出姓名）。原先行里没有姓名、
+  // 确认框只写「撤回同意记录 N」——敲错一位，撤回的是别人的同意，而撤回不可恢复
+  let consentRows = {};
   const drawConsents = async (patientId) => {
     if (!patientId) { $("#ct-table").innerHTML = '<p class="desc">输入患者ID查询其同意记录（查询会落调阅留痕）。</p>'; return; }
     const rows = await api(`/api/consents?patient_id=${encodeURIComponent(patientId)}`);
+    consentRows = Object.fromEntries(rows.map((r) => [String(r.id), r]));
     $("#ct-table").innerHTML = table(
-      ["时间", "场景", "文本版本", "方式", "凭证", "状态", "操作"], rows, (r) =>
+      ["时间", "患者", "场景", "文本版本", "方式", "凭证", "状态", "操作"], rows, (r) =>
       `<tr><td>${esc((r.created_at || "").replace("T", " ").slice(0, 19))}</td>
+       <td>${esc(r.patient_name) || "—"}（${esc(r.patient_id)}）</td>
        <td>${esc(r.scene_name)}</td><td>${esc(r.text_version)}</td><td>${esc(r.method_name)}</td>
        <td>${esc(r.evidence || "—")}</td>
        <td>${r.revoked_at
@@ -521,8 +526,11 @@ async function renderConsents() {
     const { printConsent, revokeConsent } = e.target.dataset;
     if (revokeConsent) {
       // 撤回不删行（后端置 revoked_at，"撤回本身也要可举证"），但**没有反向端点**：
-      // 再撤一次 409。所以在点之前说清楚，而不是点完才发现回不去
-      if (!confirm(`撤回同意记录 ${revokeConsent}？记录会保留并标记撤回时刻，但无法再恢复为有效。`)) return;
+      // 再撤一次 409。所以在点之前说清楚，而不是点完才发现回不去。写明是谁的哪项同意（P2-1774）；
+      // 原生确认框显示的是纯文本，不经 esc()（转义了反倒把 & < 原样印成实体）
+      const r = consentRows[revokeConsent] || {};
+      if (!confirm(`撤回 ${r.patient_name || "—"} 的「${r.scene_name || "—"}」同意（记录 ${revokeConsent}）？`
+        + "记录会保留并标记撤回时刻，但无法再恢复为有效。")) return;
       try {
         await api(`/api/consents/${revokeConsent}/revoke`, { method: "POST" });
         await drawConsents($("#ct-search").patient_id.value.trim());
@@ -1067,9 +1075,11 @@ async function renderMedication() {
     // 预警按同时在用的品种数判（P2-144），把那个数写出来——只写「多重用药风险」，看的人得自己去 JSON 里数
     // 画像原先整段 JSON 甩给人看（P2-1663，同「智能辨证」改表格）：英文键、`"in_use": true`；改成表格，「同时在用 N 种」放在表上方。
     // 最大日剂量不带单位：画像出参没有单位字段，不替人编
+    // 头一行写「患者 姓名（编号）」（P2-1774，后端随画像带出姓名）：画像按手输的患者号查，原先只写「患者 2」——敲错一位，
+    // 看的是别人的在用药也认不出来
     $("#prof-result").innerHTML = `${profile.polypharmacy_warning
-      ? `<p class="msg err">⚠ 患者 ${esc(String(profile.patient_id))} 多重用药风险：同时在用 ${profile.in_use_drugs} 种</p>`
-      : `<p class="desc">患者 ${esc(profile.patient_id)} 同时在用 ${esc(profile.in_use_drugs)} 种</p>`}`
+      ? `<p class="msg err">⚠ 患者 ${esc(profile.patient_name)}（${esc(String(profile.patient_id))}）多重用药风险：同时在用 ${profile.in_use_drugs} 种</p>`
+      : `<p class="desc">患者 ${esc(profile.patient_name)}（${esc(profile.patient_id)}）同时在用 ${esc(profile.in_use_drugs)} 种</p>`}`
       + table(["药品", "编码", "次数", "最大日剂量", "是否在用"], profile.drugs, (d) =>
         `<tr><td>${esc(d.drug_name)}</td><td>${esc(d.drug_code)}</td><td>${esc(d.times)}</td>
          <td>${esc(d.max_daily_dose)}</td><td>${d.in_use ? "是" : "否"}</td></tr>`);

@@ -36,7 +36,8 @@ CALIBER = (
     "在途与已取消不计；无可判定登记时返回 null 而非 0"
 )
 # P2-144 加了 in_use_drugs 与每行的 in_use（只增不改：多重用药预警改按「同时在用」判，要把在用的数给出来）
-PROFILE_KEYS = ["patient_id", "distinct_drugs", "in_use_drugs", "polypharmacy_warning", "drugs"]
+PROFILE_KEYS = ["patient_id", "distinct_drugs", "in_use_drugs", "polypharmacy_warning", "drugs",
+                "patient_name"]  # P2-1774 加：患者姓名（认人键），只加在末尾
 PROFILE_DRUG_KEYS = ["drug_code", "drug_name", "times", "max_daily_dose", "in_use"]
 USAGE_KEYS = ["drug_code", "drug_name", "rx_count", "patient_count"]
 RISK_KEYS = ["total", "risks"]
@@ -231,6 +232,7 @@ def test_用药画像精确_键序与Float剂量(client, admin, seed):
             {"drug_code": "CT-MET", "drug_name": "二甲双胍(契约)",
              "times": 1, "max_daily_dose": 1.5, "in_use": True},
         ],
+        "patient_name": "契约药事患者一",
     }
     # Float 列：整数入参 5/10 读回就是 float，10 必须以 10.0 出参（与 Money 相反）
     assert type(body["drugs"][0]["max_daily_dose"]) is float
@@ -248,6 +250,7 @@ def test_用药画像精确_多重用药预警分支(client, admin, seed):
             {"drug_code": f"CT-D{i}", "drug_name": f"契约药{i}", "times": 1, "max_daily_dose": 1.0, "in_use": True}
             for i in range(1, 6)
         ],
+        "patient_name": "契约药事患者二",
     }
 
 

@@ -7184,9 +7184,13 @@ def test_知情同意页经办打得开_查台账能撤回(page, base_url, seed,
     expect(page.locator("#cr-table")).to_contain_text("由管理层审核")   # 修前整页只剩一句 403
     page.fill('#ct-search [name="patient_id"]', str(seed["patient"]["id"]))
     page.click("#ct-search button")
-    with _answers(page, [""]):
-        page.click(f'button[data-revoke-consent="{target}"]')
-        expect(page.locator("#cr-msg")).to_contain_text("已撤回")
+    # P2-1774：台账行印「姓名（编号）」，撤回的确认框写明撤的是谁的哪项同意（原先只写「撤回同意记录 N」）
+    expect(page.locator("#ct-table")).to_contain_text(f"{seed['patient']['name']}（{seed['patient']['id']}）")
+    messages = []
+    page.on("dialog", lambda d: (messages.append(d.message), d.accept()))
+    page.click(f'button[data-revoke-consent="{target}"]')
+    expect(page.locator("#cr-msg")).to_contain_text("已撤回")
+    assert messages and messages[0].startswith(f"撤回 {seed['patient']['name']} 的「家庭代管授权」同意"), messages
     rows = admin_call("GET", f"/api/consents?patient_id={seed['patient']['id']}")
     assert [r["revoked_at"] is not None for r in rows if r["id"] == target] == [True]
 

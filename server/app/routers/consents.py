@@ -143,8 +143,10 @@ def active_text_version(db: Session, scene: str) -> str:
     return text.version if text else ""
 
 
-def consent_out(record: ConsentRecord) -> dict:
-    """同意记录出口形状：监护人证件号一律脱敏（PII 出口脱敏，见 privacy.py）。"""
+def consent_out(record: ConsentRecord, patient_name: str) -> dict:
+    """同意记录出口形状：监护人证件号一律脱敏（PII 出口脱敏，见 privacy.py）。
+
+    `patient_name` 由调用方给（P2-1774）：判过可见性的台账、撤回与居民端照给姓名，不判可见性的窗口登记回执给空串。"""
     return {
         "id": record.id,
         "patient_id": record.patient_id,
@@ -162,7 +164,14 @@ def consent_out(record: ConsentRecord) -> dict:
         "guardian_relation_name": GUARDIAN_RELATION_NAMES.get(record.guardian_relation, record.guardian_relation),
         "revoked_at": record.revoked_at.isoformat() if record.revoked_at else "",
         "created_at": record.created_at.isoformat(),
+        "patient_name": patient_name,
     }
+
+
+def _patient_name(db: Session, patient_id: int) -> str:
+    """台账与撤回回显的患者姓名（P2-1774）；档案不在为空串。姓名不是加密列，PII 加密开态下照旧直读。"""
+    patient = db.get(Patient, patient_id)
+    return patient.name if patient is not None else ""
 
 
 def seed_consent_texts(db: Session) -> None:
@@ -208,6 +217,10 @@ class ConsentOut(BaseModel):
     #: 空串 = 未撤回；否则为撤回时刻 ISO 时间戳
     revoked_at: str
     created_at: str
+    #: 患者姓名（P2-1774，只加在末尾、原有键与次序不动）：台账按手输的患者号查，原先行里没有姓名——敲错一位，撤回的是别人的
+    #: 同意（撤回不可恢复）。台账与撤回先判可见性并留痕、居民端只取本人与代管成员，回姓名不扩大可见范围；窗口登记不判可见性，
+    #: 回执为空串（同预约回执 P2-1700、签约回执 P2-1547：回执带姓名就成了「敲任意患者号登一条即得姓名」的口子）
+    patient_name: str
 
 
 class ConsentTextOut(BaseModel):
@@ -309,7 +322,7 @@ def register_consent(
     )
     db.add(record)
     db.commit()
-    return consent_out(record)
+    return consent_out(record, "")   # 回执不带姓名（P2-1774）：本接口不判可见性，见 `ConsentOut.patient_name`
 
 
 @router.get("", response_model=list[ConsentOut])
@@ -328,7 +341,8 @@ def list_consents(
     if scene:
         query = query.filter(ConsentRecord.scene == scene)
     rows = paginate(query.order_by(ConsentRecord.id.desc()), response, offset, limit)
-    return [consent_out(r) for r in rows]
+    name = _patient_name(db, patient_id)   # 行上带姓名（P2-1774）
+    return [consent_out(r, name) for r in rows]
 
 
 @router.post(
@@ -349,7 +363,7 @@ def revoke_consent(
         raise HTTPException(status_code=409, detail="该同意已撤回")
     record.revoked_at = utcnow()
     db.commit()
-    return consent_out(record)
+    return consent_out(record, _patient_name(db, record.patient_id))   # 同台账行（P2-1774）
 
 
 @router.get("/texts", response_model=list[ConsentTextOut])

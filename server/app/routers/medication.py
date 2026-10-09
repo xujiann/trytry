@@ -256,6 +256,9 @@ class MedicationProfileOut(BaseModel):
     in_use_drugs: int
     polypharmacy_warning: bool
     drugs: list[MedicationProfileDrugOut]
+    #: 患者姓名（P2-1774，只加在末尾、原有键与次序不动）：画像按手输的患者号查，原先只回编号——敲错一位，看的是别人的在用药，
+    #: 页面只写「患者 2」认不出来。查看前已判可见性并留痕，回姓名不扩大可见范围（同就诊行 P2-1631）
+    patient_name: str
 
 
 @router.get("/profile/{patient_id}", response_model=MedicationProfileOut)
@@ -271,7 +274,8 @@ def medication_profile(
     今天一种没吃也挂着「多重用药风险」（P2-144）。
     """
     assert_patient_visible(db, user, patient_id, resource="medication")
-    if db.get(Patient, patient_id) is None:
+    patient = db.get(Patient, patient_id)
+    if patient is None:
         raise HTTPException(status_code=404, detail="患者不存在")
     rows = (
         db.query(PrescriptionItem, Prescription.created_at)
@@ -315,6 +319,7 @@ def medication_profile(
         "in_use_drugs": in_use,
         "polypharmacy_warning": in_use >= POLYPHARMACY_THRESHOLD,
         "drugs": drug_list,
+        "patient_name": patient.name,   # 认人键（P2-1774）
     }
 
 
