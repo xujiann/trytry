@@ -989,7 +989,7 @@ async function renderRules() {
         用药规则只列按药品编码排的前 500 条，上面的分来源计数是全量。</p>` : ""}
       <p class="desc">目录已统一，执行路径尚未统一——engine 列如实标出，不含糊其辞。</p>`)}
     ${panel("新增统一规则（admin）", `
-      <form class="inline" id="rule-form"><input name="key" placeholder="编码" required>
+      <form class="inline" id="rule-form"><input name="key" placeholder="编码（不含 /）" required>
         <input name="name" placeholder="名称" required>
         <select name="domain">${domains.map((d) => `<option value="${esc(d.domain)}">${esc(d.domain)}</option>`).join("")}</select>
         <input name="condition" placeholder="条件，如 daily_dose > max_daily_dose and age >= 65" required style="min-width:340px">

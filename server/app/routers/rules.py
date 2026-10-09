@@ -91,7 +91,12 @@ def list_domains():
 
 
 class RuleIn(BaseModel):
-    key: str = Field(min_length=1, max_length=48, pattern=NON_BLANK)
+    # 编码不得含「/」、不得全是「.」（P2-1737，同绩效公式编码 P2-1706）：原先只要求非空白，`rx/elderly`、`.`、`..` 都建得
+    # 出来——停用接口按路径收编码，页面编出的 `%2F` 在路由匹配前被解回分隔符、`.` `..` 被客户端先规范化掉，这几条停不了，
+    # 拦截级的一直拦。只拒停用路由寻址不到的写法，其余照收（大写、点号、连字符照旧）；正则即「无 `/`，且至少一个不是 `.` 的
+    # 可见字符」，可见字符口径同 `NON_BLANK`。停用路由不改模板（改成 `{key:path}` 会牵动权限点编码，随 P2-1505 定）；
+    # 存量见 `deactivate_rule`
+    key: str = Field(min_length=1, max_length=48, pattern=r"^[^/]*[^/.\s\p{Cc}\p{Cf}][^/]*$")
     name: str = Field(min_length=1, max_length=128, pattern=NON_BLANK)
     domain: str = Field(min_length=1, max_length=24, pattern=NON_BLANK)
     condition: str = Field(min_length=1, max_length=512, pattern=NON_BLANK)
@@ -165,7 +170,15 @@ class RuleDeactivateOut(BaseModel):
 
 @router.delete("/{key}", response_model=RuleDeactivateOut, dependencies=[Depends(require_admin)])
 def deactivate_rule(key: str, db: Session = Depends(get_db)):
-    """停用规则（不物理删除：历史判定结果要能解释当时的口径）。"""
+    """停用规则（不物理删除：历史判定结果要能解释当时的口径）。
+
+    寻址不到的存量（P2-1737，同 `analytics.deactivate_formula` 的 P2-1706）：新建已拒收含「/」与全是「.」的编码，可拒收
+    之前建下的存量可能带它们——页面 `encodeURIComponent` 编出的 `%2F` 在路由匹配前就被解回「/」，缺省转换器只配一段，一律
+    404 `Not Found`；「.」「..」在客户端就被规范化掉、到不了这里。路由模板不改（改成 `{key:path}` 会牵动权限点编码，随
+    P2-1505 定），这几条只能用 SQL 停：
+    `SELECT id, key, name, severity FROM rule_definitions WHERE active AND (key IN ('.', '..') OR key LIKE '%/%');`
+    查出来逐条核对后 `UPDATE rule_definitions SET active = false WHERE id = <上面查到的 id>;`
+    """
     rule = db.query(RuleDefinition).filter(RuleDefinition.key == key).first()
     if rule is None:
         raise HTTPException(status_code=404, detail="规则不存在")
