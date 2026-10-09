@@ -339,13 +339,26 @@ function barChart(items, { color = "#0b6e6e", unit = "" } = {}) {
 /* ---------------- 各页面 ---------------- */
 
 /* 折线图（纯SVG）：`labels` 是横轴标签，原样画；`times` 可选，与 `labels` 等长、每个点的时刻（毫秒数），给了就按时间
-   比例摆点，不给按下标等距（P2-1336） */
-function lineChart(labels, series, colors, times = null) {
+   比例摆点，不给按下标等距（P2-1336）。`axes` 可选，按序列名给那条序列自己的纵轴 `{ min, max, step, side }`（P2-1766）：
+   给了轴的序列按自己的值域映射，在 `side`（"left" / "right"）一侧逐格标刻度；没给轴的序列共用一根从 0 起、只标最大值
+   与 0 的纵轴——不传 `axes` 的调用方（驾驶舱近 6 月、审计按日）全是这一种，输出与原先逐字节相同 */
+function lineChart(labels, series, colors, times = null, axes = null) {
   const w = 640, h = 200, padL = 36, padB = 24, padT = 10;
   // 缺测（null / undefined）不画点、在那儿断开折线（P2-158）：原先调用方只能拿 0 顶上，一次只测了血压的记录把体温、
   // 脉搏两条曲线都拽到底，纵轴也跟着压扁
   const missing = (v) => v === null || v === undefined;
-  const all = Object.values(series).flat().filter((v) => !missing(v));
+  // 各自的纵轴（P2-1766）：体温单原先把体温与脉搏画在同一根从 0 起的纵轴上、最大值取两者里大的那个（脉搏 112）——体温
+  // 36.8→39.5℃ 的热峰在 166px 高的作图区里只差 4px，看不出热型；纵轴只标「112」「0」，没有体温刻度；同一组体温有没有
+  // 测脉搏，曲线形状就变。给了轴的序列只按自己的值域映射：值域照给的画，测得超出的按整格往外扩，点不画出图外
+  const own = new Map();
+  Object.entries(axes || {}).forEach(([name, a]) => {
+    const got = (series[name] || []).filter((v) => !missing(v));
+    const lo = a.min - a.step * Math.max(0, ...got.map((v) => Math.ceil((a.min - v) / a.step)));
+    const hi = a.max + a.step * Math.max(0, ...got.map((v) => Math.ceil((v - a.max) / a.step)));
+    own.set(name, { lo, hi, step: a.step, side: a.side, y: (v) => padT + (h - padT - padB) * (1 - (v - lo) / (hi - lo)) });
+  });
+  const all = Object.entries(series).filter(([name]) => !own.has(name)).flatMap(([, values]) => values)
+    .filter((v) => !missing(v));
   const max = Math.max(...all, 1);
   // 横坐标按时刻比例摆（P2-1336）：体温单原先按条目等距排，一天测 6 次与之后每天测 1 次占一样宽，热型曲线被压变形，
   // 中间隔了几天没测也看不出。时刻缺一个、或全在同一时刻，回落成按下标等距；不给时刻的调用方（驾驶舱近 6 月、审计
@@ -360,15 +373,16 @@ function lineChart(labels, series, colors, times = null) {
   let svg = "";
   Object.entries(series).forEach(([name, values], si) => {
     const color = colors[si % colors.length];
+    const yv = own.has(name) ? own.get(name).y : y;
     const segments = [[]];
     values.forEach((v, i) => {
       if (missing(v)) { if (segments[segments.length - 1].length) segments.push([]); return; }
-      segments[segments.length - 1].push(`${x(i)},${y(v)}`);
+      segments[segments.length - 1].push(`${x(i)},${yv(v)}`);
     });
     segments.filter((seg) => seg.length).forEach((seg) => {
       svg += `<polyline points="${seg.join(" ")}" fill="none" stroke="${color}" stroke-width="2"/>`;
     });
-    values.forEach((v, i) => { if (!missing(v)) svg += `<circle cx="${x(i)}" cy="${y(v)}" r="2.5" fill="${color}"/>`; });
+    values.forEach((v, i) => { if (!missing(v)) svg += `<circle cx="${x(i)}" cy="${yv(v)}" r="2.5" fill="${color}"/>`; });
   });
   // 横轴标签原样画（P2-1336）：原先一律 `slice(2)`，注释写「月份标签来自后端、格式固定（YYYY-MM）」——体温单、审计
   // 按日传的是 MM-DD，横轴只剩「-30」「-03」，跨月的两个点标签相同。要缩写的调用方自己缩（驾驶舱传 YY-MM）。
@@ -388,8 +402,24 @@ function lineChart(labels, series, colors, times = null) {
   // `max` 是本函数自己算出来的数字，`esc()` 对它是恒等——照样包上，是为了让
   // "<text> 里的插值一律过 esc" 这条规则**没有例外**。带例外清单的规则，
   // 后来人得先判断自己算不算例外，判断错了就是漏转义。
-  svg += `<text x="4" y="${y(max) + 4}" font-size="10.5" fill="#5b6773">${esc(max)}</text><text x="4" y="${y(0) + 4}" font-size="10.5" fill="#5b6773">0</text>`;
-  return `<svg width="${w}" height="${h}" role="img">${svg}</svg>`;
+  // 共用的那根纵轴只在有序列用它时标（P2-1766）：体温单两条序列各有各的轴，原先标的「112」「0」量的是哪条都说不清
+  if (!own.size || Object.keys(series).some((name) => !own.has(name))) {
+    svg += `<text x="4" y="${y(max) + 4}" font-size="10.5" fill="#5b6773">${esc(max)}</text><text x="4" y="${y(0) + 4}" font-size="10.5" fill="#5b6773">0</text>`;
+  }
+  // 各自的纵轴逐格标刻度（P2-1766），字用那条序列的颜色，看得出哪根轴是哪条线的。右侧的刻度画在作图区右边另留的一条里：
+  // 作图区横向不变，横坐标与原先逐值相同；格值同样过 esc（理由同上）
+  let padR = 0;
+  Object.keys(series).forEach((name, si) => {
+    const a = own.get(name);
+    if (!a) return;
+    if (a.side === "right") padR = 30;
+    const tx = a.side === "right" ? w - 4 : 4;
+    for (let k = 0; k <= Math.round((a.hi - a.lo) / a.step); k += 1) {
+      const v = Math.round((a.lo + k * a.step) * 1e6) / 1e6;   // 按格累加的浮点尾数去掉，标「36」不标「36.00000000001」
+      svg += `<text x="${tx}" y="${a.y(v) + 4}" font-size="10.5" fill="${colors[si % colors.length]}">${esc(v)}</text>`;
+    }
+  });
+  return `<svg width="${w + padR}" height="${h}" role="img">${svg}</svg>`;
 }
 
 /* 块2：指标下钻——指标卡/预警横幅点击后拉取明细；目标页列得出这一类的，明细行可跳转对应业务页 */

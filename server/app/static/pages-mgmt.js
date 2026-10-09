@@ -120,7 +120,11 @@ async function renderClinicalDocs() {
         { "体温": vitals.map((v) => v.temperature ?? null), "脉搏": vitals.map((v) => v.pulse ?? null) },
         ["#c0392b", "#0b6e6e"],
         // 按测量时刻定横坐标（P2-1336）：原先按条目等距，一天测 6 次与之后几天每天测 1 次占一样宽，热型曲线被压变形
-        vitals.map((v) => vitalTimeMs(v.measured_at))) : ""}
+        vitals.map((v) => vitalTimeMs(v.measured_at)),
+        // 体温、脉搏各用一根纵轴（P2-1766），刻度照纸质体温单：体温 35–42℃ 每格 1℃ 标在左，脉搏 40–180 次/分每格 20 标在右
+        // ——每 1℃ 对 20 次/分，37℃ 与 80 次/分同高，两侧刻度对齐。取固定值域、不按这一屏的数据取整：同一组体温有没有测
+        // 脉搏、这几天最高烧到几度，曲线形状都不跟着变，前后几天的热型才比得了。测得超出的由组件按整格往外扩
+        { "体温": { min: 35, max: 42, step: 1, side: "left" }, "脉搏": { min: 40, max: 180, step: 20, side: "right" } }) : ""}
       ${table(["测量时刻", "体温", "脉搏", "呼吸", "血压", "入量 ml", "出量 ml", "体重 kg", "记录人"], vitals, (v) =>
         `<tr><td>${esc(v.measured_at)}</td><td>${v.temperature ?? "—"}</td><td>${v.pulse ?? "—"}</td>
          <td>${v.respiration ?? "—"}</td><td>${v.sbp ?? "—"}/${v.dbp ?? "—"}</td>

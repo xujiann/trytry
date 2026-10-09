@@ -104,7 +104,8 @@ def test_组件不再替调用方切标签():
     code = "\n".join(re.sub(r"//.*$", "", line) for line in body.splitlines())   # 注释里会提到修前的写法
     assert "slice(" not in code   # 修前 esc(String(mo).slice(2))
     assert "${esc(text)}</text>" in body
-    assert body.startswith("function lineChart(labels, series, colors, times = null) {")
+    # 第五个参数 `axes`（各序列自己的纵轴）是 P2-1766 加的，见 test_vitals_chart_axes.py
+    assert body.startswith("function lineChart(labels, series, colors, times = null, axes = null) {")
 
 
 def test_三处调用方各自传什么():
@@ -112,7 +113,8 @@ def test_三处调用方各自传什么():
     assert _call(CORE, "lineChart(trendLabels") == "lineChart(trendLabels, trends.series, trendColors)"
     vitals = _call(MGMT, "lineChart(vitals.map(")
     assert vitals.startswith("lineChart(vitals.map((v) => v.measured_at.slice(5, 10)),")
-    assert vitals.endswith("vitals.map((v) => vitalTimeMs(v.measured_at)))")   # 修前不传时刻，按条目等距
+    # 修前不传时刻，按条目等距；时刻之后还跟着体温、脉搏各自的纵轴（P2-1766，见 test_vitals_chart_axes.py）
+    assert "vitals.map((v) => vitalTimeMs(v.measured_at))," in vitals
     audit = _call(MGMT, "lineChart(auditDaily.map(")
     assert audit.startswith("lineChart(auditDaily.map((d) => d.date.slice(5)),")
     assert "vitalTimeMs" not in audit   # 按日补零的序列本来就等间隔，照旧按下标
