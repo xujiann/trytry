@@ -1544,7 +1544,8 @@ def fhir_encounter(
     - subject.reference = `Patient/{ehc_no}`（与 Observation 入站同口径）；
     - serviceProvider.reference = `Organization/{机构id}`；
     - class.code：AMB→门诊 / IMP→住院（缺省按门诊）；
-    - reasonCode[0]：coding[0].code→diagnosis_code（ICD-10）、text→diagnosis_name；
+    - 诊断认两处（P2-1763，`_encounter_diagnosis`）：`diagnosis[].condition` 指向的内联 Condition 的 code，与
+      reasonCode[0]，两处都有时以 diagnosis 为准；按 coding.system 挑 ICD-10 那条→diagnosis_code、text→diagnosis_name；
     - participant[0].individual.display→doctor_name；
     - summary 留空，不写来源标记（P2-1249）。
     复用就诊登记路由逻辑（患者/机构校验 + 领域事件发布），入站落 ExchangeLog。
@@ -1554,6 +1555,40 @@ def fhir_encounter(
     return _run_inbound(
         "fhir_encounter", x_source_system, lambda: _do_fhir_encounter(resource, db, user)
     )
+
+
+def _codeable_diagnosis(codeable: dict) -> tuple[str, str]:
+    """一个诊断 CodeableConcept → (诊断编码, 诊断名称)。名称取 text，没有取所挑那条 coding 的 display。
+
+    按编码系统挑 ICD-10 那条（P2-1080）：原先取 coding[0]，SNOMED / 本地码排在前面就当 ICD-10 落库、再按 ICD-10 导出。
+    一条 ICD-10 都没有的照旧取第一条（丢弃、透传还是拒收待裁定，与 P2-744 一并定）"""
+    codings = [c for c in (codeable.get("coding") or []) if isinstance(c, dict)]
+    coding = next((c for c in codings if _is_icd10_system(str(c.get("system") or ""))), codings[0] if codings else {})
+    return str(coding.get("code", ""))[:64], str(codeable.get("text") or coding.get("display", ""))[:256]
+
+
+def _encounter_diagnosis(resource: dict) -> tuple[str, str]:
+    """Encounter 入站的诊断 (编码, 名称) 认两处，两处都有时以 ① 为准（P2-1763，第五十二批扫描 AP2-5）：
+    ① `diagnosis[].condition` 指向的内联 Condition（`#` 加其 id）的 code——对接规范映射表写的「Encounter + Condition」，
+    也是平台自己出站的写法（`fhir_encounter_resource`）；② `reasonCode[0]`。
+
+    原先只读 reasonCode：按规范、按平台出站写法送来的诊断被静默丢空，照回 201，就诊行没有诊断编码与名称——就诊识别、
+    按编码的统计与质控都认不出这次就诊。① 按 diagnosis 的先后取第一条指得到内联 Condition、且 code 里有编码或名称的；
+    指向外部资源（`Condition/123`）的平台取不到，跳过。两处各按 `_codeable_diagnosis` 取编码与名称。
+    """
+    contained = {str(item.get("id")): item for item in resource.get("contained") or []
+                 if isinstance(item, dict) and item.get("resourceType") == "Condition" and item.get("id")}
+    for entry in resource.get("diagnosis") or []:
+        condition = entry.get("condition") if isinstance(entry, dict) else None
+        reference = str(condition.get("reference") or "") if isinstance(condition, dict) else ""
+        target = contained.get(reference[1:]) if reference.startswith("#") else None
+        code = target.get("code") if target is not None else None
+        if isinstance(code, dict):
+            found = _codeable_diagnosis(code)
+            if any(found):
+                return found
+    reasons = resource.get("reasonCode") or []
+    return _codeable_diagnosis(reasons[0]) if reasons else ("", "")
 
 
 def _do_fhir_encounter(resource: dict, db: Session, user: User):
@@ -1577,15 +1612,7 @@ def _do_fhir_encounter(resource: dict, db: Session, user: User):
     encounter_type = _CLASS_TO_ENCOUNTER_TYPE.get(class_code)
     if encounter_type is None:
         raise HTTPException(status_code=422, detail="class.code 仅支持 AMB（门诊）/IMP（住院）")
-    reasons = resource.get("reasonCode") or []
-    codings = [c for c in (reasons[0].get("coding") or []) if isinstance(c, dict)] if reasons else []
-    # 按编码系统挑 ICD-10 那条（P2-1080）：原先取 coding[0]，SNOMED / 本地码排在前面就当 ICD-10 落库、再按 ICD-10 导出。
-    # 一条 ICD-10 都没有的照旧取第一条（丢弃、透传还是拒收待裁定，与 P2-744 一并定）
-    coding = next((c for c in codings if _is_icd10_system(str(c.get("system") or ""))), codings[0] if codings else {})
-    diagnosis_code = str(coding.get("code", ""))[:64]
-    diagnosis_name = str(
-        (reasons[0].get("text") if reasons else "") or coding.get("display", "")
-    )[:256]
+    diagnosis_code, diagnosis_name = _encounter_diagnosis(resource)   # diagnosis[] 与 reasonCode 两处都认（P2-1763）
     participants = resource.get("participant") or []
     doctor_name = str(
         ((participants[0].get("individual") or {}).get("display", "")) if participants else ""
