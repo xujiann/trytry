@@ -2770,12 +2770,17 @@ async function renderPublicHealth() {
     `<tr><td>${esc(orgNames[m.org_id] || m.org_id)}</td><td>${esc(DM[m.domain] || m.domain)}</td><td>${esc(m.indicator)}</td>`
     + `<td>${m.value} / ${m.threshold}</td><td>${esc(m.record_date) || "—"}</td>`
     + `<td>${m.exceeded ? '<span class="tag red">超标</span>' : '<span class="tag green">正常</span>'}</td></tr>`);
+  // 事件的「简要情况」（P2-1669）：立案表单加多行框（上限照 EventCreate.description 的 1024），「查看处置」里一并印出（esc()、
+  // 保留换行，没填的写 —）——接口一直收、也一直返回，原先表单录不进、列表与处置记录里都不显示：地点、波及人数、首发时间
+  // 这类概况处置人员在页面上看不到
   $("#page-body").innerHTML = `
     ${panel("事件立案", `
       <form class="inline" id="ev-form">
         <input name="title" placeholder="事件名称" required style="min-width:220px">
         <select name="level"><option>IV</option><option>III</option><option>II</option><option>I</option></select>
-        <input name="disease_name" placeholder="相关病种"><button>立案</button></form>
+        <input name="disease_name" placeholder="相关病种">
+        <textarea name="description" rows="3" maxlength="1024" placeholder="简要情况（地点、波及人数、首发时间等）"
+                  style="min-width:280px;vertical-align:top"></textarea><button>立案</button></form>
       <h3 style="margin-top:12px">诊间医防提醒</h3>
       <form class="inline" id="rem-form"><input name="patient_id" type="number" placeholder="患者ID" required><button>查询提醒</button></form>
       <div id="rem-result"></div><p class="msg" id="ph-msg"></p>`)}
@@ -2785,6 +2790,7 @@ async function renderPublicHealth() {
        <td><button class="btn secondary" data-view="${ev.id}">查看处置</button>${ev.status === "active" ? `<button class="btn secondary" data-act="${ev.id}">登记处置</button><button class="btn secondary" data-close="${ev.id}">结案</button>` : ""}</td></tr>`)
       + (viewing ? `
       <h3 style="margin-top:12px">处置记录：${esc(viewing.title)} <button class="btn secondary" data-view="0">收起</button></h3>
+      <p class="desc">简要情况：<span style="white-space:pre-wrap">${esc(viewing.description) || "—"}</span></p>
       ${actions.error ? `<p class="msg err">${esc(actions.error)}</p>` : table(["时间", "处置动作", "执行人"], actions, (a) =>
         `<tr><td>${esc(a.at.slice(0, 16).replace("T", " "))}</td><td>${esc(a.action)}</td><td>${esc(a.actor || "—")}</td></tr>`)}` : ""))}
     ${panel("卫生监测（营养/环境/职业/放射/学校）", `
