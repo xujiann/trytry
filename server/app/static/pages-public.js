@@ -307,8 +307,24 @@ const PO_STATUS = { pending: ["待审批", "orange"], approved: ["已审批", ""
 
 async function renderProcure() {
   $("#page-desc").textContent = "供应商建档 → 采购申请（经办/药师）→ 审批（管理层）→ 验收入库；存货盘点账实调整";
-  const [suppliers, orders, takes] = await Promise.all([
-    api("/api/pharmacy/suppliers"), api("/api/pharmacy/purchase-orders"), api("/api/pharmacy/stock-takes")]);
+  // 待审批、已审批（待验收）两态按状态续页取全、排在最前（P2-1671，同物资页 P2-1506 的 actionableFirst）：采购单清单缺省只回
+  // 最新 200 张（按编号倒序），「批准 / 驳回」「验收入库」只挂在这张表上——药品采购单一张一个品种，第 201 张起最早那批没办完
+  // 的单子被挤出窗口：待审批的没人批得了，已审批的到货时找不到「验收入库」，只能走批次入库、这张单永远停在「已审批」。
+  // 已驳回 / 已验收的照旧只取最新一页，读总数（同 P2-1547）看取没取全。盘点记录没有待办态、只增不减，不续页取全，
+  // 同样读总数，列不全时标题写明
+  const [suppliers, recentOrders, pendingOrders, approvedOrders, takeList] = await Promise.all([
+    api("/api/pharmacy/suppliers"), api("/api/pharmacy/purchase-orders", { withTotal: true }),
+    fetchAllPages(api, "/api/pharmacy/purchase-orders?status=pending"),
+    fetchAllPages(api, "/api/pharmacy/purchase-orders?status=approved"),
+    api("/api/pharmacy/stock-takes", { withTotal: true })]);
+  const orders = actionableFirst(recentOrders.rows, pendingOrders, approvedOrders);
+  const takes = takeList.rows;
+  // 标题写实数（P2-1671，同 P2-1506）：最新一页把全部单子都取到了，就是行数；没取全，两种待办是全的，其余只是最新的那几张
+  const openOrders = pendingOrders.length + approvedOrders.length;
+  const orderCount = recentOrders.total === null || recentOrders.rows.length >= recentOrders.total ? `${orders.length}`
+    : `待审批 / 待验收 ${openOrders} 张排在最前、其余只列最新 ${orders.length - openOrders} 张`;
+  const takeCount = takeList.total !== null && takes.length < takeList.total
+    ? `已列 ${takes.length} / 共 ${takeList.total}` : `${takes.length}`;
   const role = currentRole();
   const supNames = Object.fromEntries(suppliers.map((s) => [s.id, s.name]));
   $("#page-body").innerHTML = `
@@ -321,7 +337,7 @@ async function renderProcure() {
       ${table(["ID", "名称", "联系方式", "许可证", "状态"], suppliers, (s) =>
         `<tr><td>${s.id}</td><td>${esc(s.name)}</td><td>${esc(s.contact)}</td><td>${esc(s.license_no)}</td>
          <td><span class="tag ${s.active ? "green" : "red"}">${s.active ? "在用" : "停用"}</span></td></tr>`)}`)}
-    ${panel("采购申请（经办/药师）", `
+    ${panel(`采购申请（经办/药师）· 采购单（${orderCount}）`, `
       <form class="inline" id="po-form">
         <input name="org_id" type="number" placeholder="机构ID" required>
         <input name="supplier_id" type="number" placeholder="供应商ID" required>
@@ -342,7 +358,7 @@ async function renderProcure() {
           <td>${o.quantity}${o.received_quantity != null && o.received_quantity !== o.quantity
             ? `（实收 ${o.received_quantity}）` : ""}</td><td>${statusTag(PO_STATUS, o.status)}</td><td>${actions}</td></tr>`;
       })}`)}
-    ${panel("存货盘点（经办/药师，盘后账实相符）", `
+    ${panel(`存货盘点（经办/药师，盘后账实相符）· 盘点记录（${takeCount}）`, `
       <form class="inline" id="st-form">
         <input name="org_id" type="number" placeholder="机构ID" required>
         <input name="drug_code" placeholder="药品编码" required>
