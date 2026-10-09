@@ -741,6 +741,19 @@ def _unexpected(db: Session, message_id: int, exc: Exception) -> tuple[EsbMessag
     return message, endpoint, f"未预期错误（{type(exc).__name__}：{reason}）"[:1024]
 
 
+def _mark_rolled_back(db: Session, written: list[tuple[dict, list]], failed_step: int) -> None:
+    """编排执行遇到意外错误回滚之后，写的行已随回滚撤掉的那几步改记「已随回滚撤销」（P2-1732，第五十一批扫描 AO1-10）。
+
+    `_unexpected` 先 `db.rollback()`：落库交换日志那一步只 `db.add` 进会话、还没提交，随回滚一并撤掉，执行记录里那一步
+    原先仍写「succeeded / 交换日志已落库」，库里其实没有——`EsbFlowRun` 的逐步结果是拿来回溯定位失败步骤的。按会话判：
+    回滚把本事务里新加的行逐出会话，已提交的仍在会话里（建档那一步 `create_patient_idempotent` 新建时中途提交，此前加的
+    交换日志随之入库，照实保留）。`written` 是成功的步骤与它加进会话的行；不写库的步骤（已投出的路由、转换、校验）不在里面。"""
+    for result, rows in written:
+        if any(row not in db for row in rows):
+            result["status"] = "rolled_back"
+            result["detail"] = f"{result['detail']}——已随回滚撤销（第 {failed_step} 步出现未预期错误）"
+
+
 @router.post(
     "/messages/{message_id}/process",
     response_model=MessageProcessOut,
@@ -1008,7 +1021,8 @@ def update_flow(flow_id: int, body: FlowUpdate, db: Session = Depends(get_db)):
 
 class FlowStepResultOut(BaseModel):
     """单步执行结果：`run_flow` 是唯一产地（落库快照亦出自它），恒为四键
-    （成功/失败仅 status/detail 取值不同）——照 quality.defects 先例逐字段建模。"""
+    （成功/失败仅 status/detail 取值不同）——照 quality.defects 先例逐字段建模。
+    status 取 succeeded / failed；意外错误回滚掉了写的行的那几步记 rolled_back（P2-1732，`_mark_rolled_back`）。"""
 
     step: int
     type: str
@@ -1077,10 +1091,12 @@ def run_flow(code: str, message_id: int, db: Session = Depends(get_db)):
         _claim_lost(db, message)
     context: dict = {"payload": message.payload or {}, "msg_type": message.msg_type}
     step_results: list[dict] = []
+    written: list[tuple[dict, list]] = []   # 成功的步骤与它加进会话的行（意外错误回滚时据此改记，P2-1732）
     error = ""
     paused = False
     for idx, step in enumerate(flow.steps or [], start=1):
         step_type = step.get("type", "")
+        pending = set(db.new)
         try:
             detail = _run_step(db, step, context)
         except _TargetPaused as exc:
@@ -1100,13 +1116,16 @@ def run_flow(code: str, message_id: int, db: Session = Depends(get_db)):
             break
         except Exception as exc:  # noqa: BLE001 - 意外错误同样记这一步失败、消息走重试 / 死信，见 _unexpected
             message, endpoint, error = _unexpected(db, message_id, exc)
+            _mark_rolled_back(db, written, idx)
             step_results.append(
                 {"step": idx, "type": step_type, "status": "failed", "detail": error}
             )
             break
-        step_results.append(
-            {"step": idx, "type": step_type, "status": "succeeded", "detail": detail}
-        )
+        result = {"step": idx, "type": step_type, "status": "succeeded", "detail": detail}
+        step_results.append(result)
+        rows = [row for row in db.new if row not in pending]
+        if rows:
+            written.append((result, rows))
 
     if paused:
         _release(db, message, held)   # 不转失败 / 死信、不排下次重试，回到执行前的样子
