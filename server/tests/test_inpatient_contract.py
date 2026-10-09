@@ -40,9 +40,11 @@ CASE_KEYS = [
     "drug_cost", "outcome", "note", "drg_code", "drg_weight", "created_by_name",
 ]
 DRG_KEYS = ["drg_code", "drg_name", "mdc", "mdc_name", "weight", "fallback"]
+#: 末尾两键 `created_at_shown` / `stopped_at_shown` 是 P2-1694 只增追加的（医嘱单印本地的开立 / 停止时刻），原有九键与次序不动
 ORDER_KEYS = [
     "id", "admission_id", "order_type", "content", "status",
     "created_by_name", "stopped_by_name", "created_at", "stopped_at",
+    "created_at_shown", "stopped_at_shown",
 ]
 STAT_KEYS = [
     "org_id", "org_name", "beds_total", "beds_occupied", "occupancy_pct",
@@ -317,14 +319,16 @@ def test_医嘱回执_开立与两种停止形状(seed):
         "stopped_by_name": "",
         "created_at": body["created_at"],
         "stopped_at": None,
+        "created_at_shown": body["created_at_shown"],
+        "stopped_at_shown": None,
     }
     # 手工停止：回填停止人与时间
     stopped = seed["o1_stopped"]
     assert stopped == {
         **body, "status": "stopped", "stopped_by_name": "ipct_doc",
-        "stopped_at": stopped["stopped_at"],
+        "stopped_at": stopped["stopped_at"], "stopped_at_shown": stopped["stopped_at_shown"],
     }
-    assert isinstance(stopped["stopped_at"], str)
+    assert isinstance(stopped["stopped_at"], str) and isinstance(stopped["stopped_at_shown"], str)
 
 
 def test_医嘱列表_出院批量停止不回填姓名(client, admin, seed):
@@ -335,8 +339,10 @@ def test_医嘱列表_出院批量停止不回填姓名(client, admin, seed):
     # O2 被出院批量停止：status/stopped_at 变了，stopped_by_name 保持空串
     assert rows[0] == {
         **seed["o2"], "status": "stopped", "stopped_at": rows[0]["stopped_at"],
+        "stopped_at_shown": rows[0]["stopped_at_shown"],
     }
     assert rows[0]["stopped_by_name"] == "" and isinstance(rows[0]["stopped_at"], str)
+    assert isinstance(rows[0]["stopped_at_shown"], str)
     assert rows[1] == seed["o1_stopped"]
     assert client.get("/api/inpatient/orders?status=active", headers=admin).json() == [
         seed["o3"]

@@ -5,7 +5,7 @@
 - 出院前置：病案首页已填写（M8 计费上线后另加"费用已结清"校验）；
 - 病案首页含出院诊断/手术/费用汇总/转归（WS 445 最小集），为 DRGs（M12）数据底座。
 """
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import cast
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -15,6 +15,7 @@ from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
 from ..concurrency import insert_or_conflict, serialized_on
+from ..datetypes import OptionalDateTimeStr
 from ..numtypes import MONEY_MAX, MoneyFloat
 from ..texttypes import NON_BLANK
 from ..visibility import (
@@ -49,6 +50,7 @@ from ..models import (
     Ward,
     utcnow,
 )
+from .clinical_docs import _shown_time   # 给人看的本地时刻与住院护理记录同一个取法（P2-1694），不另抄一份
 
 router = APIRouter(prefix="/api/inpatient", tags=["住院与床位"], dependencies=[Depends(get_current_user)])
 
@@ -692,6 +694,11 @@ class OrderOut(BaseModel):
     stopped_by_name: str
     created_at: str
     stopped_at: str | None
+    # 给人看的开立 / 停止时刻（P2-1694）：只增键、排在末尾，`created_at` / `stopped_at`（落库的 naive UTC）原样。换成本地时刻
+    # 与住院护理记录同一个取法（`clinical_docs._shown_time`，P2-455）；没停的 `stopped_at_shown` 同 `stopped_at` 为 null。
+    # 医嘱单原先不印时刻，看不出临时医嘱哪天开的（临时医嘱又一直「执行中」，P2-281）
+    created_at_shown: str
+    stopped_at_shown: str | None
 
 
 @router.post(
@@ -758,6 +765,8 @@ def _order_out(o: InpatientOrder) -> dict:
         "stopped_by_name": o.stopped_by_name,
         "created_at": o.created_at.isoformat(),
         "stopped_at": o.stopped_at.isoformat() if o.stopped_at else None,
+        "created_at_shown": _shown_time("", o.created_at),   # P2-1694
+        "stopped_at_shown": _shown_time("", o.stopped_at) if o.stopped_at else None,
     }
 
 
@@ -826,6 +835,10 @@ class ExecutionCreate(BaseModel):
     note: str = Field(default="", max_length=512)
     # negative=阴性, positive=阳性；不需要皮试的医嘱不传
     skin_test_result: str | None = Field(default=None, pattern="^(negative|positive)$")
+    # 执行时刻（P2-1694，照门急诊处置的 P2-1633）：填的是本地时刻，与住院护理记录的 `recorded_at` 同一写法、同一校验类型
+    # （时间戳真源，P1-100）；不填即此刻。原先只能记成点按钮那一刻——夜班事后补登的给药只能记成补登那一刻。
+    # 补录的上下界（早于开立、晚于停止、将来）不在这里定，随 P2-1135 一并定
+    executed_at: OptionalDateTimeStr = ""
 
 
 class ExecutionOut(BaseModel):
@@ -840,6 +853,10 @@ class ExecutionOut(BaseModel):
     # nursing_records.inpatient_order_id 挂在**医嘱**上（不是单次执行上），
     # 所以这是医嘱级计数，同一响应内各条相同——契约兼容扩展，旧客户端可忽略。
     nursing_record_count: int = 0
+    # 给人看的执行时刻（P2-1694）：只增键、排在末尾，`executed_at`（落库的 naive UTC）原样。换成本地时刻与住院护理记录同一个
+    # 取法（`clinical_docs._shown_time`，P2-455）——页面原先把 `executed_at` 截成「YYYY-MM-DD HH:MM」照印，东八区下同一刻登记的
+    # 皮试执行印 10:30、关联它的护理记录印 18:30
+    executed_at_shown: str
 
 
 def _execution_out(
@@ -854,7 +871,18 @@ def _execution_out(
         "note": e.note,
         "skin_test_result": e.skin_test_result,
         "nursing_record_count": nursing_record_count,
+        "executed_at_shown": _shown_time("", e.executed_at),   # P2-1694
     }
+
+
+def _local_to_utc(value: str) -> datetime:
+    """页面填的本地时刻（`YYYY-MM-DD[ HH:MM]`，`T` 分隔也收）换成落库口径的 naive UTC（P2-1694）。
+
+    `clock.to_local` 的反方向：执行时刻落进 `executed_at`（`DateTime` 列，平台落库一律 naive UTC），显示时再按
+    `_shown_time` 换回本地，填的与印的是同一个钟点。naive 值的 `astimezone()` 按进程本地时区解释，与 `_shown_time`
+    换回去用的是同一个时区。
+    """
+    return datetime.fromisoformat(value).astimezone(timezone.utc).replace(tzinfo=None)
 
 
 def _order_nursing_count(db: Session, order_id: int) -> int:
@@ -889,6 +917,8 @@ def record_order_execution(
         executed_by=user.id,
         note=body.note,
         skin_test_result=body.skin_test_result,
+        # 填了执行时刻（本地）照填的落，不填即此刻（P2-1694）；`created_at` 照旧是这一行写入的时刻
+        executed_at=_local_to_utc(body.executed_at) if body.executed_at else utcnow(),
     )
     # 「医嘱在执行」在这条医嘱那一行的临界区里按列再判一次（P2-1189）：上面那次在锁外，与停医嘱、出院同时到时，执行记录
     # 照样落在刚停止的医嘱上（出院先提交、随后登记执行 201）。界选医嘱这一行而不是住院登记：停医嘱只改医嘱这一行，

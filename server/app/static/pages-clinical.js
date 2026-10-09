@@ -3315,10 +3315,12 @@ async function renderInpatient() {
     // 住上几个月就过了一页，原先不读总数，看不出前面还有
     const { rows, total } = await api(`/api/inpatient/orders/${encodeURIComponent(orderId)}/executions`, { withTotal: true });
     const listed = total !== null && rows.length < total ? `（已列 ${rows.length} / 共 ${total}）` : "";
+    // 执行时间印后端给的本地时刻 `executed_at_shown`（P2-1694）：原先把 `executed_at`（落库的 UTC）截出来照印，东八区下比紧挨着的
+    // 护理记录早 8 小时
     $("#inp-exec").innerHTML = `<h3 style="margin-top:14px">医嘱 ${esc(orderId)} 的执行记录${listed}</h3>
       ${table(["记录", "执行人", "执行时间", "皮试", "说明"], rows, (x) =>
         `<tr><td>${x.id}</td><td>${esc(x.executed_by_name) || x.executed_by}</td>
-         <td>${esc((x.executed_at || "").slice(0, 16).replace("T", " "))}</td>
+         <td>${esc(x.executed_at_shown)}</td>
          <td>${x.skin_test_result === null ? "—"
            : x.skin_test_result === "positive" ? '<span class="tag red">阳性</span>'
            : '<span class="tag green">阴性</span>'}</td>
@@ -3420,12 +3422,16 @@ async function renderInpatient() {
             type: "select", value: "",
             options: [{ value: "", label: "不适用" }, { value: "negative", label: "阴性" },
               { value: "positive", label: "阳性" }] },
+          // 执行时刻可填（P2-1694，照门急诊处置的 P2-1633）：事后补登的按实际执行的时刻填，留空即此刻
+          { name: "executed_at", label: "执行时刻（YYYY-MM-DD HH:MM，事后补登填实际执行的时刻）", value: "",
+            placeholder: "留空按此刻" },
         ]);
         if (!picked) return;
         // 后端 `skin_test_result: str | None`，pattern 只认 negative/positive：
         // 空串会被 422 拦下，不需要皮试就**不送这个键**
         const body = { note: picked.note };
         if (picked.skin_test_result) body.skin_test_result = picked.skin_test_result;
+        if (picked.executed_at) body.executed_at = picked.executed_at;
         await api(`/api/inpatient/orders/${d.execAdd}/executions`,
           { method: "POST", body: JSON.stringify(body) });
         setMsg("#inp-msg", "已登记执行", true);
@@ -3444,10 +3450,11 @@ async function renderInpatient() {
         $("#inp-orders-panel").classList.remove("hidden");
         $("#inp-orders-title").textContent = `医嘱单 · 住院 #${d.orders}`;
         $("#inp-exec").innerHTML = "";
-        $("#inp-orders").innerHTML = table(["ID", "类型", "内容", "状态", "开立", "操作"], orders, (o) =>
+        // 开立 / 停止时刻两列（P2-1694）：印后端给的本地时刻；原先医嘱单不印时刻，看不出临时医嘱哪天开、哪天停
+        $("#inp-orders").innerHTML = table(["ID", "类型", "内容", "状态", "开立", "开立时刻", "停止时刻", "操作"], orders, (o) =>
           `<tr><td>${o.id}</td><td>${o.order_type === "long" ? "长期" : "临时"}</td><td>${esc(o.content)}</td>
            <td><span class="tag ${o.status === "active" ? "orange" : "green"}">${o.status === "active" ? "执行中" : "已停止"}</span></td>
-           <td>${esc(o.created_by_name)}</td>
+           <td>${esc(o.created_by_name)}</td><td>${esc(o.created_at_shown)}</td><td>${esc(o.stopped_at_shown) || "—"}</td>
            <td><button class="btn secondary" data-exec-list="${o.id}">执行记录</button>
                ${o.status === "active"
                  ? `<button class="btn secondary" data-exec-add="${o.id}">登记执行</button>` +
