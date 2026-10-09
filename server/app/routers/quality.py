@@ -191,7 +191,14 @@ def rectify_adverse_event(
         raise HTTPException(status_code=404, detail="不良事件不存在")
     assert_obj_org_writable(db, user, event)
     if event.status != "reviewed":
-        raise HTTPException(status_code=409, detail="须先审核后方可登记整改")
+        # 按状态给文案（P2-1570，照上面审核那条、P2-74 的规矩）：原先一律「须先审核后方可登记整改」——已整改的再点一次
+        # （两人同时开着页面，一人已经整改）也是这句，像是审核没通过
+        if event.status == "reported":
+            raise HTTPException(status_code=409, detail="须先审核后方可登记整改")
+        raise HTTPException(
+            status_code=409,
+            detail=f"当前状态 {ADVERSE_EVENT_STATUS_NAMES.get(event.status, event.status)} 不可登记整改",
+        )
     event.status = "rectified"
     event.rectify_note = body.note
     event.rectified_by = user.full_name or user.username
