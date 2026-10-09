@@ -36,6 +36,7 @@ from ..models import (
     User,
     utcnow,
 )
+from .clinical_docs import _shown_time   # 存量空执行时间的显示与住院文书同一个取法（P2-1633），不另抄一份
 
 router = APIRouter(prefix="/api/outpatient", tags=["门急诊文书"],
                    dependencies=[Depends(get_current_user)])
@@ -130,6 +131,10 @@ class TreatmentRecordOut(BaseModel):
     reaction: str
     note: str
     created_at: str
+    # 给人看的执行时间（P2-1633）：只增键、排在末尾，`performed_at` 本身原样（空串即未记录）。填了的原样；修前落库、没有执行
+    # 时间的存量拿落库时刻换成本地时间——与住院病程 / 护理记录同一个取法（`clinical_docs._shown_time`，P2-455）。页面两张处置表
+    # 原先印的是 `created_at`（落库的 UTC 时刻）：同一刻记的处置 04:52、护理 12:52，经接口补记的执行时间全页不读
+    performed_at_shown: str
 
 
 class OutpatientNursingCreatedOut(BaseModel):
@@ -457,6 +462,7 @@ def _treatment_out(t: TreatmentRecord) -> dict:
         "executor_name": t.executor_name, "performed_at": t.performed_at,
         "reaction": t.reaction, "note": t.note,
         "created_at": t.created_at.isoformat(),
+        "performed_at_shown": _shown_time(t.performed_at, t.created_at),   # P2-1633
     }
 
 
@@ -493,7 +499,10 @@ def create_treatment(
         patient_id=encounter.patient_id,
         org_id=encounter.org_id,
         created_by=user.id,
-        **body.model_dump(),
+        **body.model_dump(exclude={"performed_at"}),
+        # 不填执行时间就落此刻的本地时间（P2-1633），与下面门急诊护理的记录时间同一句（P2-455 / P2-171 口径：`clock.now_local`
+        # 留给的正是这种给人看的时间默认值）。原先缺省空串原样写入——页面这张表单不送执行时间，从页面记的处置一律没有执行时间
+        performed_at=body.performed_at or now_local().strftime("%Y-%m-%d %H:%M"),
     )
     db.add(record)
     db.commit()

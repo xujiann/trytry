@@ -1734,7 +1734,10 @@ async function renderOutpatientDocs() {
   }
   // 载入后回显「姓名 · 就诊时间 · 机构」（P2-1631，同住院文书选择框的 P2-1335）：原先载入后页面只拿得到患者号，敲错一位、
   // 载入的是李四那次就诊，给张三做的皮试照样记进去。
-  // 完整性卡片打头加「门诊病历」「诊断」两张（P2-1632）：原先只有处置 / 护理 / 告知书——写了病历的就诊和什么都没写的一模一样
+  // 完整性卡片打头加「门诊病历」「诊断」两张（P2-1632）：原先只有处置 / 护理 / 告知书——写了病历的就诊和什么都没写的一模一样。
+  // 处置表单加执行时间（留空按此刻，后端落本地时刻），处置表印执行时间（P2-1633）：原先表单不送、表上印 `created_at`（落库的
+  // UTC 时刻）——同一刻记的处置 04:52、护理 12:52，经接口补记的执行时间全页不读。存量没有执行时间的由后端按落库时刻换本地时间给
+  // （`performed_at_shown`）；护理表本来印的就是记录时间，表头写明
   $("#page-body").innerHTML = `
     ${panel("选择就诊", `
       <form class="inline" id="od-pick">
@@ -1766,15 +1769,16 @@ async function renderOutpatientDocs() {
         <input name="treatment_name" placeholder="处置名称（如雾化吸入）" required>
         <input name="site" placeholder="部位"><input name="dose" placeholder="剂量/参数">
         <input name="executor_name" placeholder="执行人">
+        <label style="font-size:13px">执行时间（留空按此刻） <input name="performed_at" type="datetime-local"></label>
         <input name="reaction" placeholder="反应（留空=未记录，不等于无不适）">
         <button>记录</button>
       </form>
       <p class="msg" id="od-msg"></p>
-      ${table(["处置", "部位", "剂量", "执行人", "反应", "时间"], scoped.treatments, (t) =>
+      ${table(["处置", "部位", "剂量", "执行人", "反应", "执行时间"], scoped.treatments, (t) =>
         `<tr><td>${esc(t.treatment_name)}</td><td>${esc(t.site || "—")}</td>
          <td>${esc(t.dose || "—")}</td><td>${esc(t.executor_name || "—")}</td>
          <td>${t.reaction ? esc(t.reaction) : '<span class="tag orange">未记录</span>'}</td>
-         <td>${esc(t.created_at.slice(0, 16).replace("T", " "))}</td></tr>`)}
+         <td>${esc(t.performed_at_shown)}</td></tr>`)}
     `)}
 
     ${panel("门急诊护理记录", `
@@ -1786,7 +1790,7 @@ async function renderOutpatientDocs() {
         <input name="nurse_name" placeholder="护士">
         <button>记录</button>
       </form>
-      ${table(["级别", "内容", "护士", "时间"], scoped.nursing, (n) =>
+      ${table(["级别", "内容", "护士", "记录时间"], scoped.nursing, (n) =>
         `<tr><td>${esc(NURSING_LEVELS[n.nursing_level] || n.nursing_level)}</td>
          <td>${esc(n.content)}</td><td>${esc(n.nurse_name || "—")}</td>
          <td>${esc(n.recorded_at || "—")}</td></tr>`)}
@@ -1893,11 +1897,12 @@ async function renderOutpatientDocs() {
     const pid = new FormData(e.target).get("patient_id");
     try {
       const rows = await api(`/api/outpatient/treatments?patient_id=${encodeURIComponent(pid)}`);
-      $("#od-tr").innerHTML = table(["就诊", "处置", "部位", "剂量", "执行人", "反应", "时间"], rows, (t) =>
+      // 处置史同样印执行时间（P2-1633），原先是落库的 UTC 时刻
+      $("#od-tr").innerHTML = table(["就诊", "处置", "部位", "剂量", "执行人", "反应", "执行时间"], rows, (t) =>
         `<tr><td>${t.encounter_id}</td><td>${esc(t.treatment_name)}</td><td>${esc(t.site) || "—"}</td>
          <td>${esc(t.dose) || "—"}</td><td>${esc(t.executor_name) || "—"}</td>
          <td>${t.reaction ? esc(t.reaction) : '<span class="tag orange">未记录</span>'}</td>
-         <td>${esc(t.created_at.slice(0, 16).replace("T", " "))}</td></tr>`);
+         <td>${esc(t.performed_at_shown)}</td></tr>`);
     } catch (err) { $("#od-tr").innerHTML = `<p class="msg err">${esc(err.message)}</p>`; }
   };
   $("#page-body").onclick = async (e) => {
