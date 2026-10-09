@@ -43,6 +43,7 @@ from ..models import (
 from ..pii import EncryptedPII
 from ..privacy import mask_id_card, mask_phone
 from ..texttypes import NON_BLANK, is_blank_text
+from .dictionaries import SYSTEM_CODES
 from .exams import CRITICAL_STATUS_NAMES
 
 router = APIRouter(
@@ -530,10 +531,28 @@ def rule_config_problem(target_table: str, rule_type: str, config: dict) -> str:
             return "values 要写成取值列表"
         if not all(_is_scalar(v) for v in values):   # 多套一层方括号：放不进集合，扫描即 500（P2-1123）
             return "values 里每个取值都要写成单个值（文字或数），不能再套一层列表或对象"
+        # 取值按列类型查（P2-1568，照上面区间那条）：整数列 `chronic_patients.level` 写成 ["1", "2", "3"]，原先 201，扫描时
+        # 1 不在 {"1", "2", "3"} 里、整表判违规；区间同样的写法早就 422。null 表示「这一列为空也算合规」，不跟列类型比
+        kind = _column_type(model, field)
+        for value in values:
+            if value is None:
+                continue
+            if kind is str and not isinstance(value, str):
+                return f"{field} 是文字列，枚举的取值也要写成文字"
+            if kind in (int, float) and (isinstance(value, bool) or not isinstance(value, (int, float))):
+                return f"{field} 是数值列，枚举的取值必须是数"
+            if kind is bool and not isinstance(value, bool):
+                return f"{field} 只有是 / 否两种取值，枚举的取值只能写 true / false"
+            if kind not in (None, str, int, float, bool):
+                return f"{field} 不是文字、数值或是否列，不能按枚举判定"
     if rule_type == "cross_ref":
         if config.get("ref_code_system"):
             if not isinstance(config["ref_code_system"], str):
                 return "ref_code_system 要写成字典编码"
+            if config["ref_code_system"] not in SYSTEM_CODES:
+                # 字典编码只认统一编码字典登记的那几个（P2-1568，与 `dictionaries.SYSTEM_CODES` 同一份）：写成 icd10（实为
+                # diagnosis）原先 201，扫描时字典查不到、合法集合为空，字典里明明有的诊断全判 error；引用表写错早就 422
+                return f"字典 {config['ref_code_system']} 未登记（可选：{'、'.join(sorted(SYSTEM_CODES))}）"
         else:
             ref_model = _TABLE_MODELS.get(config.get("ref_table", ""))
             if ref_model is None:
