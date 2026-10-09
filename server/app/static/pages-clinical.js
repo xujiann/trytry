@@ -3257,10 +3257,10 @@ async function renderRecognition() {
 
 async function renderInpatient() {
   $("#page-desc").textContent = "入院登记（床位原子占用）→ 转科/转床 → 医嘱 → 病案首页 → 出院（费用结清校验）";
-  const [wards, beds, recent, inHospital, stats] = await Promise.all([
+  const [wards, beds, recent, inHospital, stats, orgs] = await Promise.all([
     api("/api/inpatient/wards"), api("/api/inpatient/beds"),
     api("/api/inpatient/admissions"), fetchAllPages(api, "/api/inpatient/admissions?status=admitted"),
-    api("/api/inpatient/stats")]);
+    api("/api/inpatient/stats"), api("/api/organizations")]);
   // 在院的一个不落，其余照旧给最近 200 条（P2-154）：转床、开医嘱、病案首页、出院的按钮都挂在在院那几行上，原先只看
   // 最新 200 条住院，住得久的患者被新入院的挤出去，页面上没有一个按钮能给他办出院。在院的续页取全（P2-1333）：一页最多
   // 500 条，原先只取第一页，在院过 500 人时住得最久的那几位照样没有按钮
@@ -3268,6 +3268,11 @@ async function renderInpatient() {
   const admissions = [...inHospital, ...recent.filter((a) => !shown.has(a.id))].sort((x, y) => y.id - x.id);
   const AS = { admitted: ["在院", "orange"], discharged: ["已出院", "green"] };
   const wardName = Object.fromEntries(wards.map((w) => [w.id, w.name]));
+  // 建床位的病区从下拉里选（P2-1696，同页转床的 P2-38 同一个思路）：原先是「病区ID」数字框，而病区 ID 在任何页面上都看不到，
+  // 管理员是全域角色、后端只看病区存在——敲错一位就把床建进别家医院的病区，计入人家的床位，删不掉也改不了（P2-1357）。
+  // 选项写「机构名 · 病区名」（同名病区各院都有），首项留空必选：不动下拉不会悄悄落在第一个病区上
+  const orgName = Object.fromEntries(orgs.map((o) => [o.id, o.name]));
+  const wardOptions = wards.map((w) => `<option value="${w.id}">${esc(orgName[w.org_id] || `机构 ${w.org_id}`)} · ${esc(w.name)}</option>`).join("");
   $("#page-body").innerHTML = `
     ${stats.length ? panel("床位效率", table(["机构", "床位", "占用", "当前占床率", "在院", "累计出院"], stats, (s) =>
       `<tr><td>${esc(s.org_name)}</td><td>${s.beds_total}</td><td>${s.beds_occupied}</td>
@@ -3275,7 +3280,7 @@ async function renderInpatient() {
     ${panel("病区/床位建档（admin）与入院登记", `
       <form class="inline" id="ward-form"><input name="org_id" type="number" placeholder="机构ID" required>
         <input name="name" placeholder="病区名称" required><button>建病区</button></form>
-      <form class="inline" id="bed-form"><input name="ward_id" type="number" placeholder="病区ID" required>
+      <form class="inline" id="bed-form"><select name="ward_id" required><option value="">选择病区（机构 · 病区）</option>${wardOptions}</select>
         <input name="bed_no" placeholder="床号" required><button>建床位</button></form>
       <form class="inline" id="adm-form"><input name="patient_id" type="number" placeholder="患者ID" required>
         <input name="ward_id" type="number" placeholder="病区ID" required><input name="bed_id" type="number" placeholder="床位ID" required>
@@ -3331,7 +3336,15 @@ async function renderInpatient() {
         它回答的是"这条医嘱有没有护理记录跟着"，不是"这一次执行有几条"。
         皮试列的「—」是<b>不需要皮试</b>，不是"没填"：后端那个字段可空，空就是不适用。</p>`;
   };
-  $("#ward-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/inpatient/wards", formJson(e.target, ["org_id"]), "#inp-msg"); };
+  $("#ward-form").onsubmit = async (e) => {
+    e.preventDefault();
+    // 回执写上新病区的名字与编号（P2-1696）：原先走 postAction，成功即整页重画、一个字没有；先重画再写回执（P2-1013）
+    try {
+      const ward = await api("/api/inpatient/wards", { method: "POST", body: JSON.stringify(formJson(e.target, ["org_id"])) });
+      await route();
+      setMsg("#inp-msg", `已建病区「${ward.name}」（编号 ${ward.id}），建床位时在病区下拉里选它`, true);
+    } catch (err) { setMsg("#inp-msg", err.message, false); }
+  };
   $("#bed-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/inpatient/beds", formJson(e.target, ["ward_id"]), "#inp-msg"); };
   $("#adm-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/inpatient/admissions", formJson(e.target, ["patient_id", "ward_id", "bed_id"]), "#inp-msg"); };
   $("#page-body").onclick = async (e) => {

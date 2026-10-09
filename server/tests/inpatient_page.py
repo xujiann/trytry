@@ -59,6 +59,8 @@ async function api(path, options = {}) {
 }
 function route() { ROUTED += 1; }
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+/** 等到 `cond()` 成立（最多约 1 秒）：同步的提交处理（走 `postAction`）不回 Promise，等它的请求往返落定再收工。 */
+async function until(cond) { for (let i = 0; i < 200 && !cond(); i++) await new Promise((r) => setTimeout(r, 5)); }
 /** 提交页面上的一张表单：`fields` 是 `{字段名: 值}`（值一律字符串，同浏览器）。等提交处理落定。 */
 async function submitForm(sel, fields) {
   await elements[sel].onsubmit({ preventDefault() {}, target: { ...fields, querySelectorAll: () => [] } });
