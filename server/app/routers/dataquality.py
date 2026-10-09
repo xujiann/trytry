@@ -6,6 +6,7 @@
 - 启动时按 app/data/qc_rules_seed.py 幂等种子化 15 条规则（已存在编码不覆盖本地调整）
 """
 import logging
+from collections.abc import Callable
 from datetime import date, datetime
 from typing import Any
 
@@ -37,7 +38,10 @@ from ..models import (
     Prescription,
     PrescriptionItem,
     QcRule,
+    User,
 )
+from ..pii import EncryptedPII
+from ..privacy import mask_id_card, mask_phone
 from ..texttypes import NON_BLANK, is_blank_text
 from .exams import CRITICAL_STATUS_NAMES
 
@@ -120,6 +124,47 @@ def _is_blank(value) -> bool:
     return value is None or (isinstance(value, str) and is_blank_text(value))
 
 
+class _PiiMessage(str):
+    """印了 PII 列取值的违规说明（P2-1566）。
+
+    字符串本身就是原来那句明文（admin 看到的，逐字节不变）；`masked` 是同一句把 PII 取值换成掩码的版本。取值只在执行器
+    里拿得到，谁在看只在出口（`run_checks`）知道：执行器把两句一起备好、出口按角色挑，不必把调用方一路传进各执行器。
+    文本不变、只多带一样东西，照 `egress.UnresolvedHost` 的写法。
+    """
+
+    masked: str
+
+
+def _pii_masker(model, field: str) -> Callable[[str], str] | None:
+    """这一列的取值印进违规说明前要过的掩码；不是 PII 列返回 None（P2-1566）。
+
+    PII 列认两样：列类型是加密列 `EncryptedPII`（与 `test_pii_query_point_guard` 从模型元数据推导的同一份清单，以后新加的
+    加密列自动算进来）；或列名是 `id_card` / `phone`、以 `_id_card` / `_phone` 结尾（与出口脱敏闸门
+    `test_privacy_egress_guard` 认字段名同一判据）。电话走 `privacy.mask_phone`，其余走 `privacy.mask_id_card`。
+    """
+    name = field.lower()
+    if name == "phone" or name.endswith("_phone"):
+        return mask_phone
+    column = sa_inspect(model).columns.get(field)
+    if name == "id_card" or name.endswith("_id_card") or (column is not None and isinstance(column.type, EncryptedPII)):
+        return mask_id_card
+    return None
+
+
+def _with_masked(message: str, *shown: tuple[Callable[[str], str] | None, Any]) -> str:
+    """给违规说明配上掩码版（P2-1566）。`shown` 是这句里印进去的（掩码, 取值），掩码取自 `_pii_masker`、不是 PII 列的为
+    None。印了 PII 取值的返回 `_PiiMessage`（掩码版 = 同一句把这些取值换成掩码），没印的原样返回。"""
+    masked = message
+    for masker, value in shown:
+        if masker is not None and isinstance(value, str) and value:
+            masked = masked.replace(value, masker(value))
+    if masked == message:
+        return message
+    out = _PiiMessage(message)
+    out.masked = masked
+    return out
+
+
 # ---------------------------------------------------------------------------
 # 命名逻辑校验（rule_type=logic）
 # ---------------------------------------------------------------------------
@@ -194,6 +239,7 @@ def _check_datetime_order(db: Session, rule: QcRule, model) -> list[tuple[int, s
     """
     start_field = rule.config.get("start_field", "")
     end_field = rule.config.get("end_field", "")
+    start_pii, end_pii = _pii_masker(model, start_field), _pii_masker(model, end_field)   # P2-1566
     hits = []
     for row in _scan(_fields_query(db, model, start_field, end_field), model):
         start, end = getattr(row, start_field, None), getattr(row, end_field, None)
@@ -208,13 +254,15 @@ def _check_datetime_order(db: Session, rule: QcRule, model) -> list[tuple[int, s
         else:
             earlier = str(end) < str(start)
         if earlier:
-            hits.append((row.id, f"{end_field}（{_shown(end)}）早于 {start_field}（{_shown(start)}）"))
+            hits.append((row.id, _with_masked(f"{end_field}（{_shown(end)}）早于 {start_field}（{_shown(start)}）",
+                                              (end_pii, end), (start_pii, start))))
     return hits
 
 
 def _check_date_not_future(db: Session, rule: QcRule, model) -> list[tuple[int, str]]:
     field = rule.config.get("field", "")
     today = clock.today().isoformat()
+    pii = _pii_masker(model, field)   # P2-1566
     hits = []
     for row in _scan(_fields_query(db, model, field), model):
         value = getattr(row, field, None)
@@ -226,7 +274,7 @@ def _check_date_not_future(db: Session, rule: QcRule, model) -> list[tuple[int, 
         if _is_blank(value):
             continue
         if str(value) > today:
-            hits.append((row.id, f"{field}（{value}）晚于当前日期（{today}）"))
+            hits.append((row.id, _with_masked(f"{field}（{value}）晚于当前日期（{today}）", (pii, value))))
     return hits
 
 
@@ -309,6 +357,7 @@ def _run_range(db: Session, rule: QcRule, model) -> list[tuple[int, str]]:
     field = rule.config.get("field", "")
     low, high = rule.config.get("min"), rule.config.get("max")
     ex_low, ex_high = rule.config.get("exclusive_min", False), rule.config.get("exclusive_max", False)
+    pii = _pii_masker(model, field)   # 说明里的 PII 取值出口按角色掩码（P2-1566）
     hits = []
     for row in _filtered(db, model, rule, field):
         value = getattr(row, field, None)
@@ -316,21 +365,25 @@ def _run_range(db: Session, rule: QcRule, model) -> list[tuple[int, str]]:
             hits.append((row.id, f"{field} 缺失，无法判定区间"))
             continue
         if low is not None and (value <= low if ex_low else value < low):
-            hits.append((row.id, f"{field}={value} 低于下限 {low}{'（不含）' if ex_low else ''}"))
+            hits.append((row.id, _with_masked(f"{field}={value} 低于下限 {low}{'（不含）' if ex_low else ''}",
+                                              (pii, value))))
             continue
         if high is not None and (value >= high if ex_high else value > high):
-            hits.append((row.id, f"{field}={value} 超出上限 {high}{'（不含）' if ex_high else ''}"))
+            hits.append((row.id, _with_masked(f"{field}={value} 超出上限 {high}{'（不含）' if ex_high else ''}",
+                                              (pii, value))))
     return hits
 
 
 def _run_enum(db: Session, rule: QcRule, model) -> list[tuple[int, str]]:
     field = rule.config.get("field", "")
     allowed = set(rule.config.get("values", []))
-    return [
-        (row.id, f"{field}={getattr(row, field, None)} 不在允许取值 {sorted(allowed)} 内")
-        for row in _filtered(db, model, rule, field)
-        if getattr(row, field, None) not in allowed
-    ]
+    pii = _pii_masker(model, field)   # P2-1566
+    hits = []
+    for row in _filtered(db, model, rule, field):
+        value = getattr(row, field, None)
+        if value not in allowed:
+            hits.append((row.id, _with_masked(f"{field}={value} 不在允许取值 {sorted(allowed)} 内", (pii, value))))
+    return hits
 
 
 def _run_cross_ref(db: Session, rule: QcRule, model) -> list[tuple[int, str]]:
@@ -352,13 +405,14 @@ def _run_cross_ref(db: Session, rule: QcRule, model) -> list[tuple[int, str]]:
         ref_field = getattr(ref_model, rule.config.get("ref_field", "code"))
         valid = {v for (v,) in db.query(ref_field).all()}
         ref_desc = f"{rule.config['ref_table']} 目录"
+    pii = _pii_masker(model, field)   # P2-1566
     hits = []
     for row in _filtered(db, model, rule, field):
         value = getattr(row, field, None)
         if skip_empty and _is_blank(value):
             continue
         if value not in valid:
-            hits.append((row.id, f"{field}={value or '空'} 不存在于 {ref_desc}"))
+            hits.append((row.id, _with_masked(f"{field}={value or '空'} 不存在于 {ref_desc}", (pii, value))))
     return hits
 
 
@@ -600,6 +654,7 @@ def run_checks(
     offset: int = 0,
     limit: int = 200,
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """按启用规则扫描现有数据，返回违规明细（停用规则不参与扫描）。"""
     violations: list[dict] = []
@@ -611,13 +666,19 @@ def run_checks(
     total = len(violations)
     limit = min(max(limit, 1), 1000)
     response.headers["X-Total-Count"] = str(total)
+    page = violations[max(offset, 0) : max(offset, 0) + limit]
+    if user.role != "admin":
+        # 违规说明里的 PII 列取值非 admin 一律掩码（P2-1566，与患者检索走 `privacy.desensitize` 同一口径）：原先规则落在
+        # 证件号上时，药师调这里读到的是明文身份证号——开着 PII 列加密时读出来的也已是解密后的明文
+        for v in page:
+            v["message"] = getattr(v["message"], "masked", v["message"])
     return {
         "total": total,
         "error_total": sum(1 for v in violations if v["severity"] == "error"),
         "warn_total": sum(1 for v in violations if v["severity"] == "warn"),
         "offset": max(offset, 0),
         "limit": limit,
-        "items": violations[max(offset, 0) : max(offset, 0) + limit],
+        "items": page,
         "skipped_rules": skipped,
     }
 
