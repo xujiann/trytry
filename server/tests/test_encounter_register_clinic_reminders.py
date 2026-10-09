@@ -63,7 +63,8 @@ def _top_level(source: str, head: str, end: str = "\n}\n") -> str:
 
 
 #: `$()` 按选择器给一个假元素；`api()` 记下每次调用：POST 登记回给定回执（或抛给定的错），取提醒回给定数据（或抛错），
-#: 其余 GET 回空清单；`route()` 照真页面整页重画的效果把消息行与提醒区换成新元素——写在重画之前的会被冲掉（P2-1013）
+#: 其余 GET 回空清单（带 `withTotal` 的就诊表回空的 `{ rows, total }`，P2-1631 起接诊页读总数）；`route()` 照真页面整页
+#: 重画的效果把消息行与提醒区换成新元素——写在重画之前的会被冲掉（P2-1013）
 _HARNESS = """
 let els = {};
 const calls = [];
@@ -82,7 +83,7 @@ async function api(path, opts = {}) {
     if (DATA.remindersError) throw new Error(DATA.remindersError);
     return DATA.reminders;
   }
-  return [];
+  return opts.withTotal ? { rows: [], total: 0 } : [];
 }
 async function route() { routed += 1; delete els["#enc-msg"]; delete els["#enc-reminders"]; }
 function formJson() { return DATA.body; }
@@ -95,13 +96,14 @@ def _run_page(data: dict) -> dict:
     page = (STATIC / "pages-clinical.js").read_text(encoding="utf-8")
     script = (_HARNESS + (STATIC / "shared.js").read_text(encoding="utf-8")
               + _top_level(core, "function table(") + _top_level(core, "function panel(")
-              + _top_level(core, "function setMsg(") + _top_level(page, "async function renderArchive(")
+              + _top_level(core, "function setMsg(") + _top_level(page, "const ENC_FILTER", "\n")
+              + _top_level(page, "async function renderArchive(")
               + "(async () => { await renderArchive();\n"
               "  await els['#enc-form'].onsubmit({ preventDefault() {}, target: {} });\n"
               "  const msg = document.querySelector('#enc-msg');\n"
               "  process.stdout.write(JSON.stringify({ msg: [msg.textContent, msg.className], routed,\n"
               "    reminders: document.querySelector('#enc-reminders').innerHTML,\n"
-              "    calls: calls.filter((c) => c[1] !== '/api/encounters?limit=50') })); })();\n")
+              "    calls: calls.filter((c) => !c[1].startsWith('/api/encounters?')) })); })();\n")
     out = subprocess.run(["node", "-e", script, json.dumps(data, ensure_ascii=False)],
                          capture_output=True, text=True, timeout=60)
     assert out.returncode == 0, out.stderr

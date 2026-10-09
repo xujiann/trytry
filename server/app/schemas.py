@@ -123,6 +123,12 @@ class EncounterCreate(BaseModel):
 
 class EncounterOut(EncounterCreate):
     id: int
+    # 认人用的两项（P2-1631）：只增键、排在末尾，原有键与次序不动。门急诊文书、门诊病历都按手输的就诊号定位，查得到这个号的
+    # 接诊页原先只有「ID / 患者ID / 机构ID / 类型 / 诊断 / 医师」——看不出是哪天、哪位的就诊，敲错一位，处置记录就写到别人
+    # 名下。就诊时刻与 360 视图就诊段同一写法（`isoformat()`），姓名按一批取（`encounters._encounters_out`）；登记回执与
+    # 清单同形（同住院行 P2-1335）
+    created_at: str
+    patient_name: str
 
     model_config = {"from_attributes": True}
 

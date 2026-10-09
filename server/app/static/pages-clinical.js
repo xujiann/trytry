@@ -90,9 +90,26 @@ async function renderInfectious() {
   };
 }
 
+/* 接诊页就诊表的筛选（P2-1631）：按患者号查。只留在内存里、不进存储（同 CONTRACT_FILTER）——查哪一位是这一次办事的条件。
+   患者号是手输的，看不到的患者后端 403：取数失败只在表那一段报错、登记表单照画（同签约页），不掀掉整页。 */
+const ENC_FILTER = { patient_id: "" };
+
 async function renderArchive() {
   $("#page-desc").textContent = "门诊接诊登记；按电子健康卡号汇聚档案、就诊、报告、慢病、处方";
-  const encounters = await api("/api/encounters?limit=50");
+  // 就诊表带就诊时间与姓名、按患者查、读总数（P2-1631，同签约页 P2-1547）：门急诊文书、门诊病历都按手输的就诊号定位，
+  // 查得到这个号的只有这张表——原先只取最新 50 条、列里只有编号，看不出是哪天、哪位的就诊，也不能按患者筛、不提示截断：
+  // 半小时门诊量就把要找的那次挤出这一页，照着相邻的号载入，处置记录就写到了别人名下。列不全时标题写「已列 N / 共 total」
+  const query = new URLSearchParams({ limit: "50" });
+  if (ENC_FILTER.patient_id) query.set("patient_id", ENC_FILTER.patient_id);
+  let encounters = [];
+  let total = null;
+  let listError = "";
+  try {
+    ({ rows: encounters, total } = await api(`/api/encounters?${query}`, { withTotal: true }));
+  } catch (err) { listError = err.message; }
+  const listed = encounters.length;
+  const listTitle = `${ENC_FILTER.patient_id ? "按患者查的就诊记录" : "就诊记录"}（${
+    total !== null && listed < total ? `已列 ${listed} / 共 ${total}` : listed}）`;
   $("#page-body").innerHTML = `
     ${panel("门诊接诊登记", `
       <form class="inline" id="enc-form"><input name="patient_id" type="number" placeholder="患者ID" required>
@@ -103,8 +120,14 @@ async function renderArchive() {
       <p class="msg" id="enc-msg"></p>
       <div id="enc-reminders"></div>
       <p class="desc">就诊记录是县域就诊率、诊次成本与绩效变量的共同数据源。</p>
-      ${table(["ID", "患者", "机构", "类型", "诊断", "医师"], encounters, (e) =>
-        `<tr><td>${e.id}</td><td>${e.patient_id}</td><td>${e.org_id}</td>
+      <h3 style="margin-top:12px">${esc(listTitle)}</h3>
+      <form class="inline" id="enc-filter">
+        <input name="patient_id" type="number" value="${esc(ENC_FILTER.patient_id)}" placeholder="患者ID（留空看全部）">
+        <button>按患者查</button></form>
+      ${listError ? `<p class="msg err">${esc(listError)}</p>` : ""}
+      ${table(["ID", "就诊时间", "患者", "机构", "类型", "诊断", "医师"], encounters, (e) =>
+        `<tr><td>${e.id}</td><td>${esc((e.created_at || "").slice(0, 16).replace("T", " "))}</td>
+         <td>${esc(e.patient_name) || "—"}（${esc(e.patient_id)}）</td><td>${e.org_id}</td>
          <td>${e.encounter_type === "inpatient" ? "住院" : "门诊"}</td>
          <td>${esc(e.diagnosis_name || "—")}</td><td>${esc(e.doctor_name || "—")}</td></tr>`)}`)}
     ${panel("患者 360 视图", `
@@ -113,6 +136,12 @@ async function renderArchive() {
         <button>查询</button>
       </form>
       <div id="archive-result"></div>`)}`;
+  // 按患者查只记在内存里、整页重画（P2-1631，同签约页 P2-1547 的筛选）
+  $("#enc-filter").onsubmit = (e) => {
+    e.preventDefault();
+    ENC_FILTER.patient_id = String(new FormData(e.target).get("patient_id") ?? "").trim();
+    route();
+  };
   // 登记成功就地拉出这位患者的诊间公卫提醒（P2-1434）：提醒接口写明「接诊时汇聚该患者的公卫待办与风险提示」，原先只有
   // 「公卫协同」页手输患者 ID 才查得到——接诊时看不到随访超期、疫苗禁忌、处置中的公卫事件。先登记、后取：本机构刚登记了
   // 这位患者的就诊即有调阅依据，提醒接口照旧校验并留痕。先重画再写回执（P2-1013）；提醒取不到写原因，「登记成功」照写
@@ -3895,6 +3924,7 @@ async function renderQuality() {
       <form id="mr-form">
         <div class="inline"><input name="encounter_id" type="number" placeholder="就诊ID" required>
           <span class="desc" style="font-size:12px">同一就诊仅一份病历，再次提交为修正并复评</span></div>
+        <p class="desc" id="mr-who"></p>
         ${MR_FIELDS.map(([key, label, hint, rows]) =>
           `<div style="margin-top:8px"><label style="font-size:13px">${label}<span class="desc" style="font-size:12px">（${hint}）</span></label>
            <textarea name="${key}" rows="${rows}" style="width:100%"></textarea></div>`).join("")}
@@ -3976,6 +4006,17 @@ async function renderQuality() {
             `<tr style="color:#b23c3c"><td>${esc(d.rule_code)} ${esc(d.rule_name)}</td><td>${esc(d.field_name)}</td>
              <td>${esc(d.message)}</td><td>-${d.deduct_points}</td></tr>`)
         : '<p class="msg ok">无缺陷项，病历书写合规</p>'}`;
+  };
+  // 就诊号一填好就回显这次就诊是谁的（P2-1631）：病历按手输的就诊号挂，原先提交前后都只认得出号——敲错一位，张三的主诉、
+  // 现病史就成了李四那次就诊的病历。取门急诊完整性（按患者可见性判定并留痕），号又改了的旧回包不写
+  $("#mr-form").encounter_id.onchange = async (e) => {
+    const id = Number(e.target.value || 0);
+    if (!id) { $("#mr-who").innerHTML = ""; return; }
+    let html;
+    try {
+      html = `就诊 #${esc(id)}：${encounterWho(await api(`/api/outpatient/encounters/${id}/completeness`))}`;
+    } catch (err) { html = `<span class="msg err">就诊 #${esc(id)}：${esc(err.message)}</span>`; }
+    if (Number(e.target.value || 0) === id) $("#mr-who").innerHTML = html;
   };
   $("#mr-form").onsubmit = async (e) => {
     e.preventDefault();

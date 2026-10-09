@@ -164,6 +164,12 @@ class EncounterCompletenessOut(BaseModel):
     # 拒签不是缺陷：拒签是患者的权利，真正该追的是"待签"
     consents_refused: int
     note: str
+    # 认人用的三项（P2-1631）：只增键、排在末尾，原有键与次序不动。文书页与门诊病历表单按手输的就诊号载入，原先载入后只拿得到
+    # 患者号——敲错一位，给张三做的皮试照样记到李四那次就诊上。页面据此回显「姓名 · 就诊时间 · 机构」；就诊时刻与就诊清单
+    # 同一写法（`isoformat()`）
+    patient_name: str
+    encounter_created_at: str
+    org_name: str
 
 
 @router.post("/consent-templates", response_model=ConsentTemplateOut, status_code=201,
@@ -644,6 +650,8 @@ def encounter_completeness(
         )
         .all()
     )
+    patient = db.get(Patient, encounter.patient_id)
+    org = db.get(Organization, encounter.org_id)
     return {
         "encounter_id": encounter_id,
         "patient_id": encounter.patient_id,
@@ -655,4 +663,8 @@ def encounter_completeness(
         # 只报事实：待签的告知书是真正该被追的那一项，拒签不是缺陷
         "note": "门急诊并非每次就诊都需处置与告知，本表只列事实，不判合格与否；"
                 "待签署的告知书应在就诊结束前处理完毕",
+        # 这次就诊是谁的、哪天、哪家（P2-1631）：可见性上面已判过并留痕，一次就诊各取一行
+        "patient_name": patient.name if patient else "",
+        "encounter_created_at": encounter.created_at.isoformat(),
+        "org_name": org.name if org else "",
     }

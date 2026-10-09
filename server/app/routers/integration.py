@@ -1483,11 +1483,12 @@ def _do_fhir_encounter(resource: dict, db: Session, user: User):
         db,
         user,
     )
+    # 登记接口回的是就诊行出参（P2-1631 起按一批带上姓名，`encounters._encounters_out`），不再是 ORM 对象：按键取
     return {
-        "encounter_id": encounter.id,
-        "patient_id": encounter.patient_id,
-        "org_id": encounter.org_id,
-        "encounter_type": encounter.encounter_type,
+        "encounter_id": encounter["id"],
+        "patient_id": encounter["patient_id"],
+        "org_id": encounter["org_id"],
+        "encounter_type": encounter["encounter_type"],
     }
 
 

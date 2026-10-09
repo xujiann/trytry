@@ -1732,6 +1732,8 @@ async function renderOutpatientDocs() {
       };
     } catch (err) { scopeError = err.message; }
   }
+  // 载入后回显「姓名 · 就诊时间 · 机构」（P2-1631，同住院文书选择框的 P2-1335）：原先载入后页面只拿得到患者号，敲错一位、
+  // 载入的是李四那次就诊，给张三做的皮试照样记进去
   $("#page-body").innerHTML = `
     ${panel("选择就诊", `
       <form class="inline" id="od-pick">
@@ -1739,6 +1741,8 @@ async function renderOutpatientDocs() {
         <button>载入该次就诊的文书</button>
       </form>
       ${scopeError ? `<p class="msg err">就诊 #${encounterId}：${esc(scopeError)}</p>` : ""}
+      ${scoped.completeness ? `<p class="desc" id="od-who">已载入就诊 #${encounterId}：${encounterWho(scoped.completeness)}
+        ——核对是这一位再记处置、护理与告知书</p>` : ""}
       ${scoped.completeness ? `<div class="cards">
         <div class="card"><span class="k">处置记录</span><b>${scoped.completeness.treatment_records}</b></div>
         <div class="card"><span class="k">护理记录</span><b>${scoped.completeness.nursing_records}</b></div>

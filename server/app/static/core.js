@@ -183,6 +183,14 @@ function actionableFirst(recent, ...actionable) {
   return [...first, ...recent.filter((r) => !ids.has(r.id))];
 }
 
+/** 载入的这次就诊是谁的：「姓名 · 就诊时间 · 机构」（P2-1631）。门急诊文书页、门诊病历表单都按手输的就诊号定位，原先载入后
+ *  只认得出号——敲错一位就是另一个人的就诊，处置、病历照样写进去。取自门急诊完整性出参末尾的三个认人键，一律 esc()；
+ *  就诊时间与接诊页就诊表同一写法。 */
+function encounterWho(c) {
+  const at = (c.encounter_created_at || "").slice(0, 16).replace("T", " ");
+  return `<b>${esc(c.patient_name) || "—"}</b> · ${esc(at) || "—"} · ${esc(c.org_name) || "—"}`;
+}
+
 function setMsg(id, text, ok = true) {
   const el = $(id);
   if (el) { el.textContent = text; el.className = `msg ${ok ? "ok" : "err"}`; }

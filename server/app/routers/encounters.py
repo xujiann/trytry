@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from .. import events
 from ..database import get_db
-from ..deps import get_current_user, paginate, require_roles
+from ..deps import get_current_user, paginate, require_roles, row_dict
 from ..models import (
     ChronicPatient,
     Encounter,
@@ -60,7 +60,36 @@ def create_encounter(
     })
     db.commit()
     db.refresh(encounter)
-    return encounter
+    return _encounters_out(db, [encounter])[0]
+
+
+def _encounters_out(db: Session, encounters: list[Encounter]) -> list[dict]:
+    """就诊行出参：登记回执与就诊清单都从这里出（同形）。
+
+    末尾两键是 P2-1631 加的（只增键）：就诊时刻与患者姓名——门急诊文书、门诊病历按手输的就诊号定位，接诊页原先只有编号，
+    认不出是哪天、哪位的就诊。姓名按这一批的患者号取一次（与住院行 `inpatient._admissions_out` 的 P2-1335 同一写法），
+    不逐行查库：清单一页最多 500 行。姓名不是加密列，PII 加密开态下照旧直读。
+    """
+    if not encounters:
+        return []
+    patients = row_dict(
+        db.query(Patient.id, Patient.name).filter(Patient.id.in_({e.patient_id for e in encounters})).all()
+    )
+    return [
+        {
+            "patient_id": e.patient_id,
+            "org_id": e.org_id,
+            "doctor_name": e.doctor_name,
+            "encounter_type": e.encounter_type,
+            "diagnosis_code": e.diagnosis_code,
+            "diagnosis_name": e.diagnosis_name,
+            "summary": e.summary,
+            "id": e.id,
+            "created_at": e.created_at.isoformat(),
+            "patient_name": patients.get(e.patient_id, ""),
+        }
+        for e in encounters
+    ]
 
 
 @router.get("/encounters", response_model=list[EncounterOut])
@@ -88,7 +117,8 @@ def list_encounters(
             query = query.filter(Encounter.org_id.in_(orgs))
     # 按就诊时刻倒序、编号兜底（P2-846）：导入的历史就诊 created_at 是就诊日期、编号却排在上线之后，原先按编号倒序，
     # 第一页全是几年前的导入记录
-    return paginate(query.order_by(Encounter.created_at.desc(), Encounter.id.desc()), response, offset, limit)
+    rows = paginate(query.order_by(Encounter.created_at.desc(), Encounter.id.desc()), response, offset, limit)
+    return _encounters_out(db, rows)   # 行上带就诊时刻与姓名（P2-1631）
 
 
 # 360 视图每类记录的返回上限：与居民端 portal._build_archive 保持一致。
