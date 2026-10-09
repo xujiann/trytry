@@ -987,6 +987,12 @@ const SPD_RECALL_STATUS = {
 };
 const SPD_APPLY_STATUS = { pending: ["待受理", "orange"], accepted: ["已受理", "green"], rejected: ["已拒绝", ""] };
 
+/** 服务包绑定状态的标签：360 卡片与纳管档案明细同一处取（P2-1576）。接口没下发状态中文（`service.PACKAGE_BINDING_STATUS_NAMES`
+    只给居民端），照明细原有的写法，不另抄一份 */
+function spdBindingTag(b) {
+  return b.status === "bound" ? '<span class="tag green">绑定中</span>' : '<span class="tag">已解绑</span>';
+}
+
 /** 专病 360 档案（GET /api/spd/patients/{id}/profile）：纳管、路径、服务包、任务、监测、评估、
     转诊一屏聚合。中心端与纳管页共用（个案管理师端 #7 / 中心端 #8）。 */
 function spdProfileHtml(p) {
@@ -1002,8 +1008,10 @@ function spdProfileHtml(p) {
       阶段 ${esc(e.stage || "—")} · 待办 ${g.open_tasks ?? 0}${nextFollowup}
       <div class="desc">路径：${(g.paths || []).map((i) =>
         `#${i.id} ${esc(i.template_code)} ${esc(i.current_node_key || "—")} ${i.progress}%`).join("；") || "—"}</div>
-      <div class="desc">服务包：${(g.packages || []).map((b) =>
-        `${esc(b.package_name)} 余 ${b.remaining}（已用 ${b.usage_rate}%）`).join("；") || "—"}</div>
+      <div class="desc">服务包：${(g.packages || []).map((b) => (b.status === "bound"
+        ? `${esc(b.package_name)} ${spdBindingTag(b)} 余 ${b.remaining}（已用 ${b.usage_rate}%）`
+        // 已解绑的灰显、不写余量（P2-1576）：原先不看状态照印「余 N」，同页明细写「已解绑」、扣次 409；解绑再绑后两张同名卡都写余量
+        : `<span class="muted">${esc(b.package_name)} ${spdBindingTag(b)}</span>`)).join("；") || "—"}</div>
       <div class="desc">近期任务：${(g.recent_tasks || []).map((t) =>
         `#${t.id} ${esc(t.title)} ${spdTag(SPD_TASK_STATUS, t.status)}`).join("；") || "—"}</div>
     </div>`;
@@ -1040,7 +1048,7 @@ function spdEnrollmentDetailHtml(e) {
     `<tr><td>${b.id}</td><td>${esc(b.package_name)}</td><td>${b.price}</td>
      <td>${(b.items || []).map((i) => `${esc(i.name || i.code || "")} ${i.used}/${i.total}`).join("；") || "—"}</td>
      <td>${b.remaining}</td><td>${b.usage_rate}%</td>
-     <td>${b.status === "bound" ? '<span class="tag green">绑定中</span>' : '<span class="tag">已解绑</span>'}</td>
+     <td>${spdBindingTag(b)}</td>
      <td>${esc(b.period_end || "—")}</td>
      <td><button class="btn secondary" data-bind-usages="${b.id}">用量明细</button>
        ${b.status === "bound"
