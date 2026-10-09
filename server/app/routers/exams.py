@@ -175,15 +175,22 @@ def _find_recognizable(
 class RecognitionCheckOut(BaseModel):
     """开单前互认检查——**条件键**三分支（见 handler）：无可互认报告只有
     `recognizable` 一键；目录阻断多 `reason`；可互认多 `request_id/item_name/
-    conclusion`。可选键按出键序声明 + `response_model_exclude_unset=True`，
-    handler 没放的键整个不出现（不是 null）；`reason` 与后三键从不同分支出现，
-    声明序只需分别满足各分支的出键序。"""
+    conclusion/critical/critical_status`。可选键按出键序声明 + `response_model_exclude_unset=True`，
+    handler 没放的键整个不出现（不是 null）；`reason` 与后五键从不同分支出现，
+    声明序只需分别满足各分支的出键序。
+
+    `critical` / `critical_status`（P2-1709）只增在末尾：源报告是不是危急值、闭环到哪一步（取不到为空串，码值同
+    `ExamReportOut.critical_status`）。预检原先只带结论——20 天前出的「血钾 2.6」危急值、申请方至今未确认，别的机构开同一
+    项目时照样弹「可互认」、页面默认选中「互认」，照默认建单即成「已互认」，互认方收不到任何危急值提示。危急值报告该不该
+    排除出互认、建单要不要通知互认方另行裁定；这里只把危急标记交给页面，由页面写明并改默认为「不互认」。"""
 
     recognizable: bool
     reason: str | None = None
     request_id: int | None = None
     item_name: str | None = None
     conclusion: str | None = None
+    critical: bool | None = None
+    critical_status: str | None = None
 
 
 class UnackedCriticalOut(BaseModel):
@@ -242,11 +249,15 @@ def recognition_check(
     existing = _find_recognizable(db, patient_id, item_code, center_type=center_type, requester=org)
     if existing is None:
         return {"recognizable": False}
+    report = existing.report
     return {
         "recognizable": True,
         "request_id": existing.id,
         "item_name": existing.item_name,
-        "conclusion": existing.report.conclusion if existing.report else "",
+        "conclusion": report.conclusion if report else "",
+        # 源报告的危急标记（P2-1709，见出参注释）：页面据此写明「该结果为危急值」、默认不互认
+        "critical": bool(report.critical) if report else False,
+        "critical_status": (report.critical_status or "") if report else "",
     }
 
 

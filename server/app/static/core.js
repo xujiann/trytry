@@ -1814,12 +1814,18 @@ async function renderExams() {
         // 框自己提交（P2-607）：不互认理由写超了、建单被拒时报错写在框里、框不关，选的处理方式与理由都在
         // 印出原报告的项目名，与本次开单的名称并排（P2-1086）：互认只比编码，名称随手填——开「头颅CT平扫」误填成
         // DR-CHEST，原先只看得到一句结论，照着点确定就拿胸片报告互认掉了、头颅 CT 不会再做
+        // 源报告是危急值的写明、默认改成「不互认」（P2-1709）：预检原先只带结论，框里默认选中「互认」——照默认建单即成「已互认」，
+        // 申请方至今未确认的危急值，互认方也收不到任何提示（危急值能不能互认、要不要通知互认方另行裁定）。框头是纯文本，
+        // 由 spdModal 自己 esc()；状态文案取危急值操作台同一张 CRIT_STATUS（空串即存量的「已通知」）
+        const critical = check.critical
+          ? `⚠ 该结果为危急值（当前状态：${(CRIT_STATUS[check.critical_status || ""] || [check.critical_status])[0]}），`
+            + "请先核对危急值处置情况，默认不互认\n" : "";
         const ok = await spdModal("可互认：30 天内已有同项目报告", [
-          { name: "decision", label: "处理方式", type: "select", value: "accept", options: [
+          { name: "decision", label: "处理方式", type: "select", value: check.critical ? "decline" : "accept", options: [
             { value: "accept", label: "互认该结果，不再重复检查" },
             { value: "decline", label: "不互认，仍开新检查" }] },
           { name: "reason", label: "不互认理由（选「不互认」时填写，监管留痕）", type: "textarea" },
-        ], { intro: `已有报告：${check.item_name || "—"}（${itemCode}）\n报告结论：${check.conclusion || "—"}\n`
+        ], { intro: `${critical}已有报告：${check.item_name || "—"}（${itemCode}）\n报告结论：${check.conclusion || "—"}\n`
             + `本次开单：${body.item_name || "—"}（${itemCode}）——两个项目名对不上时请先核对编码`,
         submit: (form) => api("/api/exams", { method: "POST",
           body: JSON.stringify({ ...body, ...(form.decision === "accept"

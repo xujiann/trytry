@@ -111,12 +111,15 @@ def test_互认检查_可互认分支精确形状与键序(client, admin, base, 
         f"/api/exams/recognition-check?patient_id={base['patient']['id']}&item_code=CT001",
         headers=admin,
     ).json()
-    assert list(body.keys()) == ["recognizable", "request_id", "item_name", "conclusion"]
+    # 源报告的危急标记只增在末尾（P2-1709），原有四键与次序不动
+    assert list(body.keys()) == ["recognizable", "request_id", "item_name", "conclusion", "critical", "critical_status"]
     assert body == {
         "recognizable": True,
         "request_id": reported["rq"]["id"],
         "item_name": "胸部CT平扫",
         "conclusion": "胸部CT未见明显异常",
+        "critical": False,
+        "critical_status": "",
     }
     assert type(body["request_id"]) is int
 
