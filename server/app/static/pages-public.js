@@ -623,14 +623,26 @@ async function renderEsb() {
   $("#page-desc").textContent = "轻量服务总线：接入方注册与限流、消息队列重试与死信、编排流程逐步执行、成功率与积压监控";
   const [stats, endpoints, flows] = await Promise.all([
     api("/api/esb/stats"), api("/api/esb/endpoints"), api("/api/esb/flows")]);
-  // 消息表当前这一页（「查看载荷」就在这一页里找，P2-424）
+  // 消息表当前列着的这些（「查看载荷」就在这里面找，P2-424）
   let shownMessages = [];
   const drawMessages = async () => {
     const f = new FormData($("#esb-msg-filter"));
     const params = new URLSearchParams({ limit: "50" });
     if (f.get("status")) params.set("status", f.get("status"));
     if (f.get("endpoint_id")) params.set("endpoint_id", f.get("endpoint_id"));
-    const messages = await api(`/api/esb/messages?${params}`);
+    // 筛「失败待重试」时续页取全（P2-1729，第五十一批扫描 AO1-3）：原先一律只取编号最大的 50 条、不读总数——入站失败只能
+    // 手工重试（P2-709），一次故障就是几十上百条，最早失败、最该先处理的那批在页面上没有行、点不了重试，也看不出被截断了。
+    // 失败积压要逐条处理，取全；其余照旧只取最新一页（成功、死信只增不减，入站待处理的也可能积得很多，不续页取全），
+    // 读总数（同 P2-1547），列不全时标题写明「已列 N / 共 M」
+    let messages;
+    let total = null;
+    if (f.get("status") === "failed") {
+      params.delete("limit");
+      messages = await fetchAllPages(api, `/api/esb/messages?${params}`);
+    } else {
+      ({ rows: messages, total } = await api(`/api/esb/messages?${params}`, { withTotal: true }));
+    }
+    const cut = total !== null && messages.length < total;
     shownMessages = messages;
     // 停用的出站接入方不给「消费/重试」（P2-180：后端 409，消息留在队里，启用后再消费）
     const stoppedOutbound = new Set(endpoints.filter((ep) => ep.direction === "outbound" && !ep.active).map((ep) => ep.code));
@@ -641,7 +653,9 @@ async function renderEsb() {
       : activeFlows.has(m.retry_flow)
         ? `<button class="btn secondary" data-esbrerun="${m.id}" data-flow="${esc(m.retry_flow)}">按编排「${esc(m.retry_flow)}」重试</button>`
         : `<span class="tag">编排「${esc(m.retry_flow)}」已停用</span>`;
-    $("#esb-messages").innerHTML = table(["ID", "接入方", "消息类型", "状态", "重试", "最后错误", "操作"], messages, (m) => {
+    const head = `<h3 style="margin-top:14px">消息（${cut ? `已列 ${messages.length} / 共 ${total}` : messages.length}）</h3>`
+      + (cut ? '<p class="desc">只列编号最大的这一页；失败待重试的按状态筛「失败待重试」，续页列全</p>' : "");
+    $("#esb-messages").innerHTML = head + table(["ID", "接入方", "消息类型", "状态", "重试", "最后错误", "操作"], messages, (m) => {
       const retryable = (m.status === "queued" || m.status === "failed") && !stoppedOutbound.has(m.endpoint_code);
       return `<tr><td>${m.id}</td><td><span class="tag">${esc(m.endpoint_code)}</span></td><td>${esc(m.msg_type)}</td>
         <td>${statusTag(ESB_MSG_STATUS, m.status)}</td><td>${m.retry_count}/${m.max_retries}</td>
@@ -715,8 +729,11 @@ async function renderEsb() {
          <td>${r.success_rate_pct}%</td><td>${r.failure_rate_pct}%</td></tr>`));
   const drawRuns = async (flowId) => {
     try {
-      const rows = await api(`/api/esb/flow-runs?flow_id=${encodeURIComponent(flowId)}&limit=50`);
-      $("#esb-runs").innerHTML = `<h3 style="margin-top:14px">流程 ${flowId} 的执行记录</h3>
+      // 执行记录只看最近的一页（按记录号倒序），读总数，列不全时标题写明「已列 N / 共 M」（P2-1729，同 P2-1693）：原先不读
+      // 总数，一条编排跑过 50 次之后看不出前面还有
+      const { rows, total } = await api(`/api/esb/flow-runs?flow_id=${encodeURIComponent(flowId)}&limit=50`, { withTotal: true });
+      const listed = total !== null && rows.length < total ? `（已列 ${rows.length} / 共 ${total}）` : "";
+      $("#esb-runs").innerHTML = `<h3 style="margin-top:14px">流程 ${flowId} 的执行记录${listed}</h3>
         ${table(["记录", "流程", "消息", "状态", "步骤结果", "错误", "时间"], rows, (r) =>
           `<tr><td>${r.id}</td><td><span class="tag">${esc(r.flow_code)}</span></td><td>${r.message_id}</td>
            <td>${statusTag(ESB_RUN_STATUS, r.status)}</td>
