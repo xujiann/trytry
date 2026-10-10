@@ -205,3 +205,43 @@ def test_甲退出后档案页几块清空_乙登录第一个往返内看不到�
     assert "就诊记录（0）" in done_["archive"] and done_["extra"] == [], done_
     # 乙登录后的请求都以乙的身份发出（夹具自证：上面看到的不是乙的回包里混进了甲）
     assert all(r.startswith("乙 ") for r in out["requests"][out["requests"].index("乙 GET /api/portal/me"):]), out["requests"]
+
+
+INFLIGHT_STEPS = r"""
+const LEAKS = ["孙甲", "抑郁发作", "HIV", "李医生"];
+STATE.authed = true; STATE.who = "甲";          // 甲进档案页，档案的回包还在路上（弱网）
+hold("/api/portal/me/archive");
+const pending = renderArchiveTab();
+await flush();
+// 甲在「添加家庭成员」里填了一半没交
+$("#fm-name").value = "孙甲之父"; $("#fm-idcard").value = "110101195001011234";
+$("#fm-phone").value = "13800000009"; $("#fm-code").value = "123456";
+$("#fm-code-row").classList.remove("hidden"); $("#family-add").open = true;
+setMsg("#family-msg", "演示环境验证码：123456", true);
+
+signOutLocally();                               // 甲退出；档案的回包这时才到
+await flush();
+release("/api/portal/me/archive");
+await pending; await flush();
+return {
+  archive: LEAKS.filter((w) => $("#archive-result").innerHTML.includes(w)),
+  extra: LEAKS.filter((w) => $("#archive-extra").innerHTML.includes(w)),
+  form: ["#fm-name", "#fm-idcard", "#fm-phone", "#fm-code"].map((sel) => $(sel).value),
+  codeRowHidden: $("#fm-code-row").classList.contains("hidden"), foldOpen: $("#family-add").open,
+  msg: $("#family-msg").textContent,
+};
+"""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="没有 node 执行页面函数")
+def test_退出时在途的档案回包作废_添加家人表单清空():
+    """P2-1818（第五十三批 P2-1796 修复回报旁见）：P2-1796 让退出即清空档案页几块，可退出那一刻还在途的 `loadArchive` 回包
+    晚到时照样写进（藏着的）档案区——下一位登录后、自己的 `loadArchive` 开始之前（`renderFamily` 一个往返），屏幕上是新姓名配
+    上一位的诊断与危急值。「添加家庭成员」表单里上一位填了没交的成员姓名、身份证号、手机号与验证码也留着。修后退出把档案两块
+    的序号各往前推一格，晚到的回包比对不上就丢；表单清空、收起，消息行清掉。"""
+    done = subprocess.run(["node", "-e", _script(INFLIGHT_STEPS)], capture_output=True, text=True, timeout=60)
+    assert done.returncode == 0, done.stderr
+    out = json.loads(done.stdout)
+    assert out["archive"] == [] and out["extra"] == [], out   # 修前甲的诊断、检查结论晚到后写进档案区
+    assert out["form"] == ["", "", "", ""], out   # 修前上一位填的成员姓名、身份证号、手机号、验证码都留着
+    assert out["codeRowHidden"] and out["foldOpen"] is False and out["msg"] == "", out

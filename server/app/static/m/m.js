@@ -318,6 +318,16 @@ function signOutLocally() {
   ["#account-bar", "#account-bind", "#family-switch", "#archive-result", "#archive-extra"]
     .forEach((sel) => { $(sel).innerHTML = ""; });
   setMsg("#family-switch-msg", "", true);
+  // 退出时还在途的档案回包一并作废（P2-1818）：两块的序号各往前推一格，上一位的 loadArchive / loadArchiveExtra 晚到时比对
+  // 不上就丢。原先它若在下一位的 loadArchive 开始之前落地，照样写进（藏着的）档案区，下一位登录后第一个往返内与新姓名同屏——
+  // 与上面退出即清同一个理由（P2-1796），只是换成了在途的那一份
+  archiveSeq += 1;
+  archiveExtraSeq += 1;
+  // 「添加家庭成员」表单里上一位填了没交的成员姓名、身份证号、手机号与验证码同样清空、收起（P2-1818）
+  ["#fm-name", "#fm-idcard", "#fm-phone", "#fm-code"].forEach((sel) => { $(sel).value = ""; });
+  $("#fm-code-row").classList.add("hidden");
+  $("#family-add").open = false;
+  setMsg("#family-msg", "", true);
   renderSpdTab();
   refreshNotifyDot();
 }
