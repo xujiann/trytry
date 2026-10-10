@@ -208,10 +208,15 @@ python scripts/loadtest.py http://127.0.0.1:8000 --concurrency 10 --requests 100
 ## 生产部署
 
 ```bash
+# 仓库根目录。三个必填变量（docker-compose.yml 里的 ${…:?}），缺一个 compose 就报错退出；值要存下来，可照 .env.example 写进 .env
+export MEDPLAT_SECRET="$(openssl rand -hex 32)" MEDPLAT_ADMIN_PASSWORD='强口令' MEDPLAT_DB_PASSWORD="$(openssl rand -hex 16)"
 docker compose up -d                          # 一键起 app + PostgreSQL 16 + Redis 7（命名卷持久化）
-cd server && alembic upgrade heads            # 结构迁移（复数 heads：平台链+spd 链双 head；容器 start.sh 已内置此步，ADR-0002）
-sh scripts/backup.sh /data/backups            # pg_dump 备份（建议 crontab 定时）
+docker compose exec app alembic current       # 只核对：结构迁移由容器 start.sh 先跑（复数 heads：平台链+spd 链双 head，ADR-0002）
 ```
+
+别在宿主机的 `server/` 下跑 alembic 或 `scripts/backup.sh`：宿主机上没有容器里的连接串，db 也不对宿主机发布端口，
+迁移会落进一份新建的空 SQLite，备份打包的也是它。compose 档的备份方案待定，见 [docs/运维手册.md](docs/运维手册.md)
+第一、四节（P2-1802）。
 
 ### 生产环境安全硬化（必读）
 
