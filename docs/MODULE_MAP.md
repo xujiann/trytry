@@ -98,7 +98,7 @@ spd/
 | | `pages-spd.js` | 1289 | 慢专病页面 render |
 | | `pages-public.js` | 926 | 公卫页面 render |
 | 居民端 `/m` | `m/m.js` | 1113 | `switchTab` 切 6 tab，独立 `$`/`esc`/`api` |
-| 医生端 `/m/doctor` | `m/doctor.js` | 701 | 七页签，token 存 sessionStorage |
+| 医生端 `/m/doctor` | `m/doctor.js` | 701 | 八页签（含慢专病），token 存 sessionStorage |
 
 **共同模板**：89 个 `renderX` 手抄"面板+表单+表格+msg+onsubmit+route()"，无 `panel()`/`crudPage()` 抽象。三套前端各自实现 `$`/`esc`/`api`（逐字相同）。
 

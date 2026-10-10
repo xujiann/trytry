@@ -386,3 +386,26 @@ def test_运维手册查登录安全事件指向登录留痕():
     bullet = re.search(r"^- \*\*登录安全事件\*\*.*?(?=^- |^#|\Z)", _section(RUNBOOK, "## 五、"), re.M | re.S)
     assert bullet, "第五节找不到「登录安全事件」那一条"
     assert LoginLog.__tablename__ in bullet.group() and f"GET {login_query}" in bullet.group(), bullet.group()
+
+
+BOOK = ROOT / "book"
+
+
+def test_架构地图与书稿的页签数_部署附录的迁移命令_信创文档的Python版本照现行():
+    """P2-1821（第五十三批 AQ4 修复回报旁见）：P2-1812 订正了 README / 系统功能清单 / 用户手册的页签数，同一类残留还在别处——
+    `docs/MODULE_MAP.md` 写医生端「七页签」、书稿第 2 章写居民端「五个标签页」医师端「七个标签」（两端都漏了后来加上的慢专病）；
+    书稿附录 D 的首次部署与信创迁移步骤写单数 `alembic upgrade head`（两个 head 下直接报 Multiple heads，P2-1806 同形）；
+    《信创适配与备份容灾》写「Python 3.11+」，项目钉的是 3.12（CI、两个 Dockerfile、pyproject 同版）。
+    页签数从页面源码现数，Python 版本从 pyproject 现取。"""
+    resident, doctor = _tab_labels("index.html"), _tab_labels("doctor.html")
+    module_map = (ROOT / "docs" / "MODULE_MAP.md").read_text(encoding="utf-8")
+    row = next(line for line in module_map.splitlines() if line.startswith("| 医生端 `/m/doctor` |"))
+    assert f"{_cn(len(doctor))}页签" in row, f"MODULE_MAP 医生端的页签数不是 {len(doctor)}：{row}"
+    chapter = (BOOK / "11_第2章_总体架构.md").read_text(encoding="utf-8")
+    assert f"{_cn(len(resident))}个标签页" in chapter and f"{_cn(len(doctor))}个标签" in chapter, (resident, doctor)
+    appendix = (BOOK / "83_附录D_部署与运维指引.md").read_text(encoding="utf-8")
+    single = [line.strip() for line in appendix.splitlines() if _SINGLE_HEAD_COMMAND.search(line)]
+    assert not single, f"书稿附录 D 的 alembic 命令按单 head 写：{single}"
+    pinned = re.search(r'^python_version = "(\d+\.\d+)"', (SERVER / "pyproject.toml").read_text(encoding="utf-8"), re.M)
+    assert pinned, "pyproject.toml 里找不到 mypy 的 python_version"
+    assert f"Python {pinned.group(1)}" in XINCHUANG and "Python 3.11+" not in XINCHUANG, "信创文档写的 Python 版本与项目钉的不一致"
