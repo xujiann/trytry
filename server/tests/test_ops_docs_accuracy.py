@@ -66,3 +66,30 @@ def test_compose部署段不在宿主机跑alembic():
         alembic = [c for c in commands if re.search(r"\balembic\b", c)]
         assert alembic, f"{name} 找不到核对迁移的那一行，扫描对象变了？"
         assert all(c.startswith("docker compose exec app alembic ") for c in alembic), alembic
+
+
+def _numbered_items(section: str) -> list[str]:
+    """一段里的有序列表项（`1. …` 起头，缩进的续行并进上一项）。"""
+    items: list[str] = []
+    for line in section.splitlines():
+        if re.match(r"\d+\. ", line):
+            items.append(line)
+        elif items and line.startswith("   ") and line.strip():
+            items[-1] += line.strip()
+    return items
+
+
+def test_密钥轮换步骤在清PREVIOUS之前先做PII重加密():
+    """P2-1803（第五十三批扫描 AQ4-2）：运维手册第九节「密钥轮换」原先四步只提 JWT、审计链、归档 MAC——设 PREVIOUS、换密钥、
+    重启、宽限期后清空 PREVIOUS。PII 列加密开着时照做：旧钥加密的密文清空 PREVIOUS 后解不开、旧钥算的检索索引也对不上，
+    患者清单 500、按证件号查不到、同证件号能再建一份档案；第十二节写了换钥后要跑 `pii_encrypt_backfill.py --old-secret`、
+    跑完再清 PREVIOUS，第九节一句不指向它。这里钉住：轮换步骤里有 `--old-secret` 回填这一步，且排在清空 PREVIOUS 那一步
+    之前；第九、十二两节互相指向。"""
+    section = _section(RUNBOOK, "## 九、密钥轮换")
+    steps = _numbered_items(section)
+    backfill = [i for i, step in enumerate(steps) if "pii_encrypt_backfill.py --old-secret" in step]
+    clear = [i for i, step in enumerate(steps) if "**清空** `MEDPLAT_SECRET_PREVIOUS`" in step]
+    assert backfill and clear, f"轮换步骤里找不到回填或清空 PREVIOUS 那一步：{steps}"
+    assert backfill[0] < clear[0], f"回填（第 {backfill[0] + 1} 步）要排在清空 PREVIOUS（第 {clear[0] + 1} 步）之前"
+    assert "第十二节" in steps[backfill[0]], "回填那一步要指向第十二节（PII 列加密启用流程）"
+    assert "第九节" in _section(RUNBOOK, "## 十二、PII 列加密启用流程"), "第十二节的轮换说明要指回第九节的步骤"

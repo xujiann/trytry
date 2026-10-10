@@ -11,10 +11,13 @@
 
 ## 密钥轮换（--old-secret）
 
-加密列一律派生自**当前** MEDPLAT_SECRET。换钥后存量密文用旧钥加密，读取
-虽有 secret_previous 回退（见 app/pii.py），但检索索引没有多口径——换钥后
-应**立即**重跑本脚本并带 ``--old-secret <旧值>``：旧钥密文解开、当前钥重加密、
-索引按当前钥重算；宽限期结束即可清掉 MEDPLAT_SECRET_PREVIOUS。
+加密列一律派生自**当前** MEDPLAT_SECRET。换钥后存量密文用旧钥加密、索引按旧钥算，
+宽限期内读取与等值检索都有 secret_previous 回退（见 app/pii.py 的 `decrypt_pii` 与
+`_index_candidates`），但那只是安全网：写入侧只用当前钥，清掉 MEDPLAT_SECRET_PREVIOUS
+之后旧钥密文解不开、旧钥索引也对不上（患者清单 500、按证件号查不到、同证件号重复建档，
+P2-1803）。所以换钥后应**立即**重跑本脚本并带 ``--old-secret <旧值>``：旧钥密文解开、
+当前钥重加密、索引按当前钥重算；确认失败 0 行（再跑一遍应是改写 0 行）之后才清掉
+MEDPLAT_SECRET_PREVIOUS——运维手册第九节轮换步骤的第 4 步。
 
 ## 检索索引重建（--rebuild-index）
 
