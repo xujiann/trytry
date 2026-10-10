@@ -60,6 +60,18 @@ def test_编码字典只画最后切的那一个():
     _guarded(body, "dictSeq", "await api(`/api/dictionaries/")
 
 
+def test_调阅授权清单只画最后一次查的_授权与撤销后的重画也只认最后一次():
+    """P2-1791（第五十三批扫描 AQ2-3）；node 跑一遍见 test_archive_authorization_list_latest_patient.py。"""
+    src = _src("core.js")
+    src = src[src.index("async function renderPatients("):]
+    body = _after(src, "const drawAuths = async (pid) => {")
+    _guarded(body, "authSeq", "await api(`/api/patients/${pid}/authorizations`)")
+    assert "if (seq === authSeq) throw err;" in body[body.index("catch (err) {"):]   # 过期的出错不往上抛、不写消息行
+    for handler in ('$("#auth-grant-form").onsubmit', '$("#page-body").onclick'):   # 授权、撤销
+        redraw = _after(src, handler, 1400)
+        assert "const seq = authSeq;" in redraw and "if (seq === authSeq) await drawAuths(pid);" in redraw, handler
+
+
 def test_居民端号源与价格公示只画最后一次查的():
     src = _src("m/m.js")
     _guarded(_after(src, "const drawSlots = async () => {"), "slotSeq", "await authApi(`/api/portal/me/slots")

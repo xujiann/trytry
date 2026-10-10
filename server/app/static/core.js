@@ -1568,11 +1568,24 @@ async function renderPatients() {
   };
   const SCOPES = { all: "全部档案", encounter: "就诊记录", exam: "检查报告" };
   // 先清空（P2-1010）：原先换了患者号查不到（查无此人 404），原因写出来了，上一位的授权清单连同「撤销」按钮还挂着——
-  // 按钮上是上一位的患者号，点撤销撤的是上一位的授权。被授权机构印名称（P2-1727，后端随清单行带出）：原先只印编号
+  // 按钮上是上一位的患者号，点撤销撤的是上一位的授权。被授权机构印名称（P2-1727，后端随清单行带出）：原先只印编号。
+  // 只画最后一次查的那一位、清单头写是谁（P2-1791，同 P2-1012）：回包晚到是同一个危险——先查甲、立刻改查乙，甲的回包晚到，
+  // 乙的号下挂着甲的授权、「撤销」挂甲的患者号；出错的回包同样只认最后一次的。清单接口不带姓名，只写编号；行记下来给撤销
+  // 确认框写明是哪家机构的授权
+  let authSeq = 0;
+  let authRows = {};
   const drawAuths = async (pid) => {
+    const seq = ++authSeq;
     $("#auth-table").innerHTML = "";
-    const auths = await api(`/api/patients/${pid}/authorizations`);
-    $("#auth-table").innerHTML = table(["ID", "被授权机构", "范围", "有效期至", "状态", "操作"], auths, (a) =>
+    let auths;
+    try { auths = await api(`/api/patients/${pid}/authorizations`); }
+    catch (err) {
+      if (seq === authSeq) throw err;
+      return;
+    }
+    if (seq !== authSeq) return;
+    authRows = Object.fromEntries(auths.map((a) => [String(a.id), a]));
+    $("#auth-table").innerHTML = `<p class="desc">患者 ${esc(pid)} 的调阅授权：</p>` + table(["ID", "被授权机构", "范围", "有效期至", "状态", "操作"], auths, (a) =>
       `<tr><td>${a.id}</td><td>${esc(a.grantee_org_name) || a.grantee_org_id}</td><td>${SCOPES[a.scope] || esc(a.scope)}</td><td>${esc(a.expire_date)}</td>
        <td><span class="tag ${a.effective ? "green" : "red"}">${esc(a.status_name)}</span></td>
        <td>${a.effective ? `<button class="btn danger" data-revoke="${a.id}" data-pid="${pid}">撤销</button>` : "—"}</td></tr>`);
@@ -1582,10 +1595,13 @@ async function renderPatients() {
     const body = formJson(e.target, ["patient_id", "grantee_org_id"]);
     const pid = body.patient_id;
     delete body.patient_id;
+    // 授权在途时又查了别人：登记成功后不再重画这一位、盖掉后查的那份，回执写明是给谁登记的（P2-1791）——原先授权成功后的
+    // drawAuths 一定排在后查的那次之后落地，不用任何乱序就把乙的清单换成甲的
+    const seq = authSeq;
     try {
       await api(`/api/patients/${pid}/authorizations`, { method: "POST", body: JSON.stringify(body) });
-      setMsg("#auth-msg", "授权已登记");
-      await drawAuths(pid);
+      setMsg("#auth-msg", `授权已登记（患者 ${pid}）`);
+      if (seq === authSeq) await drawAuths(pid);
     } catch (err) { setMsg("#auth-msg", err.message, false); }
   };
   $("#auth-list-form").onsubmit = async (e) => {
@@ -1604,12 +1620,17 @@ async function renderPatients() {
   $("#page-body").onclick = async (e) => {
     const { revoke, pid } = e.target.dataset;
     if (!revoke) return;
-    // P2-43：原先点一下就生效；撤销后要恢复，得患者本人再来办一次授权
+    const a = authRows[revoke] || {};
+    // P2-43：原先点一下就生效；撤销后要恢复，得患者本人再来办一次授权。写明撤的是哪位患者授予哪家机构的（P2-1791，
+    // 同 P2-1774）：原先框里只写后果，清单被别人的回包盖掉了也看不出来
     if (!await spdModal("撤销调阅授权", [], {
-      intro: "撤销后该机构不能再凭此授权调阅患者档案；如需恢复，须患者本人重新办理授权。" })) return;
+      intro: `撤销患者 ${pid} 授予「${a.grantee_org_name || a.grantee_org_id || "—"}」的调阅授权`
+        + `（${SCOPES[a.scope] || a.scope || "—"}，记录 ${revoke}）。`
+        + "撤销后该机构不能再凭此授权调阅患者档案；如需恢复，须患者本人重新办理授权。" })) return;
+    const seq = authSeq;   // 撤销在途时又查了别人：同授权，不再重画这一位（P2-1791）
     try {
       await api(`/api/patients/${pid}/authorizations/${revoke}/revoke`, { method: "POST" });
-      await drawAuths(pid);
+      if (seq === authSeq) await drawAuths(pid);
     } catch (err) { setMsg("#auth-msg", err.message, false); }
   };
   $("#patient-form").onsubmit = async (e) => {
