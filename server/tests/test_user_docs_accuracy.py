@@ -76,3 +76,16 @@ def test_用户手册的导航分组与页签照页面源码():
     table = chapter[chapter.index("| 标签页 |"):].split("\n\n", 1)[0].splitlines()[2:]
     rows = [row.split("|")[1].strip() for row in table]
     assert rows == resident, f"手册居民端页签表与页面不一致：{rows}；页面上是 {resident}"
+
+
+def test_审方规则库批量导入写的是JSON():
+    """P2-1813（第五十三批扫描 AQ4-13）：用户手册管理员一章写审方规则库是「CSV 批量导入」，页面「批量导入」框只收 JSON 数组
+    （core.js 的 `ruleimp-form` 先 `JSON.parse`），照手册贴 CSV 报「JSON 解析失败」；接口 `POST /api/prescriptions/rules/import`
+    收的也是规则对象数组、同 drug_code 整条覆盖。前提一并钉住：页面确实按 JSON 解析——日后页面改收 CSV，这条先红，手册跟着改。"""
+    core = (STATIC / "core.js").read_text(encoding="utf-8")
+    handler = core[core.index('$("#ruleimp-form")'):]
+    handler = handler[:handler.index("/api/prescriptions/rules/import")]
+    assert "JSON.parse(" in handler, "前提：审方规则批量导入按 JSON 解析"
+    row = next(line for line in MANUAL.splitlines() if line.startswith("| 集中审方-规则库 |"))
+    assert "CSV" not in row, f"手册还写审方规则库按 CSV 导入：{row}"
+    assert "JSON" in row and "整条覆盖" in row, row
