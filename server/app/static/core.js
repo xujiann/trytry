@@ -1858,8 +1858,15 @@ async function renderExams() {
     try { await drawAttachments("exam_report", new FormData(e.target).get("report_id"), "#exam-att-list", "#exam-att-msg"); }
     catch (err) { setMsg("#exam-att-msg", err.message, false); }
   };
+  // 「提交申请」：取互认预检期间与互认框开着时为真（P2-1793，见提交处理）
+  let examSubmitting = false;
   $("#exam-form").onsubmit = async (e) => {
     e.preventDefault();
+    // 取预检期间与互认框开着时不再开第二张框、框头写上患者号（P2-1793，同慢专病执行随访）：原先取回预检才开框，连点两下
+    // 「提交申请」（或点完改了患者号再点）叠出两张一模一样的「可互认」框、框里不写患者——互认 / 不互认落到哪一位分不清；
+    // 预检说不可互认的直接建单，连点两下同样建出两张单
+    if (examSubmitting) return;
+    examSubmitting = true;
     const f = new FormData(e.target);
     const patientId = Number(f.get("patient_id")), itemCode = f.get("item_code");
     try {
@@ -1883,7 +1890,7 @@ async function renderExams() {
         const critical = check.critical
           ? `⚠ 该结果为危急值（当前状态：${(CRIT_STATUS[check.critical_status || ""] || [check.critical_status])[0]}），`
             + "请先核对危急值处置情况，默认不互认\n" : "";
-        const ok = await spdModal("可互认：30 天内已有同项目报告", [
+        const ok = await spdModal(`可互认：30 天内已有同项目报告（患者 ${patientId}）`, [
           { name: "decision", label: "处理方式", type: "select", value: check.critical ? "decline" : "accept", options: [
             { value: "accept", label: "互认该结果，不再重复检查" },
             { value: "decline", label: "不互认，仍开新检查" }] },
@@ -1902,6 +1909,7 @@ async function renderExams() {
       route();
       pollTodos();
     } catch (err) { setMsg("#exam-msg", err.message, false); }
+    finally { examSubmitting = false; }
   };
   const drawRevisions = async (reportId) => {
     const rows = await api(`/api/exams/reports/${reportId}/revisions`);

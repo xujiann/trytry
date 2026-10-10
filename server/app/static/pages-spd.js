@@ -1794,24 +1794,33 @@ async function renderSpdPatients() {
          // 只有迁入机构能确认（P2-829）：`can_confirm` 与确认接口同一判据现算，原先别家的待确认也画按钮、点了 403
          : v.can_confirm ? `<button class="btn secondary" data-confirm="${v.id}">确认迁入</button>` : "待迁入机构确认"}</td></tr>`);
   };
+  // 「登记筛查」选了量表：取量表期间与作答框开着时为真（P2-1793，见提交处理）
+  let screenOpening = false;
   $("#spd-screen-form").onsubmit = async (e) => {
     e.preventDefault();
     const body = formJson(e.target, ["patient_id"]);
     // 选了量表就逐题作答（P1-136）：原先只送量表编码、不送作答，量表评分恒 0、风险恒「低危」——「量表评分与病种规则
     // 双通道判定」里量表这一条从界面上判不出任何人。没答的题不交（按 0 分、不算已答），与执行随访同一套写法
     if (body.scale_code) {
-      const brief = spdLatestScales(catalog.scales).find((x) => x.code === body.scale_code);
-      let scale;
-      try { scale = await api(`/api/spd/scales/${brief.id}`); }
-      catch (err) { return setMsg("#spd-screen-msg", err.message, false); }
-      // 带上作答的那一版（P2-921）：页面打开后发布了新版，后端按编码取新版评分、结论对不上题目，带上后改为 409 请刷新
-      body.scale_id = scale.id;
-      // 框自己提交（P2-1091，同执行随访的逐题作答 P2-607）：原先点确定就关框、答完才发请求——患者号敲错 403、量表改版
-      // 409，一整套作答随框一起没了。失败留框、报错写在框里、答的都在
-      const done = await spdModal(`${scale.name} · 逐题作答（没答的题留空）`, spdQuestionFields(scale.items, "q_"), {
-        submit: (picked) => api("/api/spd/screenings", { method: "POST", body: JSON.stringify({
-          ...body, answers: spdCollectAnswers(scale.items, picked, "q_") }) }) });
-      if (done) route();
+      // 取量表期间与作答框开着时不再开第二张框、框头写上患者号（P2-1793，同执行随访）：原先取回量表才开框，连点两下
+      // 「登记筛查」（或点完改了患者号再点）叠出两张一模一样的框、框头只有量表名——交上面那张记到的未必是以为的那位
+      if (screenOpening) return;
+      screenOpening = true;
+      try {
+        const brief = spdLatestScales(catalog.scales).find((x) => x.code === body.scale_code);
+        let scale;
+        try { scale = await api(`/api/spd/scales/${brief.id}`); }
+        catch (err) { return setMsg("#spd-screen-msg", err.message, false); }
+        // 带上作答的那一版（P2-921）：页面打开后发布了新版，后端按编码取新版评分、结论对不上题目，带上后改为 409 请刷新
+        body.scale_id = scale.id;
+        // 框自己提交（P2-1091，同执行随访的逐题作答 P2-607）：原先点确定就关框、答完才发请求——患者号敲错 403、量表改版
+        // 409，一整套作答随框一起没了。失败留框、报错写在框里、答的都在
+        const done = await spdModal(`${scale.name} · 患者 ${body.patient_id} · 逐题作答（没答的题留空）`,
+          spdQuestionFields(scale.items, "q_"), {
+            submit: (picked) => api("/api/spd/screenings", { method: "POST", body: JSON.stringify({
+              ...body, answers: spdCollectAnswers(scale.items, picked, "q_") }) }) });
+        if (done) route();
+      } finally { screenOpening = false; }
       return;
     }
     return postAction("/api/spd/screenings", body, "#spd-screen-msg");
@@ -3528,6 +3537,8 @@ async function renderSpdFollowup() {
       setMsg("#spd-cal-msg", "");
     } catch (err) { setMsg("#spd-cal-msg", err.message, false); }
   };
+  // 「执行」取前置资料期间与执行框开着时为真（P2-1793，见下面 exec 一支）
+  let fuExecOpening = false;
   $("#page-body").onclick = async (e) => {
     const el = (attr) => e.target.closest(`[${attr}]`);
     const exec = el("data-fu-exec"), call = el("data-fu-call"), ctx = el("data-fu-ctx"), adjust = el("data-fu-adjust");
@@ -3644,28 +3655,39 @@ async function renderSpdFollowup() {
     }
     if (exec) {
       // 逐题作答（P1-122）：原先只填渠道与结果、answers 恒为空，问卷的异常分级从界面上永远不触发。
-      // 问卷取这条记录的前置资料——按记录上的问卷编码查，停用的问卷也在（问卷目录只列在用的）
-      let quest = null;
+      // 问卷取这条记录的前置资料——按记录上的问卷编码查，停用的问卷也在（问卷目录只列在用的）。
+      // 取数期间与框开着时不再开第二张框、框头写明是谁的哪一条（P2-1793）：原先取回前置资料才开框，取数在途时清单照样能点——
+      // 连点两行的「执行」叠出两张一模一样的框（框头只写问卷名），交上面那张以为是乙，写进的却是甲的随访记录。入口记一个
+      // 「开框中」、框关了才放下（框开着时遮罩挡住清单，键盘 Tab 到清单的按钮上也不再叠）；不改成先开框、取回再填题——
+      // spdModal 的字段开框时就定了，这一条有哪些题要等前置资料回来才知道
+      if (fuExecOpening) return;
+      fuExecOpening = true;
       try {
-        quest = (await api(`/api/spd/followup-records/${exec.dataset.fuExec}/context`)).questionnaire;
-      } catch (err) { return setMsg("#spd-fu-msg", err.message, false); }
-      const items = quest ? quest.items || [] : [];
-      const ok = await spdModal(quest ? `执行随访 · ${quest.name}` : "执行随访", [
-        { name: "channel", label: "随访渠道", type: "select", value: "phone",
-          options: [{ value: "phone", label: "电话" }, { value: "wechat", label: "微信" },
-                    { value: "sms", label: "短信" }, { value: "visit", label: "面访" }] },
-        // 失访单独一个状态（P2-854，后端 `unreachable` 早就收）：原先打不通也只能记成「已完成」，完成率被算高——
-        // 分母含失访、分子不含。记失访时问卷不看
-        { name: "outcome", label: "联系结果", type: "select", value: "done",
-          options: [{ value: "done", label: "已联系上，完成随访" },
-                    { value: "unreachable", label: "未联系上（记失访，不计完成）" }] },
-        ...spdQuestionFields(items, "q_", { checks: true }),   // 多选题用复选框（P2-1636）
-        { name: "result", label: "随访结果", type: "textarea" },
-      ], { submit: (form) => api(`/api/spd/followup-records/${exec.dataset.fuExec}/execute`, { method: "POST",
-        body: JSON.stringify({ channel: form.channel || "phone", result: form.result,
-                               answers: spdCollectAnswers(items, form, "q_"),
-                               unreachable: form.outcome === "unreachable" }) }) });
-      if (ok) route();
+        let c;
+        try { c = await api(`/api/spd/followup-records/${exec.dataset.fuExec}/context`); }
+        catch (err) { return setMsg("#spd-fu-msg", err.message, false); }
+        const quest = c.questionnaire, rec = c.record;
+        const items = quest ? quest.items || [] : [];
+        // 框头写「姓名 · 记录号 · 计划日」（前置资料自带患者，取不到档案的写患者号）；问卷名挪到框头下的说明里
+        const who = c.patient ? c.patient.name : `患者 ${rec.patient_id}`;
+        const ok = await spdModal(`执行随访 · ${who} · 记录 #${rec.id} · 计划 ${rec.planned_at}`, [
+          { name: "channel", label: "随访渠道", type: "select", value: "phone",
+            options: [{ value: "phone", label: "电话" }, { value: "wechat", label: "微信" },
+                      { value: "sms", label: "短信" }, { value: "visit", label: "面访" }] },
+          // 失访单独一个状态（P2-854，后端 `unreachable` 早就收）：原先打不通也只能记成「已完成」，完成率被算高——
+          // 分母含失访、分子不含。记失访时问卷不看
+          { name: "outcome", label: "联系结果", type: "select", value: "done",
+            options: [{ value: "done", label: "已联系上，完成随访" },
+                      { value: "unreachable", label: "未联系上（记失访，不计完成）" }] },
+          ...spdQuestionFields(items, "q_", { checks: true }),   // 多选题用复选框（P2-1636）
+          { name: "result", label: "随访结果", type: "textarea" },
+        ], { intro: quest ? `问卷：${quest.name}` : "",
+          submit: (form) => api(`/api/spd/followup-records/${exec.dataset.fuExec}/execute`, { method: "POST",
+            body: JSON.stringify({ channel: form.channel || "phone", result: form.result,
+                                   answers: spdCollectAnswers(items, form, "q_"),
+                                   unreachable: form.outcome === "unreachable" }) }) });
+        if (ok) route();
+      } finally { fuExecOpening = false; }
       return;
     }
     if (call) {
@@ -4083,30 +4105,39 @@ async function renderSpdMember() {
         `<tr><td>${esc(p.label)}</td><td>${p.avg}</td><td>${p.min}</td>
          <td>${p.max}</td><td>${p.count}</td></tr>`)}`;
   };
+  // 「开展评估」：取量表期间与作答框开着时为真（P2-1793，见提交处理）
+  let assessOpening = false;
   $("#spd-assess-form").onsubmit = async (e) => {
     e.preventDefault();
-    const picked = formJson(e.target, ["patient_id", "scale_id"]);
-    let scale;   // 量表取不到要说出来（P2-378）：原先 api() 抛错没人接，点了没反应
-    try { scale = await api(`/api/spd/scales/${picked.scale_id}`); }
-    catch (err) { return setMsg("#spd-assess-msg", err.message, false); }
-    /* 逐题作答与执行随访同一套写法（P1-136）：单选默认「（未答）」、数值题用文本框、没答的题不交。原先单选默认选中
-     * 第一个选项、数值题空着读成 0——没答的题被当成答了「是」（种子量表里分值高的那个），评估结论回写档案风险等级，
-     * 高危还自动派干预与复诊。选项 value 用 label 本身——score_scale 就是按 label 查分值表的。 */
-    const fields = spdQuestionFields(scale.items, "q_");
-    if (!fields.length) return setMsg("#spd-assess-msg", "该量表没有题目，先去量表配置补齐", false);
-    // 框自己提交（P2-1091，与筛查同一句）：原先答完点确定就关框、再发请求——选了别家患者 403、量表改版 409，作答随框没了
-    const r = await spdModal(`${scale.name} · 逐题作答（没答的题留空）`, fields, {
-      // 带上作答的那一版（P2-921）：与筛查同一句。病种（P1-252）：留空随量表、量表也通用的按在管档案推断
-      submit: (answersRaw) => api("/api/spd/assessments", { method: "POST", body: JSON.stringify({
-        patient_id: picked.patient_id, scale_code: scale.code, scale_id: scale.id, program_code: picked.program_code,
-        answers: spdCollectAnswers(scale.items, answersRaw, "q_") }) }) });
-    if (!r) return;
-    /* 不调 route() 刷新整页——那会把这条结果消息一并刷掉。
-     * 统计卡片下次进入页面自然更新，当下要紧的是让操作者看到评估结论。
-     * 推不出病种、没回写档案的，后端回执带 `writeback_note`（P1-252），跟在结论后面说出来 */
-    setMsg("#spd-assess-msg",
-      `评估完成：${r.score} 分，风险等级 ${SPD_RISK[r.risk_level]?.[0] || r.risk_level || "未分级"}。${r.advice || ""}`
-      + (r.writeback_note ? `（${r.writeback_note}）` : ""));
+    // 取量表期间与作答框开着时不再开第二张框、框头写上患者号（P2-1793，同执行随访）：原先取回量表才开框，连点两下「开展评估」
+    // （或点完改了患者号再点）叠出两张一模一样的框、框头只有量表名——评估结论回写档案风险，高危还自动派干预与复诊，
+    // 交上面那张记到的未必是以为的那位
+    if (assessOpening) return;
+    assessOpening = true;
+    try {
+      const picked = formJson(e.target, ["patient_id", "scale_id"]);
+      let scale;   // 量表取不到要说出来（P2-378）：原先 api() 抛错没人接，点了没反应
+      try { scale = await api(`/api/spd/scales/${picked.scale_id}`); }
+      catch (err) { return setMsg("#spd-assess-msg", err.message, false); }
+      /* 逐题作答与执行随访同一套写法（P1-136）：单选默认「（未答）」、数值题用文本框、没答的题不交。原先单选默认选中
+       * 第一个选项、数值题空着读成 0——没答的题被当成答了「是」（种子量表里分值高的那个），评估结论回写档案风险等级，
+       * 高危还自动派干预与复诊。选项 value 用 label 本身——score_scale 就是按 label 查分值表的。 */
+      const fields = spdQuestionFields(scale.items, "q_");
+      if (!fields.length) return setMsg("#spd-assess-msg", "该量表没有题目，先去量表配置补齐", false);
+      // 框自己提交（P2-1091，与筛查同一句）：原先答完点确定就关框、再发请求——选了别家患者 403、量表改版 409，作答随框没了
+      const r = await spdModal(`${scale.name} · 患者 ${picked.patient_id} · 逐题作答（没答的题留空）`, fields, {
+        // 带上作答的那一版（P2-921）：与筛查同一句。病种（P1-252）：留空随量表、量表也通用的按在管档案推断
+        submit: (answersRaw) => api("/api/spd/assessments", { method: "POST", body: JSON.stringify({
+          patient_id: picked.patient_id, scale_code: scale.code, scale_id: scale.id, program_code: picked.program_code,
+          answers: spdCollectAnswers(scale.items, answersRaw, "q_") }) }) });
+      if (!r) return;
+      /* 不调 route() 刷新整页——那会把这条结果消息一并刷掉。
+       * 统计卡片下次进入页面自然更新，当下要紧的是让操作者看到评估结论。
+       * 推不出病种、没回写档案的，后端回执带 `writeback_note`（P1-252），跟在结论后面说出来 */
+      setMsg("#spd-assess-msg",
+        `评估完成：${r.score} 分，风险等级 ${SPD_RISK[r.risk_level]?.[0] || r.risk_level || "未分级"}。${r.advice || ""}`
+        + (r.writeback_note ? `（${r.writeback_note}）` : ""));
+    } finally { assessOpening = false; }
   };
   /* 评估记录（成员端 #8「查看评估对象、记录与统计结果」，P2-563）：原先这一块只有统计卡片，列表容器画了却从不填——
    * 评了谁、哪次评的、得几分，页面上一条也看不到。按患者 / 量表 / 风险等级 / 病种筛，截到上限时明说 */
