@@ -1605,22 +1605,29 @@ async function renderVaccination() {
     ${panel("接种史查询", `
       <form class="inline" id="vac-hist"><input name="patient_id" type="number" placeholder="患者ID" required><button>查询</button></form>
       <div id="vac-hist-result"></div>`)}`;
+  // 三块按患者号查的面板（评估、禁忌清单、接种史）连着改患者号只画最后一次的，结果写明是谁（P2-1790，与 AEFI 剂次下拉的
+  // P2-1012 同一种修法）：原先先查甲、立刻改查乙，甲的回包晚到就盖掉乙的——「可以接种，本次为第 N 剂」挂在乙的号下、「解除」
+  // 按钮挂甲的患者号，屏幕上不写是谁。出错的回包同样只认最后一次的。这几个接口都不带姓名，只写编号
+  let vacCheckSeq = 0;
   $("#vac-check").onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
+    const seq = ++vacCheckSeq;
+    const pid = f.get("patient_id");
     // 先清空、查不到把原因写出来（P2-378，与 P2-358 同一写法）：原先 api() 抛错没人接，上一次的结果照旧挂着——
     // 这里挂着的是上一位的「可以接种，本次为第 N 剂」，换了患者号查失败，看的人会当成这一位可以打
     $("#vac-check-result").innerHTML = "";
     let r;
     try {
-      r = await api(`/api/vaccination/pre-check?patient_id=${f.get("patient_id")}&vaccine_code=${encodeURIComponent(f.get("vaccine_code"))}`);
+      r = await api(`/api/vaccination/pre-check?patient_id=${pid}&vaccine_code=${encodeURIComponent(f.get("vaccine_code"))}`);
     } catch (err) {
-      $("#vac-check-result").innerHTML = `<p class="msg err">${esc(err.message)}</p>`;
+      if (seq === vacCheckSeq) $("#vac-check-result").innerHTML = `<p class="msg err">${esc(err.message)}</p>`;
       return;
     }
+    if (seq !== vacCheckSeq) return;
     $("#vac-check-result").innerHTML = r.allowed
-      ? `<p class="msg ok">可以接种，本次为第 ${r.next_dose_no} 剂</p>`
-      : `<p class="msg err">禁止接种：${esc(r.contraindications.join("；"))}</p>`;
+      ? `<p class="msg ok">患者 ${esc(pid)} 可以接种，本次为第 ${r.next_dose_no} 剂</p>`
+      : `<p class="msg err">患者 ${esc(pid)} 禁止接种：${esc(r.contraindications.join("；"))}</p>`;
   };
   // 批次要送（P1-154）：原先表单没有批次，接种登记的「批次三查」（过期 / 封存 / 库存）从界面上一次都不执行——
   // 封存的批次照样打、库存不扣，这一针也挂不到批号上，按批号召回与 AEFI 追踪都查不到这个孩子
@@ -1636,17 +1643,23 @@ async function renderVaccination() {
   };
   $("#contra-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/vaccination/contraindications", formJson(e.target, ["patient_id"]), "#vac-msg"); };
   // 先清空、查不到把原因写出来（P2-1009，与 P2-378 同一写法）：原先抛错没人接，换了患者号查失败（无权 403、打错号），
-  // 清单照旧挂着上一位的禁忌、「解除」按钮挂着上一位的患者号——点解除解的是上一位的长期禁忌，他的接种前评估随即放行
+  // 清单照旧挂着上一位的禁忌、「解除」按钮挂着上一位的患者号——点解除解的是上一位的长期禁忌，他的接种前评估随即放行。
+  // 回包晚到是同一个危险（P2-1790）：取序号，清单头写是谁；行记下来给解除确认框写明是哪一条
+  let contraSeq = 0;
+  let contraRows = {};
   const drawContras = async (pid) => {
+    const seq = ++contraSeq;
     $("#contra-result").innerHTML = "";
     let rows;
     try {
       rows = await api(`/api/vaccination/contraindications?patient_id=${pid}`);
     } catch (err) {
-      $("#contra-result").innerHTML = `<p class="msg err">${esc(err.message)}</p>`;
+      if (seq === contraSeq) $("#contra-result").innerHTML = `<p class="msg err">${esc(err.message)}</p>`;
       return;
     }
-    $("#contra-result").innerHTML = table(["疫苗", "原因", "类型", "有效期至", "当前", "操作"], rows, (r) =>
+    if (seq !== contraSeq) return;
+    contraRows = Object.fromEntries(rows.map((r) => [String(r.id), r]));
+    $("#contra-result").innerHTML = `<p class="desc">患者 ${esc(pid)} 的接种禁忌：</p>` + table(["疫苗", "原因", "类型", "有效期至", "当前", "操作"], rows, (r) =>
       `<tr><td>${esc(r.vaccine_code)}</td><td>${esc(r.reason)}</td>` +
       `<td>${r.contra_type === "temporary" ? "暂时" : "长期"}</td><td>${esc(r.valid_until || "—")}</td>` +
       `<td>${r.blocking ? '<span class="tag danger">拦截中</span>' : (r.status === "lifted" ? "已解除" : "已过期")}</td>` +
@@ -1655,29 +1668,38 @@ async function renderVaccination() {
   $("#contra-list").onsubmit = (e) => { e.preventDefault(); drawContras(new FormData(e.target).get("patient_id")); };
   $("#contra-result").onclick = async (e) => {
     const id = e.target.dataset.lift; if (!id) return;
-    // P2-38：弹窗换成页内表单（与本页其余录入一致）；解除后接种前评估不再拦截这一条
+    const pid = e.target.dataset.pid;
+    const c = contraRows[id] || {};
+    // P2-38：弹窗换成页内表单（与本页其余录入一致）；解除后接种前评估不再拦截这一条。框里写明是谁的哪条禁忌（P2-1790，
+    // 同 P2-1774）：原先只写后果，清单被别人的回包盖掉了也看不出来
     const form = await spdModal("解除接种禁忌", [
       { name: "lift_reason", label: "解除原因", required: true, placeholder: "如：体温已恢复正常" },
-    ], { intro: "解除后，接种前评估不再因这一条拦截。" });
+    ], { intro: `解除患者 ${pid} 的「${c.vaccine_code || "—"}」禁忌：${c.reason || "—"}（记录 ${id}）。`
+      + "解除后，接种前评估不再因这一条拦截。" });
     if (!form) return;
+    const seq = contraSeq;   // 解除在途时又查了别人：回来不再重画这一位、盖掉后查的那份（P2-1790）
     await postAction(`/api/vaccination/contraindications/${id}/lift`, { lift_reason: form.lift_reason }, "#vac-msg");
-    drawContras(e.target.dataset.pid);
+    if (seq === contraSeq) drawContras(pid);
   };
+  let vacHistSeq = 0;   // 只画最后一次查的、表头写是谁（P2-1790）：「上报 AEFI」按行上的患者号跳转
   $("#vac-hist").onsubmit = async (e) => {
     e.preventDefault();
+    const seq = ++vacHistSeq;
+    const pid = new FormData(e.target).get("patient_id");
     // 先清空、查不到把原因写出来（P2-378，与 P2-358 同一写法）：原先 api() 抛错没人接，上一次的结果照旧挂着
     $("#vac-hist-result").innerHTML = "";
     let records;
     try {
-      records = await api(`/api/vaccination/records?patient_id=${new FormData(e.target).get("patient_id")}`);
+      records = await api(`/api/vaccination/records?patient_id=${pid}`);
     } catch (err) {
-      $("#vac-hist-result").innerHTML = `<p class="msg err">${esc(err.message)}</p>`;
+      if (seq === vacHistSeq) $("#vac-hist-result").innerHTML = `<p class="msg err">${esc(err.message)}</p>`;
       return;
     }
+    if (seq !== vacHistSeq) return;
     // 记录号、批号印出来，每一剂可直接上报 AEFI（P2-1499）：原先记录号只藏在打印按钮的 data 属性里，AEFI 表单却要人手填
     // 「接种记录ID」——全站没有一处页面显示它，从界面上报的 AEFI 关联不到剂次、批号恒空（按批号查不到这一例，「发病不得早于
     // 接种」不拦，统计按上报机构归）
-    $("#vac-hist-result").innerHTML = table(["记录号", "疫苗", "剂次", "日期", "批号", "机构", "操作"], records, (r) =>
+    $("#vac-hist-result").innerHTML = `<p class="desc">患者 ${esc(pid)} 的接种史：</p>` + table(["记录号", "疫苗", "剂次", "日期", "批号", "机构", "操作"], records, (r) =>
       `<tr><td>${r.id}</td><td>${esc(r.vaccine_name)}</td><td>第${r.dose_no}剂</td><td>${esc(r.vaccinated_date)}</td>
        <td>${esc(r.batch_no || "—")}</td><td>${r.org_id}</td>
        <td><button class="btn secondary" data-print-vac="${r.id}">打印接种证明</button>

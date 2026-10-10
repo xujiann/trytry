@@ -39,6 +39,22 @@ def test_医嘱单只画最后点的那一次住院_标题写住院号():
     assert 'id="inp-orders-title"' in src
 
 
+def test_接种页三块按患者号查的面板只画最后一次查的_出错也只认最后一次():
+    """P2-1790（第五十三批扫描 AQ2-1）：接种前评估、禁忌清单、接种史；node 跑一遍见 test_vaccination_patient_panels_latest_wins.py。"""
+    src = _src("pages-clinical.js")
+    for marker, counter, call in (
+        ('$("#vac-check").onsubmit = async (e) => {', "vacCheckSeq", "await api(`/api/vaccination/pre-check?"),
+        ("const drawContras = async (pid) => {", "contraSeq", "await api(`/api/vaccination/contraindications?"),
+        ('$("#vac-hist").onsubmit = async (e) => {', "vacHistSeq", "await api(`/api/vaccination/records?"),
+    ):
+        body = _after(src, marker)
+        _guarded(body, counter, call)
+        catch = body[body.index("catch (err) {"):body.index(f"seq !== {counter}")]
+        assert f"if (seq === {counter})" in catch, f"出错那一支没比对序号：{counter}"
+    lift = _after(src, '$("#contra-result").onclick = async (e) => {')
+    assert "const seq = contraSeq;" in lift and "if (seq === contraSeq) drawContras(pid);" in lift   # 解除后的重画同样只认最后一次
+
+
 def test_编码字典只画最后切的那一个():
     body = _after(_src("core.js"), "const draw = async (system) => {")
     _guarded(body, "dictSeq", "await api(`/api/dictionaries/")
