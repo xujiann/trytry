@@ -5,6 +5,8 @@ P1-3 把这个兼容开关翻成默认关（`config.py`），手册 §2 的配�
 
 修法：手册与接口对接规范改成「默认关、过渡期显式置 true」；这条用例逐项比对手册配置表里每个 `Settings` 字段的缺省值与代码，
 以后谁改了缺省没改手册（或反过来）就红。不在 `Settings` 里的变量（直接读环境变量的几项）不比。
+
+反向（P2-1808，第五十三批扫描 AQ4-8）：`Settings` 的每个字段都要在表里有一行——只比对已列出的行，漏了整行看不见。
 """
 import re
 from pathlib import Path
@@ -41,3 +43,24 @@ def test_手册配置表的缺省值与代码一致():
                 mismatched.append(f"{var}：手册 {doc!r}，代码 {_code_default(field.default)!r}")
     assert compared >= 40, f"只比对到 {compared} 项，手册的配置表格式变了？"
     assert not mismatched, "\n".join(mismatched)   # 修前 MEDPLAT_PORTAL_LEGACY_VERIFY：手册 'true'，代码 'false'
+
+
+#: 有意不写进手册配置表的 `Settings` 字段 → 理由（P2-1808）。**只减不增**：上限 `UNDOCUMENTED_CAP` 只许往下调，
+#: 新加的配置项一律写进手册的配置表，不往这里加。
+UNDOCUMENTED_FIELDS: dict[str, str] = {}
+UNDOCUMENTED_CAP = 0
+
+
+def test_Settings每个字段都在手册配置表里():
+    """P2-1808（第五十三批扫描 AQ4-8）：手册配置表的标题写「与 config.py 逐字段对齐」，却漏了 4 个字段——附件病毒扫描
+    `MEDPLAT_CLAMD_ADDRESS`、审计链异机锚点 `MEDPLAT_AUDIT_ANCHOR_WEBHOOK_URL`（所有文档里 0 处，运维不知道能开；不配扫描时
+    附件标「未扫描」，之后配上也不补扫），两个告警变量只在第四节正文提了名、冷却缺省 600 秒没写。上面那条只比对表里已列出的行，
+    漏行它看不见。这里反过来查：`Settings` 的每个字段都要在表里有一行（豁免集写明理由、只减不增）。"""
+    in_table = {var for match in ROW.finditer(MANUAL) for var in filter(None, (match.group(1), match.group(2)))}
+    missing = sorted(var for name in Settings.model_fields
+                     if (var := f"MEDPLAT_{name.upper()}") not in in_table and name not in UNDOCUMENTED_FIELDS)
+    assert not missing, f"这些配置项手册配置表里没有（写一行，缺省值与说明照 config.py）：{missing}"
+    assert len(UNDOCUMENTED_FIELDS) <= UNDOCUMENTED_CAP, "豁免只减不增：新配置项写进手册配置表"
+    stale = sorted(name for name in UNDOCUMENTED_FIELDS
+                   if name not in Settings.model_fields or f"MEDPLAT_{name.upper()}" in in_table)
+    assert not stale, f"这些豁免已经不需要了（字段删了或已写进表），划掉：{stale}"
