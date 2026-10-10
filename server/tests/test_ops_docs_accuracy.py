@@ -1,9 +1,11 @@
-"""运维类文档（运维手册 / README / 发布流程）写的部署与运维步骤照做得通（第五十三批「手册与规范写的 vs 现行行为」扫描 AQ4）。
+"""运维与对接类文档（运维手册 / README / 发布流程 / 接口对接规范 …）写的步骤与口径照现行实现（第五十三批「手册与规范写的 vs
+现行行为」扫描 AQ4）。
 
-这些文档是运维照着敲的命令，写错了不报错，只在照做的那一天出事。每条用例的 docstring 写条目号、扫描编号与修前的现象；
-按纯文本扫文档，不起服务。
+这些文档是运维、对接方照着敲的命令与报文，写错了不报错，只在照做的那一天出事。每条用例的 docstring 写条目号、扫描编号与
+修前的现象；按纯文本扫文档、对照代码现取的口径，不起服务（补建唯一索引那条在临时 SQLite 上真跑迁移）。
 """
 import ast
+import inspect
 import os
 import re
 import shutil
@@ -17,6 +19,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SERVER = ROOT / "server"
 RUNBOOK = (ROOT / "docs" / "运维手册.md").read_text(encoding="utf-8")
 RELEASE = (ROOT / "docs" / "发布流程.md").read_text(encoding="utf-8")
+SPEC = (ROOT / "docs" / "接口对接规范.md").read_text(encoding="utf-8")
 README = (ROOT / "README.md").read_text(encoding="utf-8")
 COMPOSE = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
 
@@ -24,7 +27,8 @@ COMPOSE = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
 def _section(text: str, heading: str) -> str:
     """从以 `heading` 开头的标题行起、到下一个标题行（任意级）为止的一段。代码块里 `# ` 开头的是 shell 注释，不算标题。"""
     lines = text.splitlines()
-    start = next(i for i, line in enumerate(lines) if line.startswith(heading))
+    start = next((i for i, line in enumerate(lines) if line.startswith(heading)), None)
+    assert start is not None, f"文档里找不到以「{heading}」开头的标题"
     out, in_code = [lines[start]], False
     for line in lines[start + 1:]:
         if line.startswith("```"):
@@ -215,3 +219,31 @@ def test_手工补建唯一索引的SQL照抄能建出唯一索引(tmp_path):
             for statement in statements:
                 con.execute(statement)   # 修前这里报 OperationalError: index … already exists
         assert _unique_flag(copy, "spd_point_accounts", "ix_spd_point_accounts_user_id") == 1, f"{name} 的 SQL 没建出唯一索引"
+
+
+def test_对接规范列全对接适配层的接口与所需角色():
+    """P2-1809（第五十三批扫描 AQ4-9）：接口对接规范附录A 前言写「未列出的 GET 类接口仅要求登录」，对 `/api/integration/*`
+    不成立——角色守卫挂在整个路由器上（`require_roles("operator")`），GET 也在内：医师 `GET /api/integration/fhir/Patient/{ehc}`
+    403「需要以下角色之一：经办人员」，公卫推 FHIR Observation 403（同样的随访走 `/api/chronic/{id}/followups` 是 201）；
+    入站端点的路径、请求体、所需角色规范里一处没写。这里从 `integration.py` 的路由表现取：每个接口都在规范第六节出现，
+    路由器层守卫要的角色写在那一节，附录A 前言不再说 GET 只要登录。"""
+    from fastapi.routing import APIRoute
+
+    from app.deps import ROLE_NAMES
+    from app.routers import integration
+
+    section = _section(SPEC, "## 六、对接适配层")
+    routes = [route for route in integration.router.routes if isinstance(route, APIRoute)]
+    assert len(routes) >= 9, f"integration 路由表只取到 {len(routes)} 个接口，扫描对象变了？"
+    missing = sorted(f"{method} {route.path}" for route in routes for method in route.methods
+                     if f"`{method} {route.path}`" not in section)
+    assert not missing, f"对接规范第六节没写这些对接适配层接口：{missing}"
+    roles = [role for dep in integration.router.dependencies
+             for role in inspect.getclosurevars(dep.dependency).nonlocals.get("roles", ())]
+    assert roles, "integration 路由器上找不到角色守卫，扫描对象变了？"
+    required = re.search(r"^- \*\*所需角色\*\*.*?(?=^- |\Z)", section, re.M | re.S)
+    assert required, f"规范第六节没有「所需角色」一条：{section[:300]}"
+    unwritten = [role for role in roles if role not in required.group() or ROLE_NAMES[role] not in required.group()]
+    assert not unwritten, f"规范第六节「所需角色」没写对接适配层要的角色：{unwritten}"
+    preface = SPEC[SPEC.index("## 附录A"):].split("\n\n", 2)[1]
+    assert "仅要求登录" not in preface and "`/api/integration/*`" in preface, preface
