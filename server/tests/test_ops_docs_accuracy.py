@@ -247,3 +247,24 @@ def test_对接规范列全对接适配层的接口与所需角色():
     assert not unwritten, f"规范第六节「所需角色」没写对接适配层要的角色：{unwritten}"
     preface = SPEC[SPEC.index("## 附录A"):].split("\n\n", 2)[1]
     assert "仅要求登录" not in preface and "`/api/integration/*`" in preface, preface
+
+
+def test_对接规范写的debug_code回显条件与代码一致():
+    """P2-1810（第五十三批扫描 AQ4-10）：接口对接规范附录C 写 `debug_code`「仅当短信通道为 console 且 environment != prod
+    时回显」，少了 `MEDPLAT_SMS_DEBUG_ECHO`——`portal.py` 要三个条件同时满足（P0-4 只改了代码，规范没跟；README 与运维手册
+    已写三条件）。照规范只配两条去联调：`200 {'sent': True, …}`、没有 debug_code，console 通道的日志只打掩码号码，验证码
+    无处可取。这里从 `portal.py` 给 `debug_code` 赋值的那个 if 现取条件，规范那一条要写全：console、开关变量名、非生产。"""
+    from app.routers import portal
+
+    guard = next(node.test for node in ast.walk(ast.parse(inspect.getsource(portal))) if isinstance(node, ast.If)
+                 and any(isinstance(target, ast.Subscript) and isinstance(target.slice, ast.Constant)
+                         and target.slice.value == "debug_code"
+                         for stmt in node.body if isinstance(stmt, ast.Assign) for target in stmt.targets))
+    attrs = {node.attr for node in ast.walk(guard) if isinstance(node, ast.Attribute)}
+    consts = {node.value for node in ast.walk(guard) if isinstance(node, ast.Constant) and isinstance(node.value, str)}
+    assert {"sms_debug_echo", "is_production"} <= attrs and "console" in consts, ast.unparse(guard)
+    appendix = _section(SPEC, "### 附录C")
+    bullet = re.search(r"^- \*\*debug_code\*\*.*?(?=^- |\Z)", appendix, re.M | re.S)
+    assert bullet, "附录C 找不到 debug_code 那一条"
+    missing = [need for need in ("`console`", "MEDPLAT_SMS_DEBUG_ECHO", "prod") if need not in bullet.group()]
+    assert not missing, f"附录C 的 debug_code 回显条件少写了：{missing}"
