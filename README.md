@@ -215,7 +215,7 @@ docker compose exec app alembic current       # 只核对：结构迁移由容�
 ```
 
 别在宿主机的 `server/` 下跑 alembic 或 `scripts/backup.sh`：宿主机上没有容器里的连接串，db 也不对宿主机发布端口，
-迁移会落进一份新建的空 SQLite，备份打包的也是它。compose 档的备份方案待定，见 [docs/运维手册.md](docs/运维手册.md)
+迁移会落进一份新建的空 SQLite，备份打包的也是它。compose 档的备份方案待定（待裁定 P1-254），见 [docs/运维手册.md](docs/运维手册.md)
 第一、四节（P2-1802）。
 
 ### 生产环境安全硬化（必读）
