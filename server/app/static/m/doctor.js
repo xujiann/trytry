@@ -1153,7 +1153,10 @@ $("#round-note").addEventListener("submit", async (e) => {
     }
     setMsg("#round-msg", `病程已记录（${who}）`, true);
     await refreshRoundDetail();
-  } catch (err) { setMsg("#round-msg", err.message, false); }
+  } catch (err) {
+    // 没交上时同样写明是谁的（P2-1819）：已切到下一床时，原先这句报错写在下一位的区块上方、不说是谁，像是下一位的病程没交上
+    setMsg("#round-msg", roundAdmissionId === admissionId ? err.message : `病程没有记上（${who}）：${err.message}`, false);
+  }
 });
 
 $("#round-vital").addEventListener("submit", async (e) => {
@@ -1183,7 +1186,9 @@ $("#round-vital").addEventListener("submit", async (e) => {
     }
     setMsg("#round-vital-msg", `体征已录入（${who}）`, true);
     await refreshRoundDetail();
-  } catch (err) { setMsg("#round-vital-msg", err.message, false); }   // 体征表单自己的消息行（P2-1093）
+  } catch (err) {   // 体征表单自己的消息行（P2-1093）；已切到下一床时写明是谁的没录上（P2-1819，同上）
+    setMsg("#round-vital-msg", roundAdmissionId === admissionId ? err.message : `体征没有录上（${who}）：${err.message}`, false);
+  }
 });
 
 /* ---------------- 手术：排班与术中记录 ---------------- */

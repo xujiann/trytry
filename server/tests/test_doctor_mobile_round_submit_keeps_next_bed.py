@@ -42,6 +42,7 @@ const ADMISSIONS = [
 ];
 const SAVED = { notes: { 101: [], 102: [] }, vitals: { 101: [], 102: [] } };
 const HELD = new Map();
+const FAIL = new Map();   // 要失败的写请求 → 报错文案（P2-1819）
 function hold(key) { HELD.set(key, []); }
 function release(key) { const queue = HELD.get(key) || []; HELD.delete(key); queue.forEach((go) => go()); }
 function replyFor(method, path, body) {
@@ -60,6 +61,7 @@ async function api(path, options = {}) {
   if (method !== "GET") OUT.posts.push(`${method} ${path}`);
   const key = `${method} ${path}`;
   if (HELD.has(key)) await new Promise((go) => HELD.get(key).push(go));
+  if (FAIL.has(key)) throw new Error(FAIL.get(key));
   const data = JSON.parse(JSON.stringify(replyFor(method, path, body)));
   return options.withTotal ? { rows: data, total: data.length } : data;
 }
@@ -163,3 +165,54 @@ def test_提交在途切到下一床_下一位的输入留着_回执写明是哪
     assert out["notes"]["102"] == [{"note_type": "daily", "content": "乙：血压 168/102，加用氨氯地平"}], out["notes"]
     assert out["posts"] == ["POST /api/inpatient/admissions/101/vitals", "POST /api/inpatient/admissions/101/progress-notes",
                             "POST /api/inpatient/admissions/102/progress-notes"], out["posts"]
+
+
+FAIL_STEPS = r"""
+const pickBed = async (id) => { $("#round-adm").value = String(id); await $("#round-adm").listeners.change(); };
+await loadRound();                                   // 缺省选第一位：甲（住院 101）
+$("#round-note-type").value = "daily";
+
+// ① 体征：交甲的，回包前切到乙、开始录乙的；甲那次没交上
+$("#rv-at").value = "2026-10-09T08:00"; $("#rv-temp").value = "38.5";
+hold("POST /api/inpatient/admissions/101/vitals");
+FAIL.set("POST /api/inpatient/admissions/101/vitals", "请求失败(502)");
+const vitalA = $("#round-vital").listeners.submit({ preventDefault() {} });
+await flush();
+await pickBed(102);
+$("#rv-sbp").value = "168";
+release("POST /api/inpatient/admissions/101/vitals");
+await vitalA; await flush();
+const vital = { msg: $("#round-vital-msg").textContent, sbp: $("#rv-sbp").value };
+
+// ② 病程同形
+await pickBed(101);
+$("#round-content").value = "甲：体温 38.5℃，予物理降温";
+hold("POST /api/inpatient/admissions/101/progress-notes");
+FAIL.set("POST /api/inpatient/admissions/101/progress-notes", "请求失败(502)");
+const noteA = $("#round-note").listeners.submit({ preventDefault() {} });
+await flush();
+await pickBed(102);
+release("POST /api/inpatient/admissions/101/progress-notes");
+await noteA; await flush();
+const note = { msg: $("#round-msg").textContent };
+
+// ③ 不切人时没交上：照旧只写原因
+FAIL.set("POST /api/inpatient/admissions/102/vitals", "请求失败(503)");
+$("#rv-at").value = "2026-10-09T09:00";
+await $("#round-vital").listeners.submit({ preventDefault() {} });
+await flush();
+return { vital, note, same: { msg: $("#round-vital-msg").textContent } };
+"""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="没有 node 执行页面函数")
+def test_提交在途切到下一床_上一位没交上时报错写明是谁():
+    """P2-1819（第五十三批 P2-1798 修复回报旁见）：P2-1798 让提交在途切床后回执写明「病程已记录（病区 床号 姓名）」，可上一位
+    那次**没交上**时，报错照旧只有「请求失败(502)」、写在下一位的区块上方——医生会以为是眼前这一位的没交上，上一位的体征 / 病程
+    就这么漏了。修后已切走时报错写成「体征没有录上（病区 床号 姓名）：原因」；没切人时照旧只写原因。"""
+    done = subprocess.run(["node", "-e", _script(FAIL_STEPS)], capture_output=True, text=True, timeout=60)
+    assert done.returncode == 0, done.stderr
+    out = json.loads(done.stdout)
+    assert out["vital"] == {"msg": "体征没有录上（内科病区 3 王甲）：请求失败(502)", "sbp": "168"}, out   # 修前「请求失败(502)」
+    assert out["note"] == {"msg": "病程没有记上（内科病区 3 王甲）：请求失败(502)"}, out
+    assert out["same"] == {"msg": "请求失败(503)"}, out
