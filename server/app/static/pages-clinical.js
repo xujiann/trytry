@@ -4106,15 +4106,33 @@ async function renderQuality() {
         : '<p class="msg ok">无缺陷项，病历书写合规</p>'}`;
   };
   // 就诊号一填好就回显这次就诊是谁的（P2-1631）：病历按手输的就诊号挂，原先提交前后都只认得出号——敲错一位，张三的主诉、
-  // 现病史就成了李四那次就诊的病历。取门急诊完整性（按患者可见性判定并留痕），号又改了的旧回包不写
+  // 现病史就成了李四那次就诊的病历。取门急诊完整性（按患者可见性判定并留痕），号又改了的旧回包不写。
+  // 对上已有病历就把六项原文带进表单（P2-1792，照打印模板 P2-993「按现值预填」）：表单写着「再次提交为修正并复评」，原先
+  // 六个框照旧空着——只补一项再提交，其余五项照页面送空串、修正分支整行覆盖，五项被清空、质控当场降成丙级（既往史里的过敏史
+  // 随之消失）。已有病历按病历清单的就诊号筛选取，同样只认号没改过的回包。对不上（新病历）时表单照旧为空：框里是上一个号
+  // 带进来的原文就清掉，免得挂到这一次就诊名下；自己先敲的字不动
+  let mrLoaded = false;   // 六个框里是不是从已有病历带进来的原文
   $("#mr-form").encounter_id.onchange = async (e) => {
     const id = Number(e.target.value || 0);
     if (!id) { $("#mr-who").innerHTML = ""; return; }
+    const current = () => Number(e.target.value || 0) === id;
     let html;
     try {
       html = `就诊 #${esc(id)}：${encounterWho(await api(`/api/outpatient/encounters/${id}/completeness`))}`;
     } catch (err) { html = `<span class="msg err">就诊 #${esc(id)}：${esc(err.message)}</span>`; }
-    if (Number(e.target.value || 0) === id) $("#mr-who").innerHTML = html;
+    if (current()) $("#mr-who").innerHTML = html;
+    let record;
+    let failed = "";
+    try { [record] = await api(`/api/quality/records?encounter_id=${id}`); }
+    catch (err) { failed = err.message; }
+    if (!current()) return;
+    if (record || mrLoaded) {
+      const form = $("#mr-form");
+      MR_FIELDS.forEach(([key]) => { form[key].value = record ? record[key] || "" : ""; });
+      mrLoaded = Boolean(record);
+    }
+    setMsg("#mr-msg", failed ? `就诊 #${id} 的已有病历取不到：${failed}`
+      : record ? `就诊 #${id} 已有病历（记录 #${record.id}），原文已带进表单，改完提交即修正并复评` : "", !failed);
   };
   $("#mr-form").onsubmit = async (e) => {
     e.preventDefault();
