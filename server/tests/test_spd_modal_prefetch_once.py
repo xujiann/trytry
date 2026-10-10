@@ -157,3 +157,28 @@ def test_评估逐题作答_取量表期间再交不叠框_框头写患者号(cl
     assert out["left"] == 0 and out["assessments"] == [a], out
     assert out["msg"].startswith("评估完成：0 分"), out
     assert client.get(f"{B}/assessments", headers=admin, params={"patient_id": b}).json() == []
+
+
+def test_调整随访_框头写姓名记录号与计划日(client, admin, world):
+    """P2-1820（第五十三批 P2-1793 修复回报旁见）：P2-1793 之后执行框在取前置资料期间不叠第二张，可那段时间去点另一行的
+    「调整」（同步弹框）仍会叠出一张，而且「调整」框头原先只写「调整随访任务（留空的项不改）」，不写是哪位、哪一条（P2-1695
+    「框头写明对象」的规矩没覆盖到）。修后框头写「姓名 · 记录 #id · 计划日」，姓名取清单那一行的。这里点的是清单里真画出来的那颗
+    按钮（按钮上的 data-* 原样当点击对象），不是自己拼的。"""
+    # 已完成的那一行不给「调整」：取两条里还没执行的那一条（本文件前面的用例会执行掉王甲那条）
+    name, a = next((n, r) for n, r in world["records"].items() if _record(client, admin, r["id"])["status"] != "done")
+    out = run(client, admin, spd_page_js(), """
+      await renderSpdFollowup(); await idle();
+      const html = htmlOf("#spd-fu-list");
+      const btn = new RegExp(`<button[^>]*data-fu-adjust="${ARGS.params.a}"[^>]*>调整</button>`).exec(html);
+      if (!btn) return { missing: true };
+      const dataset = {};
+      for (const [, k, v] of btn[0].matchAll(/data-([\\w-]+)="([^"]*)"/g)) {
+        dataset[k.replace(/-([a-z])/g, (_, c) => c.toUpperCase())] = v;
+      }
+      click(dataset);
+      await idle();
+      const titles = openModals().map(titleOf);
+      await cancelModal(openModals()[0]);
+      return { titles };
+    """, params={"a": a["id"]})
+    assert out.get("titles") == [f"调整随访任务 · {name} · 记录 #{a['id']} · 计划 {a['planned_at']}（留空的项不改）"], out

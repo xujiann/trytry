@@ -3464,7 +3464,8 @@ async function renderSpdFollowup() {
        <td><button class="btn secondary" data-fu-ctx="${r.id}">前置资料</button>
            ${spdFollowupRowActions(r)}
            ${r.status !== "done" ? `<button class="btn secondary" data-fu-adjust="${r.id}" data-status="${esc(r.status)}"
-             data-planned="${esc(r.planned_at || "")}" data-channel="${esc(r.channel || "")}">调整</button>` : ""}</td></tr>`);
+             data-planned="${esc(r.planned_at || "")}" data-channel="${esc(r.channel || "")}"
+             data-name="${esc(r.patient_name || "")}">调整</button>` : ""}</td></tr>`);
   };
   $("#spd-furule-form").onsubmit = (e) => {
     e.preventDefault();
@@ -3609,7 +3610,10 @@ async function renderSpdFollowup() {
       return;
     }
     if (adjust) {
-      const form = await spdModal("调整随访任务（留空的项不改）", [
+      // 框头写明调的是哪一条（P2-1820，同执行框 P2-1793、框头写对象 P2-1695）：执行框取前置资料期间去点另一行的「调整」，
+      // 两张框叠在一起，原先这张只写「调整随访任务」，分不清是哪位、哪一条
+      const form = await spdModal(`调整随访任务 · ${adjust.dataset.name || "患者"} · 记录 #${adjust.dataset.fuAdjust}`
+        + ` · 计划 ${adjust.dataset.planned || "—"}（留空的项不改）`, [
         { name: "planned_at", label: "计划日期 YYYY-MM-DD", value: adjust.dataset.planned },
         { name: "executor_id", label: "执行人用户ID", type: "number" },
         { name: "channel", label: "渠道", type: "select", value: "",
