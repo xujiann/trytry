@@ -559,7 +559,15 @@ $("#family-form").addEventListener("submit", async (e) => {
   }
 });
 
+/* 档案区与附加区只画最后一次切换的那一位（P2-1797，同文件号源 slotSeq、价格 priceSeq、慢专病 spdSeq 的写法）：原先不比对
+ * 请求序号，点「母亲」又点回「本人」，母亲那次的档案晚到，盖在高亮的「本人」标签下，知情同意区也成了母亲的——这时签一项同意
+ * 记到本人名下，签完却按母亲的查询重画，看着像没签上。两块各取各的序号（附加区在签同意、提申请后会单独重画），过期的回包
+ * 丢弃、出错那一支同样；档案区头写这份档案是谁的（出参自带 name），不靠标签高亮去猜 */
+let archiveSeq = 0;
+let archiveExtraSeq = 0;
+
 async function loadArchive() {
+  const seq = ++archiveSeq;
   const box = $("#archive-result");
   box.innerHTML = '<p class="empty">加载中…</p>';
   const query = viewingPatientId === null ? "" : `?patient_id=${viewingPatientId}`;
@@ -586,6 +594,7 @@ async function loadArchive() {
     // 慢病 + 慢专病并成一份（ADR-0003 方案 B 的聚合接口），每条标来源——两套分级不是同一把尺子
     let feed = null;
     try { feed = await authApi(`/api/portal/me/enrollments/all${query}`); } catch (err) { feed = null; }
+    if (seq !== archiveSeq) return;   // 期间又切了人：这一批作废，附加区也由后一次去画
     const feedHtml = feed === null ? '<p class="empty">疾病管理档案暂时无法加载</p>'
       : feed.map((e) => `<div class="m-card">
         ${kv("病种", esc(e.program_name || e.program_code))}
@@ -597,6 +606,7 @@ async function loadArchive() {
         ${kv("下次随访", esc(e.next_followup_due || "待安排"))}
       </div>`).join("") || '<p class="empty">无疾病管理档案</p>';
     box.innerHTML = `
+      <div class="sec-title">健康档案：${esc(data.name)}</div>
       <div class="sec-title">慢病管理（${data.chronic_care.length}）</div>
       ${chronic || '<p class="empty">无慢病在管记录</p>'}
       <div class="sec-title">疾病管理档案 · 慢病 + 慢专病（${feed ? feed.length : "—"}）</div>
@@ -606,6 +616,7 @@ async function loadArchive() {
       <div class="sec-title">检查检验报告（${data.exam_reports.length}）</div>
       ${reports || '<p class="empty">无报告</p>'}`;
   } catch (err) {
+    if (seq !== archiveSeq) return;
     box.innerHTML = `<p class="empty">${esc(err.message)}</p>`;
   }
   await loadArchiveExtra(query);
@@ -621,8 +632,10 @@ const CORRECT_FIELD_NAMES = { name: "姓名", gender: "性别", birth_date: "出
 const CORRECTION_STATUS = { pending: ["待审核", "orange"], approved: ["已通过", "green"], rejected: ["已拒绝", "red"] };
 
 /* 知情同意与个人信息权利（个保法更正权 / 删除权，ADR-0010）：
- * 同意记录按被查看人（本人或代管成员）取；更正/注销申请按账户归集。 */
-async function loadArchiveExtra(query) {
+ * 同意记录按被查看人（本人或代管成员）取；更正/注销申请按账户归集。
+ * 不带参数时按当下查看的那位取（P2-1797）：签同意、提申请之后的重画走这一条，不沿用画这一块时的查询。 */
+async function loadArchiveExtra(query = viewingPatientId === null ? "" : `?patient_id=${viewingPatientId}`) {
+  const seq = ++archiveExtraSeq;
   const box = $("#archive-extra");
   let consents = null, corrections = null, views = null;
   try { consents = await authApi(`/api/portal/me/consents${query}`); } catch (err) { consents = null; }
@@ -631,6 +644,7 @@ async function loadArchiveExtra(query) {
   // 这条接口按**登录账户本人**绑定的档案取，不收 patient_id——代管家人时看到的
   // 仍是本人的记录，所以下面要把这句话明说，不能让人以为在看家人的。
   try { views = await authApi("/api/access-logs/mine?limit=50"); } catch (err) { views = null; }
+  if (seq !== archiveExtraSeq) return;   // 期间又切了人或又重画了：这一批作废（P2-1797）
   const changesText = (c) => {
     try {
       const o = JSON.parse(c.changes || "{}");
@@ -705,7 +719,9 @@ async function loadArchiveExtra(query) {
     if (viewingPatientId !== null) body.patient_id = viewingPatientId;
     try {
       await authApi("/api/portal/me/consents", { method: "POST", body: JSON.stringify(body) });
-      await loadArchiveExtra(query);
+      // 签署按当下查看的那位记，重画也按那位（P2-1797）：原先按画这一块时的查询重画，这一块若是切人时上一位晚到的，
+      // 签完重画的仍是上一位的清单
+      await loadArchiveExtra();
       setMsg("#consent-msg", "已签署", true);
     } catch (err) { setMsg("#consent-msg", err.message, false); }
   });
@@ -726,7 +742,7 @@ async function loadArchiveExtra(query) {
     if (viewingPatientId !== null) body.patient_id = viewingPatientId;
     try {
       await authApi("/api/portal/me/corrections", { method: "POST", body: JSON.stringify(body) });
-      await loadArchiveExtra(query);
+      await loadArchiveExtra();   // 同上（P2-1797）
       setMsg("#correction-msg", "申请已提交，审核结果会在这里更新", true);
     } catch (err) { setMsg("#correction-msg", err.message, false); }
   });
