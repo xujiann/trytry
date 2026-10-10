@@ -122,6 +122,23 @@ def test_回滚只回代码时跳过启动期迁移_降库先用新版再换旧�
     assert downgrade.index("用新版镜像") < downgrade.index("换旧镜像"), downgrade
 
 
+#: 按单 head 写的 alembic 命令：单数 head 的 stamp / upgrade（两个 head 下报 Multiple heads），不限定链的相对 downgrade
+_SINGLE_HEAD_COMMAND = re.compile(r"\balembic\s+(?:stamp|upgrade)\s+head\b|\balembic\s+downgrade\s+-\d")
+
+
+def test_alembic命令按平台链加spd链两个head写():
+    """P2-1806（第五十三批扫描 AQ4-6）：运维手册的 alembic 命令按单 head 写——第三节 `alembic downgrade -1`「回退一个版本」，
+    两条链时降哪条不定（实测降的是 spd 链 1b10d2f72426、删了 `spd_package_bindings.period_days`，这一版的平台迁移反而还在，
+    alembic 只给 UserWarning、exit 0）；1.4、第三节、FAQ 三处 `alembic stamp head` 直接报 Multiple heads、exit 255。发布流程
+    早写明 downgrade 按链、先看 heads。这里扫运维手册、发布流程与 README，单数 head 的 stamp / upgrade 与不限定链的相对
+    downgrade 出现即红（平台链写目标 revision，spd 链用 `spd@-1`）。"""
+    offenders = [f"{name}：{line.strip()}"
+                 for name, text in (("运维手册", RUNBOOK), ("发布流程", RELEASE), ("README", README))
+                 for line in text.splitlines() if _SINGLE_HEAD_COMMAND.search(line)]
+    assert not offenders, "这些 alembic 命令按单 head 写，两个 head 下照做会失败或降错链：\n" + "\n".join(offenders)
+    assert "alembic downgrade spd@-1" in RUNBOOK, "第三节要给出 spd 链的回退写法"
+
+
 DEDUP_MIGRATION = SERVER / "alembic" / "versions" / "e1a2b3c4d5e9_spd十八张表补唯一索引与去重.py"
 #: 补建唯一索引那几句里认的语句（核对用的 SELECT pg_indexes 是 PostgreSQL 的，不在 SQLite 上跑）
 _REBUILD_VERBS = ("BEGIN", "DROP", "CREATE", "COMMIT")
