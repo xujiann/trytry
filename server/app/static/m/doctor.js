@@ -983,6 +983,14 @@ const SURGERY_STATUS_NAMES = { requested: ["待审批", "orange"], approved: ["�
 
 // 当前查房对象；切换患者后各区块都跟着刷新
 let roundAdmissionId = 0;
+/** 在院清单（loadRound 取到的那一份）：病程、体征的回执按住院号写明是谁（P2-1798） */
+let roundAdmissions = [];
+
+/** 查房回执写明是谁（P2-1798）：与下拉选项同一句「病区 床号 姓名」（P2-1335），取得到什么写什么；清单里找不到时写住院号 */
+function roundWho(admissionId) {
+  const a = roundAdmissions.find((x) => x.id === admissionId);
+  return (a && [a.ward_name, a.bed_no, a.patient_name].filter(Boolean).join(" ")) || `住院号 ${admissionId}`;
+}
 
 async function loadRound() {
   const picker = $("#round-adm");
@@ -996,6 +1004,7 @@ async function loadRound() {
     $("#round-status").innerHTML = `<p class="empty">${esc(err.message)}</p>`;
     return;
   }
+  roundAdmissions = admissions;
   if (!admissions.length) {
     picker.innerHTML = "";
     $("#round-status").innerHTML = '<p class="empty">当前没有在院患者</p>';
@@ -1082,28 +1091,39 @@ $("#round-adm").addEventListener("change", async () => {
   await refreshRoundDetail();
 });
 
+// 提交时记下是谁、交了什么（P2-1798）：弱网下提交在途，医生已切到下一床、开始写下一位——原先回包一到就按「此刻」清空输入、
+// 写回执，下一位写了一半的被清空，「病程已记录 / 体征已录入」写在下一位的区块上方。现在请求发给提交那一刻的住院号；回包时还停在
+// 这一位才照旧清空输入，已切走的只清还是这次交上去原样的格子（下一位填过的留着，上一位没动过的不能跟着下一位交上去）；回执写明
+// 记在谁名下
 $("#round-note").addEventListener("submit", async (e) => {
   e.preventDefault();
+  const admissionId = roundAdmissionId, who = roundWho(admissionId);
+  const sent = { "#round-content": $("#round-content").value, "#round-at": $("#round-at").value };
   const body = { note_type: $("#round-note-type").value, content: $("#round-content").value.trim() };
   // 记录时间（P2-1767，同桌面病程表单）：补记的照实填；留空不送，后端按此刻。日期时间控件送 `T` 分隔，换成空格再送
   // （同下面体征的测量时刻，P1-100）
   const recordedAt = $("#round-at").value.trim().replace("T", " ");
   if (recordedAt) body.recorded_at = recordedAt;
   try {
-    await api(`/api/inpatient/admissions/${roundAdmissionId}/progress-notes`, {
+    await api(`/api/inpatient/admissions/${admissionId}/progress-notes`, {
       method: "POST",
       body: JSON.stringify(body),
     });
     // 记录时间一并清空（同体征录完清测量时刻，P1-231）：留着就成了下一条病程的记录时间
-    $("#round-content").value = "";
-    $("#round-at").value = "";
-    setMsg("#round-msg", "病程已记录", true);
+    if (roundAdmissionId === admissionId) {
+      $("#round-content").value = "";
+      $("#round-at").value = "";
+    } else {
+      Object.entries(sent).forEach(([s, v]) => { if ($(s).value === v) $(s).value = ""; });
+    }
+    setMsg("#round-msg", `病程已记录（${who}）`, true);
     await refreshRoundDetail();
   } catch (err) { setMsg("#round-msg", err.message, false); }
 });
 
 $("#round-vital").addEventListener("submit", async (e) => {
   e.preventDefault();
+  const admissionId = roundAdmissionId, who = roundWho(admissionId);   // 同上（P2-1798）
   // 未测项留空 → 不进 body，落库为 null；填 0 会污染趋势曲线
   // 日期时间控件送 `T` 分隔，换成空格再送：与桌面端、服务端默认的写法一致（P1-100）
   const body = { measured_at: $("#rv-at").value.trim().replace("T", " ") };
@@ -1114,13 +1134,19 @@ $("#round-vital").addEventListener("submit", async (e) => {
     const raw = $(sel).value.trim();
     if (raw !== "") body[field] = Number(raw);
   }
+  const sent = Object.fromEntries(["#rv-at", "#rv-temp", "#rv-pulse", "#rv-resp", "#rv-sbp", "#rv-dbp", "#rv-in", "#rv-out",
+    "#rv-weight"].map((s) => [s, $(s).value]));
   try {
-    await api(`/api/inpatient/admissions/${roundAdmissionId}/vitals`, {
+    await api(`/api/inpatient/admissions/${admissionId}/vitals`, {
       method: "POST", body: JSON.stringify(body) });
     // 测量时刻一并清空（P1-231）：原先只清数值，换人后下一位带着上一位的测量时刻
-    ["#rv-at", "#rv-temp", "#rv-pulse", "#rv-resp", "#rv-sbp", "#rv-dbp", "#rv-in", "#rv-out", "#rv-weight"]
-      .forEach((s) => { $(s).value = ""; });
-    setMsg("#round-vital-msg", "体征已录入", true);
+    if (roundAdmissionId === admissionId) {
+      ["#rv-at", "#rv-temp", "#rv-pulse", "#rv-resp", "#rv-sbp", "#rv-dbp", "#rv-in", "#rv-out", "#rv-weight"]
+        .forEach((s) => { $(s).value = ""; });
+    } else {
+      Object.entries(sent).forEach(([s, v]) => { if ($(s).value === v) $(s).value = ""; });
+    }
+    setMsg("#round-vital-msg", `体征已录入（${who}）`, true);
     await refreshRoundDetail();
   } catch (err) { setMsg("#round-vital-msg", err.message, false); }   // 体征表单自己的消息行（P2-1093）
 });

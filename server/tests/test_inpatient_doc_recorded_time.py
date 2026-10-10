@@ -149,6 +149,7 @@ async function api(path, options = {}) {
 }
 async function refreshRoundDetail() { REFRESHED += 1; }
 let roundAdmissionId = ARGS.aid;
+let roundAdmissions = [];   // 在院清单这里不取：回执按住院号写明是谁（P2-1798）
 """
 
 
@@ -158,6 +159,8 @@ def _mobile_submit(client, admin, aid: int, values: dict) -> dict:
     listener = DOCTOR_JS[start:DOCTOR_JS.index("\n});\n", start) + 5]
     set_msg = DOCTOR_JS[DOCTOR_JS.index("function setMsg("):]
     set_msg = set_msg[:set_msg.index("\n}\n") + 3]
+    who = DOCTOR_JS[DOCTOR_JS.index("function roundWho("):]
+    who = who[:who.index("\n}\n") + 3]
     run = ("(async () => {\n"
            "  for (const [sel, value] of Object.entries(ARGS.values)) $(sel).value = value;\n"
            '  await elements["#round-note"].listeners.submit({ preventDefault() {} });\n'
@@ -165,7 +168,7 @@ def _mobile_submit(client, admin, aid: int, values: dict) -> dict:
            '           msg: $("#round-msg").textContent, refreshed: REFRESHED };\n'
            "})().then((r) => { process.stdout.write(JSON.stringify({ result: r }) + '\\n'); rl.close(); },\n"
            "          (e) => { console.error(e); process.exit(1); });\n")
-    script = _MOBILE_HARNESS + (STATIC / "shared.js").read_text(encoding="utf-8") + "\n" + set_msg + listener + run
+    script = _MOBILE_HARNESS + (STATIC / "shared.js").read_text(encoding="utf-8") + "\n" + set_msg + who + listener + run
     proc = subprocess.Popen(["node", "-e", script, json.dumps({"aid": aid, "values": values}, ensure_ascii=False)],
                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     try:
@@ -188,7 +191,7 @@ def test_移动端查房病程填0210_读回0210_交完清空(client, admin, wor
     aid = world["mobile"]
     result = _mobile_submit(client, admin, aid, {
         "#round-note-type": "rescue", "#round-content": "P21767 查房补记：患者血压下降", "#round-at": "2026-10-09T02:10"})
-    assert result["msg"] == "病程已记录" and result["refreshed"] == 1, result
+    assert result["msg"] == f"病程已记录（住院号 {aid}）" and result["refreshed"] == 1, result   # 回执写明是谁（P2-1798）
     (_, _, body), = result["posts"]
     assert body == {"note_type": "rescue", "content": "P21767 查房补记：患者血压下降", "recorded_at": "2026-10-09 02:10"}
     assert result["at"] == "" and result["content"] == ""   # 记录时间连同内容清空，不留给下一条
