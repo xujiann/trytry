@@ -1932,24 +1932,35 @@ async function renderExams() {
     } catch (err) { setMsg("#exam-msg", err.message, false); }
     finally { examSubmitting = false; }
   };
+  // 修订史只画最后一次查的那份报告、表头写上报告号（P2-1795，P2-1012 同一种修法）：原先先查甲报告、立刻改查乙（或点了另一行的
+  // 「修订史」），甲那次响应晚到就把甲的修订记录画在乙的号下，修订表里不写是哪份报告。先清空、报错也只认最后一次——原先行上的
+  // 「修订史」查失败不清表，挂着的是上一份报告的修订
+  let revSeq = 0;
   const drawRevisions = async (reportId) => {
-    const rows = await api(`/api/exams/reports/${reportId}/revisions`);
-    $("#rev-box").innerHTML = table(["ID", "改前结论", "改前所见", "改前危急", "修订人", "理由", "时间"], rows, (r) =>
-      `<tr><td>${r.id}</td><td>${esc(r.prev_conclusion) || "—"}</td><td>${esc(r.prev_finding) || "—"}</td>
-       <td>${r.prev_critical ? '<span class="tag red">是</span>' : "否"}</td>
-       <td>${esc(r.revised_by) || "—"}</td><td>${esc(r.reason) || "—"}</td>
-       <td>${esc((r.at || "").replace("T", " ").slice(0, 19))}</td></tr>`);
+    const seq = ++revSeq;
+    $("#rev-box").innerHTML = "";
+    let rows;
+    try { rows = await api(`/api/exams/reports/${reportId}/revisions`); }
+    catch (err) {
+      if (seq === revSeq) setMsg("#rev-msg", err.message, false);
+      return;
+    }
+    if (seq !== revSeq) return;
+    setMsg("#rev-msg", "");
+    $("#rev-box").innerHTML = `<p class="desc">报告 ${esc(reportId)} 的修订史</p>`
+      + table(["ID", "改前结论", "改前所见", "改前危急", "修订人", "理由", "时间"], rows, (r) =>
+        `<tr><td>${r.id}</td><td>${esc(r.prev_conclusion) || "—"}</td><td>${esc(r.prev_finding) || "—"}</td>
+         <td>${r.prev_critical ? '<span class="tag red">是</span>' : "否"}</td>
+         <td>${esc(r.revised_by) || "—"}</td><td>${esc(r.reason) || "—"}</td>
+         <td>${esc((r.at || "").replace("T", " ").slice(0, 19))}</td></tr>`);
   };
   $("#tpl-form").onsubmit = (e) => {
     e.preventDefault();
     return postAction("/api/exams/templates", formJson(e.target), "#tpl-msg");
   };
-  $("#rev-form").onsubmit = async (e) => {
+  $("#rev-form").onsubmit = (e) => {
     e.preventDefault();
-    try {
-      await drawRevisions(new FormData(e.target).get("report_id"));
-      setMsg("#rev-msg", "");
-    } catch (err) { $("#rev-box").innerHTML = ""; setMsg("#rev-msg", err.message, false); }
+    return drawRevisions(new FormData(e.target).get("report_id"));   // 清空、报错、回执都由 drawRevisions 管（P2-1795）
   };
   $("#exam-print-form").onsubmit = async (e) => {
     e.preventDefault();
@@ -1963,11 +1974,7 @@ async function renderExams() {
       if (printreq) return await openPrintPage(`/api/print/exam-requests/${printreq}`);
       if (printreport) return await openPrintPage(`/api/print/exam-reports/${printreport}`);
       if (sample) { await api(`/api/exams/${sample}/sample/advance`, { method: "POST" }); route(); return; }
-      if (revs) {
-        try { await drawRevisions(revs); setMsg("#rev-msg", ""); }
-        catch (err) { setMsg("#rev-msg", err.message, false); }
-        return;
-      }
+      if (revs) return await drawRevisions(revs);
       if (amend) {
         // 框自己提交（P2-607）：修订理由写超了、结论只填了空格时报错写在框里、框不关，改好的结论与理由不用重填
         const r = await spdModal("修订报告（改前值会连同理由留痕）", [

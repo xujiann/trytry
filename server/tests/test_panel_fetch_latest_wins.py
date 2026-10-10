@@ -5,6 +5,11 @@
 常比按关键字的那次晚回来。`route()`（core.js）、`loadSpd()`（m.js）早已用序号修过同一个毛病。
 
 修法：取数前记下序号，回来时序号过期就丢弃；医嘱单标题写上住院号。端到端用例在 `tests/e2e/test_flows.py`。
+
+P2-1795（第五十三批扫描 AQ2-8）并进同一组：一批「按对象查、就地重画」的只读面板既没有序号也不写对象——成员端监测记录与
+看趋势、健康日历、新生儿筛查史、诊间医防提醒、危急值留痕、住院执行记录、共享诊断修订史、流程流转记录。先查甲再查乙，甲的
+回包晚到画在乙的号下（扫描实测：甲收缩压 182、乙 124，框里是乙、结果区成了 182）。逐处取序号（成功与出错两支都比对），
+面板头写对象（姓名或编号，取得到什么写什么）。成员端监测记录的 node 用例在 `test_spd_member_measure_latest_wins.py`。
 """
 from pathlib import Path
 
@@ -76,3 +81,84 @@ def test_居民端号源与价格公示只画最后一次查的():
     src = _src("m/m.js")
     _guarded(_after(src, "const drawSlots = async () => {"), "slotSeq", "await authApi(`/api/portal/me/slots")
     _guarded(_after(src, "async function loadPriceList("), "priceSeq", "await api(`/api/portal/price-list")
+
+
+# ---------------------------------------------------------------- P2-1795（第五十三批扫描 AQ2-8）
+def _block(src, marker, end="\n  };\n"):
+    start = src.index(marker)
+    return src[start:src.index(end, start)]
+
+
+def _guarded_both(body, counter, call):
+    """成功与出错两支都比对（P2-1795）：取序号在发请求前；出错那一支序号没过期才写原因，回来先比对、过期就丢。"""
+    _guarded(body, counter, call)
+    assert f"seq === {counter}" in body[body.index(call):], f"出错那一支没比对序号：{counter}"
+
+
+def test_成员端监测记录与看趋势只画最后一次查的那一位_结果区写患者号():
+    src = _src("pages-spd.js")
+    assert "let measSeq = 0;" in src   # 两处共用一块结果区，共用一个序号
+    query = _block(src, "const measQuery = async () => {")
+    _guarded_both(query, "measSeq", "await api(`/api/spd/measurements?")
+    assert "患者 ${esc(body.patient_id)} 的监测记录" in query
+    trend = _block(src, '$("#spd-meas-trend-btn").onclick = async () => {')
+    _guarded_both(trend, "measSeq", "await api(`/api/spd/measurements/trend?")
+    assert "患者 ${esc(body.patient_id)} · ${esc(body.metric)} 的趋势" in trend
+
+
+def test_健康日历只画最后一次查的那一位_日期前写患者号():
+    src = _src("pages-spd.js")
+    assert "let calSeq = 0;" in src
+    body = _block(src, '$("#spd-cal-form").onsubmit = async (e) => {')
+    _guarded_both(body, "calSeq", "await api(`/api/spd/health-calendar?")
+    assert "患者 ${esc(q.patient_id)} · ${esc(cal.day)}：" in body
+
+
+def test_新生儿筛查史只画最后一次点的那一位_标题写是谁():
+    src = _src("pages-clinical.js")
+    assert "let shistSeq = 0;" in src and '<h3 id="screen-title">新生儿筛查史</h3>' in src
+    body = _block(src, "if (d.shist) {", "\n    }\n")
+    _guarded_both(body, "shistSeq", "await api(`/api/maternal/children/")
+    assert '$("#screen-title").textContent = `新生儿筛查史 · ' in body
+    assert body.index('$("#screen-title").textContent') < body.index("await api(")   # 点下去就换标题、先清空
+
+
+def test_诊间医防提醒只画最后一次查的那一位_结果头写患者号():
+    src = _src("pages-clinical.js")
+    assert "let remSeq = 0;" in src
+    body = _block(src, '$("#rem-form").onsubmit = async (e) => {')
+    _guarded_both(body, "remSeq", "await api(`/api/publichealth/reminders/")
+    assert "患者 ${esc(r.patient_id)} 的诊间提醒" in body
+
+
+def test_危急值留痕只画最后一次点的那一条_标题写报告号():
+    src = _src("pages-clinical.js")
+    assert "let trailSeq = 0;" in src and '<h3 id="crit-trail-title">处置留痕轨迹</h3>' in src
+    body = _block(src, "if (trail) {", "\n      }\n")
+    _guarded_both(body, "trailSeq", "await api(`/api/exams/reports/")
+    assert '$("#crit-trail-title").textContent = `处置留痕轨迹 · 报告 ${trail}' in body
+
+
+def test_住院执行记录只画最后一次点的那一条医嘱_换住院也作废在途的():
+    src = _src("pages-clinical.js")
+    assert "let execSeq = 0;" in src
+    body = _block(src, "const drawExecutions = async (orderId) => {")
+    _guarded_both(body, "execSeq", "await api(`/api/inpatient/orders/")
+    assert "医嘱 ${esc(orderId)} 的执行记录" in body   # 标题本就写着医嘱号
+    assert "execSeq += 1;" in _after(src, "if (d.orders) {")   # 换一次住院，在途的执行记录作废
+
+
+def test_共享诊断修订史只画最后一次查的那份报告_表头写报告号():
+    src = _src("core.js")
+    assert "let revSeq = 0;" in src
+    body = _block(src, "const drawRevisions = async (reportId) => {")
+    _guarded_both(body, "revSeq", "await api(`/api/exams/reports/")
+    assert "报告 ${esc(reportId)} 的修订史" in body
+
+
+def test_流程流转记录只画最后一次点的那一个实例_标题写实例号():
+    src = _src("pages-mgmt.js")
+    assert "let historySeq = 0;" in src and '<h3 id="wf-history-title">流转记录</h3>' in src
+    body = _block(src, "else if (d.history) {", "\n      } else return;")
+    _guarded_both(body, "historySeq", "await api(`/api/workflows/instances/")
+    assert '$("#wf-history-title").textContent = `流转记录 · 实例 ${d.history}' in body

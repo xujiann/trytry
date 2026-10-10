@@ -1444,7 +1444,7 @@ async function renderMaternal() {
            <button class="btn secondary" data-screen="${c.id}">新筛登记</button>
            <button class="btn" data-shist="${c.id}">筛查史</button>
            <button class="btn ${hrIds.has(c.id) ? "" : "danger"}" data-hrtoggle="${c.id}" data-cur="${hrIds.has(c.id)}">${hrIds.has(c.id) ? "解除高危" : "标记高危"}</button></td></tr>`))}
-    <div class="panel hidden" id="screen-panel"><h3>新生儿筛查史</h3><div id="screen-list"></div></div>
+    <div class="panel hidden" id="screen-panel"><h3 id="screen-title">新生儿筛查史</h3><div id="screen-list"></div></div>
     ${panel("妇女保健记录（婚前/孕前/妇女病/避孕节育）", `
       <form class="inline" id="wh-form">
         <input name="patient_id" type="number" placeholder="患者ID" required>
@@ -1477,6 +1477,8 @@ async function renderMaternal() {
   };
   $("#child-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/maternal/children", formJson(e.target, ["guardian_patient_id"]), "#mat-msg"); };
   $("#wh-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/maternal/women-health", formJson(e.target, ["patient_id"]), "#mat-msg"); };
+  // 「筛查史」只画最后一次点的那一位（P2-1795，见下面 shist 一支）
+  let shistSeq = 0;
   $("#page-body").onclick = async (e) => {
     const d = e.target.dataset;
     // P2-38：原先是浏览器原生弹窗连问（访视三连、分娩四连、新筛输序号再加确认框），录不了多字段、
@@ -1547,14 +1549,24 @@ async function renderMaternal() {
       return;
     }
     if (d.shist) {
-      try {
-        const list = await api(`/api/maternal/children/${d.shist}/screenings`);
-        $("#screen-panel").classList.remove("hidden");
-        $("#screen-list").innerHTML = table(["ID", "项目", "结果", "日期", "备注"], list, (s) =>
-          `<tr><td>${s.id}</td><td>${SCREEN_ITEMS[s.item] || esc(s.item)}</td>
-           <td><span class="tag ${s.result === "abnormal" ? "red" : "green"}">${s.result === "abnormal" ? "异常" : "正常"}</span></td>
-           <td>${esc(s.screen_date) || "—"}</td><td>${esc(s.note) || "—"}</td></tr>`);
-      } catch (err) { setMsg("#mat-msg", err.message, false); }
+      // 只画最后一次点的那一位、标题写上是谁（P2-1795，P2-1012 同一种修法）：原先先点甲的「筛查史」、立刻改点乙，甲那次响应
+      // 晚到就把甲的筛查史画在面板里，标题只写「新生儿筛查史」。点下去就换标题、先清空，标题与表格总是同一位
+      const seq = ++shistSeq;
+      const child = children.find((c) => c.id === Number(d.shist));
+      $("#screen-title").textContent = `新生儿筛查史 · ${child ? child.name : "儿童"}（档案 ${d.shist}）`;
+      $("#screen-list").innerHTML = "";
+      let list;
+      try { list = await api(`/api/maternal/children/${d.shist}/screenings`); }
+      catch (err) {
+        if (seq === shistSeq) setMsg("#mat-msg", err.message, false);
+        return;
+      }
+      if (seq !== shistSeq) return;
+      $("#screen-panel").classList.remove("hidden");
+      $("#screen-list").innerHTML = table(["ID", "项目", "结果", "日期", "备注"], list, (s) =>
+        `<tr><td>${s.id}</td><td>${SCREEN_ITEMS[s.item] || esc(s.item)}</td>
+         <td><span class="tag ${s.result === "abnormal" ? "red" : "green"}">${s.result === "abnormal" ? "异常" : "正常"}</span></td>
+         <td>${esc(s.screen_date) || "—"}</td><td>${esc(s.note) || "—"}</td></tr>`);
       return;
     }
     if (d.hrtoggle) {
@@ -2864,20 +2876,25 @@ async function renderPublicHealth() {
     }
     $("#mon-list").innerHTML = monitorTable(rows);
   };
+  // 诊间提醒只画最后一次查的那一位、结果头写上患者号（P2-1795，P2-1012 同一种修法）：原先先查甲、立刻改查乙，甲的回包晚到
+  // 就把甲的提醒（或「无待办提醒」）画在乙的号下，提醒里不写是谁
+  let remSeq = 0;
   $("#rem-form").onsubmit = async (e) => {
     e.preventDefault();
+    const seq = ++remSeq;
     // 先清空、查不到把原因写出来（P2-378，与 P2-358 同一写法）：原先 api() 抛错没人接，上一次的结果照旧挂着
     $("#rem-result").innerHTML = "";
     let r;
     try {
       r = await api(`/api/publichealth/reminders/${new FormData(e.target).get("patient_id")}`);
     } catch (err) {
-      $("#rem-result").innerHTML = `<p class="msg err">${esc(err.message)}</p>`;
+      if (seq === remSeq) $("#rem-result").innerHTML = `<p class="msg err">${esc(err.message)}</p>`;
       return;
     }
-    $("#rem-result").innerHTML = r.reminders.length
+    if (seq !== remSeq) return;
+    $("#rem-result").innerHTML = `<p class="desc">患者 ${esc(r.patient_id)} 的诊间提醒</p>` + (r.reminders.length
       ? `<ul style="margin:8px 0 0 18px;font-size:13px">${r.reminders.map((x) => `<li>${esc(x.detail)}</li>`).join("")}</ul>`
-      : '<p class="msg ok">无待办提醒</p>';
+      : '<p class="msg ok">无待办提醒</p>');
   };
   $("#page-body").onclick = async (e) => {
     const { act, close, view } = e.target.dataset;
@@ -3216,7 +3233,9 @@ async function renderCritical() {
           <td>${statusTag(CRIT_STATUS, r.critical_status)}</td>
           <td>${actions} <button class="btn" data-trail="${r.id}">留痕</button></td></tr>`;
       })}`)}
-    <div class="panel hidden" id="crit-trail-panel"><h3>处置留痕轨迹</h3><div id="crit-trail"></div></div>`;
+    <div class="panel hidden" id="crit-trail-panel"><h3 id="crit-trail-title">处置留痕轨迹</h3><div id="crit-trail"></div></div>`;
+  // 「留痕」只画最后一次点的那一条（P2-1795，见下面 trail 一支）
+  let trailSeq = 0;
   $("#page-body").onclick = async (e) => {
     const { ack, resolve, trail } = e.target.dataset;
     try {
@@ -3234,7 +3253,19 @@ async function renderCritical() {
         if (done) { route(); pollTodos(); }
       }
       if (trail) {
-        const actions = await api(`/api/exams/reports/${trail}/critical-actions`);
+        // 只画最后一次点的那一条、标题写上报告号与结论（P2-1795，P2-1012 同一种修法）：原先先点甲的「留痕」、立刻改点乙，
+        // 甲那次响应晚到就把甲的轨迹画在面板里，标题只写「处置留痕轨迹」。点下去就换标题、先清空，标题与轨迹总是同一条
+        const seq = ++trailSeq;
+        const row = critical.find((r) => r.id === Number(trail));
+        $("#crit-trail-title").textContent = `处置留痕轨迹 · 报告 ${trail}${row ? ` · ${row.conclusion}` : ""}`;
+        $("#crit-trail").innerHTML = "";
+        let actions;
+        try { actions = await api(`/api/exams/reports/${trail}/critical-actions`); }
+        catch (err) {
+          if (seq === trailSeq) setMsg("#crit-msg", err.message, false);
+          return;
+        }
+        if (seq !== trailSeq) return;
         $("#crit-trail-panel").classList.remove("hidden");
         // 每一步的时刻（P2-1364）：何时通知、何时确认、何时处置，原先只有动作与操作人
         $("#crit-trail").innerHTML = table(["时间", "动作", "操作人"], actions, (a) =>
@@ -3356,12 +3387,22 @@ async function renderInpatient() {
     <div class="panel hidden" id="inp-orders-panel"><h3 id="inp-orders-title">医嘱单</h3><div id="inp-orders"></div>
       <div id="inp-exec"></div></div>`;
   let ordersSeq = 0;
+  let execSeq = 0;   // 执行记录只画最后一次点的那一条医嘱（P2-1795，见 drawExecutions）
   let drawnOrders = [];   // 医嘱面板上正画着的医嘱：「停止」的确认框据它写明是哪一条（P2-1695）
   const drawExecutions = async (orderId) => {
     // 只按行上的 id 取（行本身来自按住院单查的医嘱列表），不做"输入任意医嘱ID"的入口
+    // 只画最后一次点的那一条医嘱（P2-1795，同医嘱单的 ordersSeq）：原先先点甲的「执行记录」、立刻改点乙，甲那次响应晚到
+    // 就把甲的执行记录画在面板里；标题本就写着医嘱号。查失败的报错同样只认最后一次
+    const seq = ++execSeq;
     // 执行记录只看最近的一页（按记录号倒序），列不全时标题写明「已列 N / 共 M」（P2-1693，同 P2-1547）：长期医嘱一天执行几次，
     // 住上几个月就过了一页，原先不读总数，看不出前面还有
-    const { rows, total } = await api(`/api/inpatient/orders/${encodeURIComponent(orderId)}/executions`, { withTotal: true });
+    let rows, total;
+    try { ({ rows, total } = await api(`/api/inpatient/orders/${encodeURIComponent(orderId)}/executions`, { withTotal: true })); }
+    catch (err) {
+      if (seq === execSeq) setMsg("#inp-msg", err.message, false);
+      return;
+    }
+    if (seq !== execSeq) return;
     const listed = total !== null && rows.length < total ? `（已列 ${rows.length} / 共 ${total}）` : "";
     // 执行时间印后端给的本地时刻 `executed_at_shown`（P2-1694）：原先把 `executed_at`（落库的 UTC）截出来照印，东八区下比紧挨着的
     // 护理记录早 8 小时
@@ -3511,6 +3552,7 @@ async function renderInpatient() {
         // 只画最后一次点的那一次住院、标题写上住院号（P2-1012）：原先先点甲、立刻改点乙，甲那次响应晚到就把甲的医嘱画在
         // 面板里，标题只写「医嘱单」——「登记执行」记到了甲的医嘱上（与 route() / loadSpd() 同一个毛病、同一种修法）
         const seq = ++ordersSeq;
+        execSeq += 1;   // 换一次住院，在途的执行记录作废：晚到的不再画进这一位的医嘱单底下（P2-1795）
         $("#inp-orders").innerHTML = "";
         $("#inp-exec").innerHTML = "";
         // 续页取全（P2-1693，照 P2-1333）：接口一页缺省 200 条、按医嘱号倒序，临时医嘱执行过也一直「执行中」（P2-281），住得久的

@@ -3515,16 +3515,21 @@ async function renderSpdFollowup() {
     else delete body.count;
     return postAction("/api/spd/qc-samples/plan", body, "#spd-qc-msg");
   };
+  // 健康日历只画最后一次查的那一位、日期前写上患者号（P2-1795，P2-1012 同一种修法）：原先先查甲、立刻改查乙，甲的回包晚到
+  // 就把甲那天的随访、复诊、任务画在乙的号下，日历里只写日期
+  let calSeq = 0;
   $("#spd-cal-form").onsubmit = async (e) => {
     e.preventDefault();
     const q = formJson(e.target, ["patient_id"]);
+    const seq = ++calSeq;
     // 先清空（P2-1010）：原先换了患者号查失败，只写了原因，日历区照旧是上一位的随访、复诊、任务
     // 宣教一段（P2-1606）：接口原先没有、说明却写「随访、宣教与复诊」；状态与宣教推送清单同一张中文映射（SPD_PUSH_STATUS）
     $("#spd-cal-box").innerHTML = "";
     try {
       const cal = await api(`/api/spd/health-calendar?patient_id=${q.patient_id}${q.day ? `&day=${encodeURIComponent(q.day)}` : ""}`);
+      if (seq !== calSeq) return;
       $("#spd-cal-box").innerHTML = `
-        <p class="desc">${esc(cal.day)}：随访 ${(cal.followups || []).length} · 复诊 ${(cal.revisits || []).length} · 任务 ${(cal.tasks || []).length} · 宣教 ${(cal.edu || []).length}</p>
+        <p class="desc">患者 ${esc(q.patient_id)} · ${esc(cal.day)}：随访 ${(cal.followups || []).length} · 复诊 ${(cal.revisits || []).length} · 任务 ${(cal.tasks || []).length} · 宣教 ${(cal.edu || []).length}</p>
         ${table(["随访ID", "场景", "渠道", "计划日期", "状态"], cal.followups || [], (f) =>
           `<tr><td>${f.id}</td><td>${esc(f.scene_name)}</td><td>${esc(SPD_FU_CHANNELS[f.channel] || f.channel)}</td>
            <td>${esc(f.planned_at)}</td><td>${esc(f.status_name)}</td></tr>`)}
@@ -3535,7 +3540,7 @@ async function renderSpdFollowup() {
         ${table(["宣教推送ID", "素材", "计划推送时刻", "状态"], cal.edu || [], (d) =>
           `<tr><td>${d.id}</td><td>${esc(d.title || "—")}</td><td>${esc(d.send_at)}</td><td>${spdTag(SPD_PUSH_STATUS, d.status)}</td></tr>`)}`;
       setMsg("#spd-cal-msg", "");
-    } catch (err) { setMsg("#spd-cal-msg", err.message, false); }
+    } catch (err) { if (seq === calSeq) setMsg("#spd-cal-msg", err.message, false); }
   };
   // 「执行」取前置资料期间与执行框开着时为真（P2-1793，见下面 exec 一支）
   let fuExecOpening = false;
@@ -4071,9 +4076,13 @@ async function renderSpdMember() {
     return postAction("/api/spd/measurements",
       formJson(e.target, ["patient_id", "value"]), "#spd-meas-msg");
   };
+  // 监测记录与看趋势共用一块结果区，只画最后一次查的那一位（P2-1795，P2-1012 同一种修法）：原先先查甲、立刻改查乙，甲的回包
+  // 晚到就画在乙的号下（甲收缩压 182、乙 124，框里是乙、结果区是 182），甲查失败的报错晚到也写在乙的结果旁。结果区头写上患者号
+  let measSeq = 0;
   const measQuery = async () => {
     const body = formJson($("#spd-meas-query"), ["patient_id"]);
     if (!body.patient_id) return;
+    const seq = ++measSeq;
     const params = new URLSearchParams({ patient_id: body.patient_id, limit: 30 });
     if (body.metric) params.set("metric", body.metric);
     // 先清空、查不到把原因写出来（P2-1009，与同一行「看趋势」同一写法）：原先抛错没人接，换了患者号查失败，
@@ -4081,8 +4090,12 @@ async function renderSpdMember() {
     $("#spd-meas-result").innerHTML = "";
     let rows;
     try { rows = await api(`/api/spd/measurements?${params}`); }
-    catch (err) { return setMsg("#spd-meas-msg", err.message, false); }
-    $("#spd-meas-result").innerHTML = table(
+    catch (err) {
+      if (seq === measSeq) setMsg("#spd-meas-msg", err.message, false);
+      return;
+    }
+    if (seq !== measSeq) return;
+    $("#spd-meas-result").innerHTML = `<p class="desc">患者 ${esc(body.patient_id)} 的监测记录</p>` + table(
       ["时间", "指标", "数值", "等级", "来源", "备注"], rows, (m) =>
       `<tr><td>${esc(m.measured_at.slice(0, 16))}</td><td>${esc(m.metric)}</td>
        <td>${m.value}${esc(m.unit)}</td><td>${spdTag(SPD_MEAS_LEVEL, m.level)}</td>
@@ -4094,15 +4107,21 @@ async function renderSpdMember() {
     if (!body.patient_id || !body.metric) {
       return setMsg("#spd-meas-msg", "看趋势需要同时填患者ID与指标", false);
     }
+    const seq = ++measSeq;   // 与监测记录共用一个序号（P2-1795，见上）
     // 先清空、查不到把原因写出来（P2-378）：原先 api() 抛错没人接，上一位患者的趋势照旧挂着
     $("#spd-meas-result").innerHTML = "";
     let t;
     try {
       t = await api(`/api/spd/measurements/trend?patient_id=${body.patient_id}`
         + `&metric=${encodeURIComponent(body.metric)}`);
-    } catch (err) { return setMsg("#spd-meas-msg", err.message, false); }
+    } catch (err) {
+      if (seq === measSeq) setMsg("#spd-meas-msg", err.message, false);
+      return;
+    }
+    if (seq !== measSeq) return;
     // 说出取数窗口（P2-830）：缺省近 90 天，原先不说——最后一次测量在 90 天以前的，这里是一张空图
     $("#spd-meas-result").innerHTML = `
+      <p class="desc">患者 ${esc(body.patient_id)} · ${esc(body.metric)} 的趋势</p>
       <p class="desc">近 ${t.days} 天${t.points.length ? "" : "没有这项指标的记录（更早的在上面的监测记录里按日期查）"}</p>
       ${barChart(t.points.map((p) => [p.label, p.avg]), { unit: t.latest?.unit || "" })}
       ${table(["时段", "均值", "最低", "最高", "次数"], t.points, (p) =>

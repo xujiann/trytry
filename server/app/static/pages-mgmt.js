@@ -1176,7 +1176,7 @@ async function renderWorkflows() {
           WF_INSTANCE_FILTER.mine ? " checked" : ""}> 只看我发起的</label></form>
       <p class="msg" id="wf-inst-msg"></p>
       <div id="wf-inst-list">${wfInstanceTable(instances)}</div>`)}
-    <div class="panel hidden" id="wf-history"><h3>流转记录</h3><div id="wf-history-body"></div></div>`;
+    <div class="panel hidden" id="wf-history"><h3 id="wf-history-title">流转记录</h3><div id="wf-history-body"></div></div>`;
   wfCanvasInit(definitions);
   $("#def-form").onsubmit = async (e) => {
     e.preventDefault();
@@ -1195,6 +1195,8 @@ async function renderWorkflows() {
       setMsg("#wf-inst-msg", "");
     } catch (err) { setMsg("#wf-inst-msg", err.message, false); }
   };
+  // 「流转记录」只画最后一次点的那一个实例（P2-1795，见下面 history 一支）
+  let historySeq = 0;
   $("#page-body").onclick = async (e) => {
     const d = e.target.dataset;
     try {
@@ -1213,7 +1215,20 @@ async function renderWorkflows() {
         if (!ok) return;
       }
       else if (d.history) {
-        const rows = await api(`/api/workflows/instances/${d.history}/history`);
+        // 只画最后一次点的那一个实例、标题写上实例号与事项（P2-1795，P2-1012 同一种修法）：原先先点甲的「流转记录」、立刻改点乙，
+        // 甲那次响应晚到就把甲的流转画在面板里，标题只写「流转记录」。点下去就换标题、先清空，标题与流转总是同一个实例；
+        // 事项取首屏实例表与待办里有的（改筛选重取的那批不在里面，只写实例号）
+        const seq = ++historySeq;
+        const inst = [...instances, ...tasks.tasks].find((i) => i.id === Number(d.history));
+        $("#wf-history-title").textContent = `流转记录 · 实例 ${d.history}${inst && inst.title ? ` · ${inst.title}` : ""}`;
+        $("#wf-history-body").innerHTML = "";
+        let rows;
+        try { rows = await api(`/api/workflows/instances/${d.history}/history`); }
+        catch (err) {
+          if (seq === historySeq) setMsg("#wf-msg", err.message, false);
+          return;
+        }
+        if (seq !== historySeq) return;
         $("#wf-history").classList.remove("hidden");
         // 节点、动作、操作人印后端给的名称（P2-1475）：原先印节点编码与 advance / cancel，没填姓名的操作人一格空白；
         // 终止那一行的 to_node 是空串，「到」不再印「终态」（单子没走到终态，是在这一步被终止的）
