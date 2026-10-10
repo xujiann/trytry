@@ -34,9 +34,19 @@
     python scripts/spd_dedup.py --apply    # 归并（改指引用 → 积分相加 → 存档 → 删行）
                                            # 并补建本迁移跳过的唯一索引
 
-不想用脚本、要手工处置的，按台账逐条改完之后 DBA 手工补建即可：
+不想用脚本、要手工处置的，按台账逐条改完之后 DBA 手工补建。跳过的表原样留着同名的
+普通索引（`ix_…`），要先删再建——直接 CREATE 报 index already exists，别读成"已经在了"
+就收工（P2-1805）。放在一个事务里（PostgreSQL 的 DDL 能回滚：建唯一索引失败时 DROP 一起
+作废，普通索引不丢）：
 
+    BEGIN;
+    DROP INDEX ix_spd_point_accounts_user_id;
     CREATE UNIQUE INDEX ix_spd_point_accounts_user_id ON spd_point_accounts (user_id);
+    COMMIT;
+
+建完核对确实是唯一索引（PostgreSQL 上 indexdef 要以 CREATE UNIQUE INDEX 开头）：
+
+    SELECT indexdef FROM pg_indexes WHERE indexname = 'ix_spd_point_accounts_user_id';
 
 ## downgrade
 
