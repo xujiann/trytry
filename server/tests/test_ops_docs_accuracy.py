@@ -20,6 +20,7 @@ SERVER = ROOT / "server"
 RUNBOOK = (ROOT / "docs" / "运维手册.md").read_text(encoding="utf-8")
 RELEASE = (ROOT / "docs" / "发布流程.md").read_text(encoding="utf-8")
 SPEC = (ROOT / "docs" / "接口对接规范.md").read_text(encoding="utf-8")
+XINCHUANG = (ROOT / "docs" / "信创适配与备份容灾.md").read_text(encoding="utf-8")
 README = (ROOT / "README.md").read_text(encoding="utf-8")
 COMPOSE = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
 
@@ -268,3 +269,23 @@ def test_对接规范写的debug_code回显条件与代码一致():
     assert bullet, "附录C 找不到 debug_code 那一条"
     missing = [need for need in ("`console`", "MEDPLAT_SMS_DEBUG_ECHO", "prod") if need not in bullet.group()]
     assert not missing, f"附录C 的 debug_code 回显条件少写了：{missing}"
+
+
+def _sentences(text: str) -> list[str]:
+    """按句切：段内的硬换行先接起来（空行、列表项、标题仍是边界），再按句号、分号、叹号、问号切。"""
+    blocks = re.split(r"\n\s*\n|\n(?=\s*(?:[-*] |\d+\. |#))", text)
+    return [s.strip() for block in blocks for s in re.split(r"[。；！？]", re.sub(r"\n\s*", "", block)) if s.strip()]
+
+
+def test_信创文档写明SM4已用于PII列加密():
+    """P2-1811（第五十三批扫描 AQ4-11）：《信创适配与备份容灾》2.3 写「SM2/SM4 平台侧不做实现」、第四节写「不自己实现
+    SM2/SM4」，可 SM4 早已用于 PII 列加密——`app/gmcrypto.py` 明写「SM4 同样是纯 Python 实现」，`app/pii.py` 的密文就是
+    SM4-CTR。照这份文档写的等保 / 密评材料会与实际不符。这里钉住：PII 加密确实走 `gmcrypto.sm4_ctr`（前提），文档里不再有
+    「SM4」与「不做 / 不实现」同句，并写明 SM4 用在 PII 列加密。"""
+    from app import pii
+
+    assert "gmcrypto.sm4_ctr" in inspect.getsource(pii), "前提：PII 列加密用的是 gmcrypto 的 SM4"
+    sentences = _sentences(XINCHUANG)
+    wrong = [s for s in sentences if "SM4" in s and re.search(r"不做|不实现|不自己实现", s)]
+    assert not wrong, f"文档还说 SM4 平台侧不实现：{wrong}"
+    assert any("SM4" in s and "PII" in s for s in sentences), "文档要写明 SM4 用于 PII 列加密"

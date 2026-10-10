@@ -2155,6 +2155,7 @@ AST 闸门判据只覆盖 19.9% 的写入点（本轮 4 个新 check-then-act �
 | P2-1808 | ✅ **运维手册 §二 配置表写「与 config.py 逐字段对齐」，却漏了 4 个字段：`MEDPLAT_CLAMD_ADDRESS`（附件病毒扫描）、`MEDPLAT_AUDIT_ANCHOR_WEBHOOK_URL`（审计链异机锚点）在所有文档里 0 处，两个告警变量的冷却缺省 600 秒没写**（2026-10-09 第五十三批「手册与规范 vs 现行行为」扫描 AQ4-8 按代码读，**已修**）。`tests/test_ops_manual_config_defaults.py` 只比对表里已列出的行，漏行它看不见；P2-434 写明不配扫描时附件标「未扫描」、之后配上也不补扫，运维不知道能开。修前统计 `Settings` 48 个字段、表里 44 个。**修法**：新增 §2.4d 补四行（缺省值照 `config.py`，说明照 `alerting.py`、`jobs.audit_anchor`、`avscan.py` 的现状，含「不配扫描时附件标 skipped，之后配上也不补扫」）；用例加反向检查：`Settings` 的每个字段都要在表里有一行，豁免集 `UNDOCUMENTED_FIELDS` 现为空、上限 0、只减不增，另一条检查豁免是否过期。回归：反向检查本身（补行前红、列出 4 个字段） | `docs/运维手册.md`（§二）、`tests/test_ops_manual_config_defaults.py` |
 | P2-1809 | ✅ **接口对接规范附录A 前言「未列出的 GET 类接口仅要求登录」对 `/api/integration/*` 不成立（路由器层 `require_roles("operator")`，GET 也在内），入站端点的路径、请求体与所需角色规范里一处没写**（2026-10-09 第五十三批「手册与规范 vs 现行行为」扫描 AQ4-9 实测，**已修**）。修前实测医师取 FHIR Patient 403「需要以下角色之一：经办人员」，公卫推 Observation 403、同一条随访走慢病随访接口 201，经办推同一条 201。入站是经办级与附录A 口径的冲突已在 P2-188 待裁定。**修法**：附录A 前言改为「至少要求登录，另限不限角色以接口为准」并以对接适配层为例；新增「六、对接适配层」一节，照 `integration.py` 现状列 9 个接口（7 个入站，加单条导出与交换日志）的路径、请求体、回执与要点，写明所需角色、请求头与交换日志，与附录A 的冲突注明见待裁定 P2-188。授权不动。回归：`tests/test_ops_docs_accuracy.py`（从 `integration.router.routes` 现取，每个方法加路径都要在第六节出现；路由器层要的角色写在「所需角色」；前言不再有「仅要求登录」） | `docs/接口对接规范.md`（附录A 前言、第六节） |
 | P2-1810 | ✅ **接口对接规范附录C 写 `debug_code` 的回显条件只写了 console 通道与非生产两条，少了 `MEDPLAT_SMS_DEBUG_ECHO`：照规范只配两条去联调拿不到验证码，console 通道的日志也只打掩码号码**（2026-10-09 第五十三批「手册与规范 vs 现行行为」扫描 AQ4-10 实测，**已修**）。`portal.py` 要求三个条件同时满足，README 与运维手册已写三条件；P0-4 只修了代码，规范没跟。修前实测 console 通道、非生产、`SMS_DEBUG_ECHO=false` 时发码接口回 200 不带 `debug_code`。**修法**：规范改为三个条件同时满足——console 通道、显式 `MEDPLAT_SMS_DEBUG_ECHO=true`、非生产（ENV 与 ENVIRONMENT 都不是 prod）。回归：`tests/test_ops_docs_accuracy.py`（用 AST 从 `portal.py` 给 `debug_code` 赋值的那个 if 现取条件，规范那一条要写全） | `docs/接口对接规范.md`（附录C） |
+| P2-1811 | ✅ **《信创适配与备份容灾》写「SM2/SM4 平台侧不做实现 / 明确不做」，实际 SM4 已用于 PII 列加密（`app/gmcrypto.py` 明写纯 Python 实现，`app/pii.py` 恒走 `gmcrypto.sm4_ctr`）：按这份文档写的等保 / 密评材料会与实际不符**（2026-10-09 第五十三批「手册与规范 vs 现行行为」扫描 AQ4-11 按代码读，**已修**）。**修法**：2.3 拆成两条——SM4 只用于 PII 列加密、纯 Python 自实现（防拖库，不对外提供加解密接口，侧信道不在承诺范围）；SM2 不实现；§四 改为「不自己实现 SM2；SM4 只在 PII 列加密这一处」；2.2 把「纯 Python SM3」补成「SM3 / SM4」。TECH_DEBT 优点表里「SM2/SM4 克制不实现」同步改成「SM4 只用于 PII 列加密、SM2 不实现」。加密实现不动。回归：`tests/test_ops_docs_accuracy.py`（前提钉住 PII 确实走 `gmcrypto.sm4_ctr`；文档按句切开后不再有「SM4」与「不做 / 不实现」同句，要有一句同时写到 SM4 与 PII） | `docs/信创适配与备份容灾.md`、`docs/TECH_DEBT.md`（优点表一句） |
 
 ## P2 — 一致性与可维护性
 
@@ -2295,7 +2296,7 @@ AST 闸门判据只覆盖 19.9% 的写入点（本轮 4 个新 check-then-act �
 | 金额定点数迁移 + 零迁移漂移 + 52/52 downgrade | models + alembic |
 | spd 单向依赖边界的 AST 守卫 | `test_spd_boundary.py` |
 | 诚实的模块文档（events/clock/deps/scheduler/platform） | 各模块 docstring |
-| SM2/SM4 克制不实现 | `gmcrypto.py:17` |
+| SM4 只用于 PII 列加密（纯 Python 自实现，边界写明）、SM2 克制不实现 | `gmcrypto.py` 模块说明 |
 
 ---
 
