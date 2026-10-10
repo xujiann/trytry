@@ -8,6 +8,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 RUNBOOK = (ROOT / "docs" / "运维手册.md").read_text(encoding="utf-8")
+RELEASE = (ROOT / "docs" / "发布流程.md").read_text(encoding="utf-8")
 README = (ROOT / "README.md").read_text(encoding="utf-8")
 COMPOSE = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
 
@@ -93,3 +94,21 @@ def test_密钥轮换步骤在清PREVIOUS之前先做PII重加密():
     assert backfill[0] < clear[0], f"回填（第 {backfill[0] + 1} 步）要排在清空 PREVIOUS（第 {clear[0] + 1} 步）之前"
     assert "第十二节" in steps[backfill[0]], "回填那一步要指向第十二节（PII 列加密启用流程）"
     assert "第九节" in _section(RUNBOOK, "## 十二、PII 列加密启用流程"), "第十二节的轮换说明要指回第九节的步骤"
+
+
+def test_回滚只回代码时跳过启动期迁移_降库先用新版再换旧代码():
+    """P2-1804（第五十三批扫描 AQ4-3）：发布流程写「回退镜像、只回代码不回库」是首选，运维手册规程 2 写「部署旧代码 →
+    alembic downgrade」。可只要新版带了迁移，库里就记着旧代码不认识的 revision：旧镜像的 start.sh 先跑 `alembic upgrade
+    heads`，报 Can't locate revision、`set -e` 退出（compose 下无限重启）；手册的顺序在旧代码上 downgrade，同样找不到新迁移
+    文件、exit 255。这里钉住：手册规程 2 与发布流程的「回退镜像」一步写明那次部署设 `MEDPLAT_MIGRATE_ON_START=0`；要降库时
+    先用新版代码（镜像）downgrade、再换旧代码。"""
+    rollback = next(s for s in _numbered_items(_section(RUNBOOK, "## 三、Alembic 迁移操作")) if s.startswith("2. 回滚"))
+    assert "MEDPLAT_MIGRATE_ON_START=0" in rollback, rollback
+    assert "降库" in rollback, rollback
+    downgrade_part = rollback[rollback.index("降库"):]
+    assert "新版" in downgrade_part and downgrade_part.index("alembic downgrade") < downgrade_part.index("部署旧代码"), (
+        "规程 2 要先用新版代码 downgrade、再部署旧代码：" + rollback)
+    assert "MEDPLAT_MIGRATE_ON_START=0" in _section(RELEASE, "### 1. 回退镜像 tag")
+    downgrade = _section(RELEASE, "### 2. `alembic downgrade`")
+    assert "用新版镜像" in downgrade and "换旧镜像" in downgrade, downgrade
+    assert downgrade.index("用新版镜像") < downgrade.index("换旧镜像"), downgrade
