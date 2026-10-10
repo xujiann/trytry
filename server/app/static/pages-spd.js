@@ -3670,10 +3670,14 @@ async function renderSpdFollowup() {
         const items = quest ? quest.items || [] : [];
         // 框头写「姓名 · 记录号 · 计划日」（前置资料自带患者，取不到档案的写患者号）；问卷名挪到框头下的说明里
         const who = c.patient ? c.patient.name : `患者 ${rec.patient_id}`;
+        // 渠道预选这一条的计划渠道（P2-1794，同 P2-988「表单预选现值」）：原先固定预选「电话」，计划已「调整」成面访的，
+        // 医生没动下拉就执行成电话随访——随访看板 by_channel、居民端随访记录都记成电话。计划渠道取前置资料里这一条的（点「执行」
+        // 时现取，比清单那一行新）；不在下拉里的（自填）照旧预选电话。后端不送渠道时的缺省（phone）不在这里动
+        const channels = [{ value: "phone", label: "电话" }, { value: "wechat", label: "微信" },
+                          { value: "sms", label: "短信" }, { value: "visit", label: "面访" }];
         const ok = await spdModal(`执行随访 · ${who} · 记录 #${rec.id} · 计划 ${rec.planned_at}`, [
-          { name: "channel", label: "随访渠道", type: "select", value: "phone",
-            options: [{ value: "phone", label: "电话" }, { value: "wechat", label: "微信" },
-                      { value: "sms", label: "短信" }, { value: "visit", label: "面访" }] },
+          { name: "channel", label: "随访渠道", type: "select",
+            value: channels.some((o) => o.value === rec.channel) ? rec.channel : "phone", options: channels },
           // 失访单独一个状态（P2-854，后端 `unreachable` 早就收）：原先打不通也只能记成「已完成」，完成率被算高——
           // 分母含失访、分子不含。记失访时问卷不看
           { name: "outcome", label: "联系结果", type: "select", value: "done",
