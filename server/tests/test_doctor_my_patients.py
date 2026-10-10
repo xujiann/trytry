@@ -20,7 +20,8 @@ def _body(name):
 
 def test_我的患者按本人筛():
     body = _body("loadSpdPatients")
-    call = re.search(r'api\(`/api/spd/enrollments\?[^`]*`\)', body)
+    # 带 withTotal 读总数（P2-1801，列不全时写「已列 N / 共 M 条」）
+    call = re.search(r'api\(`/api/spd/enrollments\?[^`]*`(?:, \{ withTotal: true \})?\)', body)
     assert call, body
     assert "${mine}" in call.group(0), call.group(0)   # 修前 "/api/spd/enrollments?limit=30"
     assert "village_doctor_id=${me.id}" in body and "doctor_user_id=${me.id}" in body, body

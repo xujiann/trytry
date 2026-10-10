@@ -113,7 +113,8 @@ const flush = async () => { for (let i = 0; i < 8; i += 1) await new Promise((r)
 #: 从 doctor.js 原文取的声明。打 * 的是这次新加的：修前没有就取成空串（页面照修前的样子跑，断言在内容上红，而不是取不到）
 HEADS = (
     "function setMsg(", "function kv(", "async function loadSpdTab(", "async function loadSpdList(",
-    "function spdTodoOps(", "async function loadSpdTodo(", "const REDEEM_STATUS_NAMES = ", "async function loadSpdPerf(",
+    "function spdTodoOps(", "*function spdListedHint(", "async function loadSpdTodo(", "const REDEEM_STATUS_NAMES = ",
+    "async function loadSpdPerf(",
     "*async function spdActionDone(", "async function spdPost(", "const TABS = ", "function switchTab(",
 )
 

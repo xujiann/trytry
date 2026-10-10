@@ -281,9 +281,17 @@ function spdTodoOps(t) {
     + (t.status === "rejected" ? b("data-spd-resubmit", "重新提交") : b("data-spd-done", "办结"));
 }
 
+/** 清单只取了前一页时说出截断（P2-1801，同查房条数 P2-1771、P2-1550 / P2-1693）：列不全时写「已列 N / 共 M 条」，列全（或接口
+ *  没给总数）时什么都不加，与原先一字不差。要不要续页取全不在这里 */
+function spdListedHint({ rows, total }) {
+  return total !== null && rows.length < total ? `<p class="hint">已列 ${rows.length} / 共 ${total} 条</p>` : "";
+}
+
 async function loadSpdTodo(box) {
-  const rows = await api("/api/spd/tasks?mine=true&open_only=true&limit=30");
-  box.innerHTML = rows.map((t) => `<div class="m-card">
+  // 读总数（P2-1801）：只取前 30 条，工作台卡片上的待办条数是同一口径、可以大于 30，原先不提示截断
+  const page = await api("/api/spd/tasks?mine=true&open_only=true&limit=30", { withTotal: true });
+  const rows = page.rows;
+  box.innerHTML = spdListedHint(page) + (rows.map((t) => `<div class="m-card">
     ${kv("任务", esc(t.title))}
     ${kv("患者", esc(t.patient_name || t.patient_id))}
     ${kv("类型", esc({ path: "路径节点", followup: "随访", intervention: "干预",
@@ -297,7 +305,7 @@ async function loadSpdTodo(box) {
     ${t.require_evidence ? kv("佐证", (t.evidence || []).length
       ? `已传 ${(t.evidence || []).length} 份` : `${t.status === "rejected" ? "重新提交" : "办结"}前须上传照片或报告`) : ""}
     ${spdTodoOps(t)}
-  </div>`).join("") || '<p class="empty">暂无待办</p>';
+  </div>`).join("") || '<p class="empty">暂无待办</p>');
   box.querySelectorAll("[data-spd-claim]").forEach((b) => b.addEventListener("click", async () => {
     await spdPost(`/api/spd/tasks/${b.dataset.spdClaim}/claim`);
   }));
@@ -522,14 +530,16 @@ async function loadSpdPatients(box) {
   // 村医按签约村医筛，其余按责任医生筛，与上方「签约居民 / 在管患者」计数同一口径
   const me = spdMe || (await api("/api/spd/workbench/doctor-mobile")).user;
   const mine = me.is_village_doctor ? `village_doctor_id=${me.id}` : `doctor_user_id=${me.id}`;
-  const rows = await api(`/api/spd/enrollments?limit=30&${mine}`);
-  box.innerHTML = rows.map((e) => `<div class="m-card">
+  // 读总数（P2-1801）：只取前 30 份，工作台卡片上的「在管患者 / 签约居民」是同一口径、可以大于 30，原先不提示截断
+  const page = await api(`/api/spd/enrollments?limit=30&${mine}`, { withTotal: true });
+  const rows = page.rows;
+  box.innerHTML = spdListedHint(page) + (rows.map((e) => `<div class="m-card">
     ${kv("患者", esc(e.patient_name || e.patient_id))}
     ${kv("病种", esc(e.program_code))}
     ${kv("风险", esc({ low: "低危", mid: "中危", high: "高危", very_high: "极高危" }[e.risk_level] || e.risk_level))}
     ${kv("阶段", esc(e.stage || "—"))}
     ${kv("下次随访", esc(e.next_followup_at || "—"))}
-  </div>`).join("") || '<p class="empty">暂无在管患者</p>';
+  </div>`).join("") || '<p class="empty">暂无在管患者</p>');
 }
 
 const REDEEM_STATUS_NAMES = { pending: "待核销", verified: "已核销", cancelled: "已取消" };
