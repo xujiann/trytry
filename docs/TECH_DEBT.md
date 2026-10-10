@@ -2156,6 +2156,7 @@ AST 闸门判据只覆盖 19.9% 的写入点（本轮 4 个新 check-then-act �
 | P2-1809 | ✅ **接口对接规范附录A 前言「未列出的 GET 类接口仅要求登录」对 `/api/integration/*` 不成立（路由器层 `require_roles("operator")`，GET 也在内），入站端点的路径、请求体与所需角色规范里一处没写**（2026-10-09 第五十三批「手册与规范 vs 现行行为」扫描 AQ4-9 实测，**已修**）。修前实测医师取 FHIR Patient 403「需要以下角色之一：经办人员」，公卫推 Observation 403、同一条随访走慢病随访接口 201，经办推同一条 201。入站是经办级与附录A 口径的冲突已在 P2-188 待裁定。**修法**：附录A 前言改为「至少要求登录，另限不限角色以接口为准」并以对接适配层为例；新增「六、对接适配层」一节，照 `integration.py` 现状列 9 个接口（7 个入站，加单条导出与交换日志）的路径、请求体、回执与要点，写明所需角色、请求头与交换日志，与附录A 的冲突注明见待裁定 P2-188。授权不动。回归：`tests/test_ops_docs_accuracy.py`（从 `integration.router.routes` 现取，每个方法加路径都要在第六节出现；路由器层要的角色写在「所需角色」；前言不再有「仅要求登录」） | `docs/接口对接规范.md`（附录A 前言、第六节） |
 | P2-1810 | ✅ **接口对接规范附录C 写 `debug_code` 的回显条件只写了 console 通道与非生产两条，少了 `MEDPLAT_SMS_DEBUG_ECHO`：照规范只配两条去联调拿不到验证码，console 通道的日志也只打掩码号码**（2026-10-09 第五十三批「手册与规范 vs 现行行为」扫描 AQ4-10 实测，**已修**）。`portal.py` 要求三个条件同时满足，README 与运维手册已写三条件；P0-4 只修了代码，规范没跟。修前实测 console 通道、非生产、`SMS_DEBUG_ECHO=false` 时发码接口回 200 不带 `debug_code`。**修法**：规范改为三个条件同时满足——console 通道、显式 `MEDPLAT_SMS_DEBUG_ECHO=true`、非生产（ENV 与 ENVIRONMENT 都不是 prod）。回归：`tests/test_ops_docs_accuracy.py`（用 AST 从 `portal.py` 给 `debug_code` 赋值的那个 if 现取条件，规范那一条要写全） | `docs/接口对接规范.md`（附录C） |
 | P2-1811 | ✅ **《信创适配与备份容灾》写「SM2/SM4 平台侧不做实现 / 明确不做」，实际 SM4 已用于 PII 列加密（`app/gmcrypto.py` 明写纯 Python 实现，`app/pii.py` 恒走 `gmcrypto.sm4_ctr`）：按这份文档写的等保 / 密评材料会与实际不符**（2026-10-09 第五十三批「手册与规范 vs 现行行为」扫描 AQ4-11 按代码读，**已修**）。**修法**：2.3 拆成两条——SM4 只用于 PII 列加密、纯 Python 自实现（防拖库，不对外提供加解密接口，侧信道不在承诺范围）；SM2 不实现；§四 改为「不自己实现 SM2；SM4 只在 PII 列加密这一处」；2.2 把「纯 Python SM3」补成「SM3 / SM4」。TECH_DEBT 优点表里「SM2/SM4 克制不实现」同步改成「SM4 只用于 PII 列加密、SM2 不实现」。加密实现不动。回归：`tests/test_ops_docs_accuracy.py`（前提钉住 PII 确实走 `gmcrypto.sm4_ctr`；文档按句切开后不再有「SM4」与「不做 / 不实现」同句，要有一句同时写到 SM4 与 PII） | `docs/信创适配与备份容灾.md`、`docs/TECH_DEBT.md`（优点表一句） |
+| P2-1812 | ✅ **README、系统功能清单、发布流程、用户手册里写死的规模数字与页签数没有东西盯着，已过时且互相矛盾**（2026-10-09 第五十三批「手册与规范 vs 现行行为」扫描 AQ4-12 实测，**已修**）：README 的 879 个接口 / 246 张表 / 87 个页面与同文件 91 个页面打架，系统功能清单 879 / 673、246 张表，发布流程「52/52」个迁移有 downgrade，用户手册导航分组漏了「全域慢专病」、医生端「七个页签」、居民端「五个标签页」。实测接口 955、路径 738、表 261（spd 60）、管理端页面 91、居民端 6 个页签、医生端 8 个页签、迁移 108 个。CLAUDE.md §13 第 5 条：写下来的数字要么有生成器加新鲜度用例，要么写日期加 commit。**修法**（按文件分开选）：README 一个规模数字和测试条数都不写，指向随代码生成的模块完成度 / SCHEMA 与系统功能清单，居民端、医生端照实写六个、八个页签并补上慢专病；系统功能清单是给人看规模的，保留数字，照实更新为「截至 2026-10-09（commit d835cdc）实测」；发布流程的「52/52」改为指向 `test_migration_downgrade_present`（TECH_DEBT 优点表里同一个「52/52」一并改）；用户手册导航分组补「全域慢专病」，两端页签照现行页面订正。回归：`tests/test_user_docs_accuracy.py`（README / 发布流程不出现无日期的接口、张表、页面、迁移数字；系统功能清单第一个规模数字前要有日期与 commit；两端页签数与页签名、管理端总页数与各组页数、导航分组顺序从页面源码现数比对） | `README.md`、`docs/系统功能清单.md`、`docs/发布流程.md`、`docs/用户手册.md`、`docs/TECH_DEBT.md`（优点表一句） |
 
 ## P2 — 一致性与可维护性
 
@@ -2293,7 +2294,7 @@ AST 闸门判据只覆盖 19.9% 的写入点（本轮 4 个新 check-then-act �
 | AST 静态防复发扫描（含 spd 目录）：写唯一约束表必须处理冲突 | `test_stage14_concurrency.py:493` |
 | 数 SQL 条数防 N+1（可进 CI） | `test_spd_perf.py:32` |
 | 8 条方言/精度静态规则 | `test_stage12_dialect.py` |
-| 金额定点数迁移 + 零迁移漂移 + 52/52 downgrade | models + alembic |
+| 金额定点数迁移 + 零迁移漂移 + 迁移全带 downgrade（`test_migration_downgrade_present` 盯着） | models + alembic |
 | spd 单向依赖边界的 AST 守卫 | `test_spd_boundary.py` |
 | 诚实的模块文档（events/clock/deps/scheduler/platform） | 各模块 docstring |
 | SM4 只用于 PII 列加密（纯 Python 自实现，边界写明）、SM2 克制不实现 | `gmcrypto.py` 模块说明 |

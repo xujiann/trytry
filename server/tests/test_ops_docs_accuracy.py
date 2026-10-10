@@ -21,7 +21,9 @@ RUNBOOK = (ROOT / "docs" / "运维手册.md").read_text(encoding="utf-8")
 RELEASE = (ROOT / "docs" / "发布流程.md").read_text(encoding="utf-8")
 SPEC = (ROOT / "docs" / "接口对接规范.md").read_text(encoding="utf-8")
 XINCHUANG = (ROOT / "docs" / "信创适配与备份容灾.md").read_text(encoding="utf-8")
+FEATURES = (ROOT / "docs" / "系统功能清单.md").read_text(encoding="utf-8")
 README = (ROOT / "README.md").read_text(encoding="utf-8")
+STATIC = SERVER / "app" / "static"
 COMPOSE = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
 
 
@@ -289,3 +291,79 @@ def test_信创文档写明SM4已用于PII列加密():
     wrong = [s for s in sentences if "SM4" in s and re.search(r"不做|不实现|不自己实现", s)]
     assert not wrong, f"文档还说 SM4 平台侧不实现：{wrong}"
     assert any("SM4" in s and "PII" in s for s in sentences), "文档要写明 SM4 用于 PII 列加密"
+
+
+#: 随每个接口 / 每张表 / 每个页面变动的规模数字（P2-1812）；「N/N 个迁移」同理
+_SCALE_NUMBER = re.compile(r"\d+\s*(?:个接口|个操作|个路径|张表|个(?:管理端)?页面)|\d+\s*/\s*\d+\s*个迁移")
+#: 写死的数字要带的实测日期与 commit（CLAUDE.md §13 第 5 条的二选一之一）
+_DATED = re.compile(r"截至 \d{4}-\d{2}-\d{2}[，（]commit [0-9a-f]{7,40}")
+_CN_DIGITS = "零一二三四五六七八九"
+
+
+def _cn(n: int) -> str:
+    """1–99 的中文数字（页签数、分组数用）。"""
+    tens, ones = divmod(n, 10)
+    return (("" if tens == 1 else _CN_DIGITS[tens]) + "十" if tens else "") + (_CN_DIGITS[ones] if ones else "")
+
+
+def _tab_labels(html_name: str) -> list[str]:
+    """移动端页面底栏的页签名（`tab-btn` 链接里图标之后的文字）。"""
+    html = (STATIC / "m" / html_name).read_text(encoding="utf-8")
+    return re.findall(r'class="tab-btn[^"]*" data-tab="[^"]+"><span class="ico">[^<]*</span>([^<]+)<', html)
+
+
+def _admin_pages() -> dict[str, int]:
+    """管理端 `app.js` 的 `PAGES` 注册表：导航分组（按出现顺序）→ 该组页面数。"""
+    js = (STATIC / "app.js").read_text(encoding="utf-8")
+    start = js.index("const PAGES = [")
+    groups: dict[str, int] = {}
+    current = ""
+    for line in js[start:js.index("\n];", start)].splitlines():
+        group = re.search(r'\{ group: "([^"]+)"', line)
+        if group:
+            current = group.group(1)
+            groups[current] = 0
+        elif re.match(r'\s*\{ id: "[^"]+", title:', line):
+            groups[current] += 1
+    return groups
+
+
+def test_README与发布流程不写死规模数字_系统功能清单的写明实测日期():
+    """P2-1812（第五十三批扫描 AQ4-12）：README、系统功能清单、发布流程写死的规模数字没有东西盯着，已经过时且互相矛盾——
+    README「879 个接口 / 246 张表 / 87 个管理端页面」与同文件开头「91 个页面」打架，系统功能清单头部「879 / 673」「246 张表」，
+    发布流程「52/52 个迁移都实现了 downgrade」（实测 955 个接口、261 张表、108 个迁移）。CLAUDE.md §13 第 5 条：写下来的数字
+    要么有生成器加新鲜度用例，要么写日期加 commit。修法二选一、按文件分：README 与发布流程不写这类数字（README 指向随代码生成的
+    模块完成度 / SCHEMA 与系统功能清单，迁移有 downgrade 由 test_migration_downgrade_present 盯着）；系统功能清单是给人看规模的，
+    保留数字、照实更新，并在出现第一个数字之前写明「截至 日期（commit）」的实测口径。"""
+    for name, text in (("README", README), ("发布流程", RELEASE)):
+        found = _SCALE_NUMBER.findall(text)
+        assert not found, f"{name} 又写死了规模数字（指向随代码生成的文档，别抄数字）：{found}"
+    assert "test_migration_downgrade_present" in RELEASE, "发布流程说迁移都有 downgrade，要指明是哪条用例盯着"
+    first = _SCALE_NUMBER.search(FEATURES)
+    dated = _DATED.search(FEATURES)
+    assert first, "系统功能清单里一个规模数字都没扫到，扫描对象变了？"
+    assert dated and dated.start() < first.start(), (
+        f"系统功能清单的规模数字（第一个：{first.group()!r}）之前要写明「截至 YYYY-MM-DD（commit xxxxxxx）」的实测口径")
+
+
+def test_README与系统功能清单的页签数与页面数照页面源码():
+    """P2-1812（第五十三批扫描 AQ4-12）：README 写居民端「五页签」、医生端「七页签」，页面上是 6 个与 8 个（两端都加了
+    「慢专病」页签）；系统功能清单写「87 个页面」、导航分组里全域慢专病 11、综合管理 18、系统管理 10，`app.js` 注册的是
+    91 个页面（13 / 19 / 11）。这些能从页面源码数出来，这里现数比对：两端页签数与页签名、管理端页面总数与各导航分组页数。"""
+    resident, doctor, pages = _tab_labels("index.html"), _tab_labels("doctor.html"), _admin_pages()
+    assert len(resident) >= 5 and len(doctor) >= 7 and len(pages) >= 8, (resident, doctor, pages)
+    for row_head, labels in (("| 居民端移动版 |", resident), ("| 医生移动工作台 |", doctor)):
+        row = next(line for line in README.splitlines() if line.startswith(row_head))
+        assert f"{_cn(len(labels))}个页签" in row, f"README {row_head} 的页签数不是 {len(labels)}：{row}"
+        missing = [label for label in labels if label not in row]
+        assert not missing, f"README {row_head} 没提到这些页签：{missing}"
+    assert f"居民端 H5（{len(resident)} 页签）" in FEATURES and f"医生移动端 H5（{len(doctor)} 页签）" in FEATURES
+    total = sum(pages.values())
+    assert f"| 管理端页面 | {total}（{len(pages)} 个导航分组） |" in FEATURES, f"系统功能清单头部的页面数应为 {total}"
+    spa = _section(FEATURES, "## 管理端 SPA")
+    assert spa.startswith(f"## 管理端 SPA（{total} 个页面"), spa.splitlines()[0]
+    listed = re.sub(r"\s+", "", spa.replace("**", ""))
+    expected = "、".join(f"{group}（{count}）" for group, count in pages.items())
+    assert f"{_cn(len(pages))}个导航分组：{expected}" in listed, f"导航分组页数应为：{expected}"
+    spd_pages = re.findall(r"(\d+) 个管理端页面", _section(FEATURES, "# 第二部分"))
+    assert spd_pages == [str(pages["全域慢专病"])], f"慢专病子系统一节的管理端页面数应为 {pages['全域慢专病']}：{spd_pages}"
