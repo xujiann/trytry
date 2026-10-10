@@ -27,7 +27,10 @@ def test_居民端写明窗口_空了给看近两年的():
     page = MOBILE[start:MOBILE.index("\n}\n", start)]
     assert "spdQuery({ limit: 30, days })" in page   # 修前不带 days
     assert "没有记录 <button type=\"button\" class=\"ghost-btn\" data-spd-older>看近两年的</button>" in page
-    assert "renderSpdMeasure(box, 730)" in page
+    # 「看近两年的」走 loadSpd 的串行化、由它按记下的窗口画（P2-1799）；原先直接调 renderSpdMeasure(box, 730)
+    assert 'older.addEventListener("click", () => loadSpd(730))' in page
+    load = MOBILE[MOBILE.index("async function loadSpd("):]
+    assert 'activeSpd === "measure") await renderSpdMeasure(box, spdMeasureDays);' in load[:load.index("\n}\n")]
     assert "还没有记录，先添加一条吧" not in page   # 修前空了就这么说
 
 

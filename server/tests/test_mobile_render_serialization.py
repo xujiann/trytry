@@ -1,4 +1,4 @@
-"""移动端分段渲染串行化的静态守卫（m.js loadSpd / doctor.js loadSpdList）。
+"""移动端分段渲染串行化的静态守卫（m.js loadSpd / loadService、doctor.js loadSpdList）。
 
 ## 为什么是静态守卫而不是（只有）e2e
 
@@ -8,13 +8,17 @@
 里把串行化拆掉，e2e 的同一路径连跑六遍也关不上窗口（申请链路快到断言间隙内
 就收尾）。**靠概率的网防不住确定性的拆卸**：谁手快删掉互斥，e2e 大概率照绿。
 
-所以确定性由这里承担：钉住三处（管理端 route() 是被抄的范式，一并钉）都
+所以确定性由这里承担：钉住各处（管理端 route() 是被抄的范式，一并钉）都
 保有"序号 + 互斥 + 收尾补画"的三件套，且旧的直接分发形状不得回潮。
 e2e（test_spd_resident_selfscreen_apply_measure）负责真实路径可用，
 本文件负责机制不被拆——两张网各管各的。
 
 变异验证（写入时做过）：把 `if (spdRendering) return` 改成 `if (false)`、
 把收尾的 `seq === spdSeq` 比较删掉，本文件对应断言各自转红。
+
+居民端「在线服务」的 loadService 后补进来（P2-1799，第五十三批扫描 AQ2-7）：原先无序号、
+无互斥，连点分段时慢的后落地盖掉新分段，高亮与内容对不上；行为用例见
+test_portal_h5_service_consult_latest_wins.py。
 """
 import re
 from pathlib import Path
@@ -26,6 +30,8 @@ SITES = [
     ("core.js", "route", "routeSeq", "routing", None),
     ("m/m.js", "loadSpd", "spdSeq", "spdRendering",
      'if (activeSpd === "home") return await renderSpdHome'),
+    ("m/m.js", "loadService", "svcSeq", "svcRendering",
+     'if (activeService === "appointment") return await renderAppointments'),
     ("m/doctor.js", "loadSpdList", "dspdSeq", "dspdRendering",
      'if (activeDoctorSpd === "todo") return await loadSpdTodo'),
 ]

@@ -798,18 +798,35 @@ function svcQuery() {
   return viewingPatientId === null ? "" : `?patient_id=${viewingPatientId}`;
 }
 
+/* 渲染串行化（P2-1799）：与 loadSpd 同一个问题、同一套修法（序号 + 互斥 + 收尾补画，见那边的注释）。原先连点分段——先点
+ * 「签约」、没等出来又点「账单」——两个 loadService() 并发写同一个 #service-result，慢的后落地就把新分段整个盖掉：高亮的是
+ * 「账单」，内容区是签约 */
+let svcSeq = 0;
+let svcRendering = false;
+
 async function loadService() {
-  const box = $("#service-result");
-  box.innerHTML = '<p class="empty">加载中…</p>';
+  svcSeq += 1;
+  if (svcRendering) return;  // 已有渲染在跑，它收尾时会按最新的 activeService 补画
+  svcRendering = true;
   try {
-    if (activeService === "appointment") return await renderAppointments(box);
-    if (activeService === "contract") return await renderContracts(box);
-    if (activeService === "inpatient") return await renderInpatient(box);
-    if (activeService === "surgery") return await renderSurgeries(box);
-    if (activeService === "bill") return await renderBills(box);
-    return await renderReferrals(box);
-  } catch (err) {
-    box.innerHTML = `<p class="empty">${esc(err.message)}</p>`;
+    for (;;) {
+      const seq = svcSeq;
+      const box = $("#service-result");
+      box.innerHTML = '<p class="empty">加载中…</p>';
+      try {
+        if (activeService === "appointment") await renderAppointments(box);
+        else if (activeService === "contract") await renderContracts(box);
+        else if (activeService === "inpatient") await renderInpatient(box);
+        else if (activeService === "surgery") await renderSurgeries(box);
+        else if (activeService === "bill") await renderBills(box);
+        else await renderReferrals(box);
+      } catch (err) {
+        box.innerHTML = `<p class="empty">${esc(err.message)}</p>`;
+      }
+      if (seq === svcSeq) break;  // 期间没有新的渲染请求，收工
+    }
+  } finally {
+    svcRendering = false;
   }
 }
 
@@ -1410,9 +1427,14 @@ function spdTagOf(map, key) {
  * 新分段整个盖掉，无任何报错（e2e 用例约 40% 概率复现过）。 */
 let spdSeq = 0;
 let spdRendering = false;
+/* 「监测」分段的取数窗口（P2-1799）：每次 loadSpd 记下这一次要的（缺省近 90 天，与原先各处的重画一致），补画按最后一次的画。
+ * 「看近两年的」走 loadSpd(730)：原先直接调 renderSpdMeasure(box, 730)，绕过这里的串行化——两年的数据慢，期间切到别的分段，
+ * 它后落地就把新分段整个盖掉 */
+let spdMeasureDays = 90;
 
-async function loadSpd() {
+async function loadSpd(measureDays = 90) {
   spdSeq += 1;
+  spdMeasureDays = measureDays;
   if (spdRendering) return;  // 已有渲染在跑，它收尾时会按最新的 activeSpd 补画
   spdRendering = true;
   try {
@@ -1422,7 +1444,7 @@ async function loadSpd() {
       box.innerHTML = '<p class="empty">加载中…</p>';
       try {
         if (activeSpd === "home") await renderSpdHome(box);
-        else if (activeSpd === "measure") await renderSpdMeasure(box);
+        else if (activeSpd === "measure") await renderSpdMeasure(box, spdMeasureDays);
         else if (activeSpd === "task") await renderSpdTasks(box);
         else if (activeSpd === "followup") await renderSpdFollowups(box);
         else if (activeSpd === "plan") await renderSpdPlans(box);
@@ -1533,9 +1555,8 @@ async function renderSpdMeasure(box, days = 90) {
     } catch (err) { $("#spd-measure-msg").textContent = err.message; }
   });
   const older = box.querySelector("[data-spd-older]");
-  // 取不到就说出来（P2-1009）：原先抛错没人接，点「看近两年的」一声不吭
-  if (older) older.addEventListener("click", () => renderSpdMeasure(box, 730)
-    .catch((err) => { $("#spd-measure-msg").textContent = err.message; }));
+  // 走 loadSpd 的串行化（P2-1799，见 spdMeasureDays）；取不到时 loadSpd 把原因写在本段（P2-1009：原先抛错没人接，一声不吭）
+  if (older) older.addEventListener("click", () => loadSpd(730));
 }
 
 /* 居民端任务的「未结束」：与后端 `service.TASK_OPEN_STATUSES` 同一串（P2-1674），含提交了在等审核的 */
@@ -1992,12 +2013,27 @@ async function renderSpdConsults(box) {
   });
 }
 
+/* 对话区只画最后一次点开的那一段（P2-1799，同号源 slotSeq 的写法）：原先先点 A 会话、又点 B，A 的消息晚到就把 A 画在
+ * 对话区里，对话区又不写是哪个会话，「继续沟通」按 A 的病种发出——居民以为在接着 B 说。取序号，过期的回包丢弃、出错那一支
+ * 同样；头写病种与会话号；发送跟着画出来的这一段走（处理函数随这一次绘制挂上） */
+let consultThreadSeq = 0;
+
 async function showConsultThread(consultId, consult, send) {
-  const messages = await authApi(
-    `/api/portal/spd/consults/${consultId}/messages${spdQuery()}`);
+  const seq = ++consultThreadSeq;
+  let messages;
+  try {
+    messages = await authApi(
+      `/api/portal/spd/consults/${consultId}/messages${spdQuery()}`);
+  } catch (err) {
+    if (seq !== consultThreadSeq) return;
+    throw err;
+  }
+  const holder = $("#spd-consult-thread");
+  if (!holder || seq !== consultThreadSeq) return;   // 期间切走了分段、或又点开了另一段
   const closed = consult && consult.status === "closed";
-  $("#spd-consult-thread").innerHTML = `<div class="m-card">
-    <div class="sec-title">对话记录</div>
+  const title = (consult && (consult.program_name || consult.program_code)) || "一般咨询";
+  holder.innerHTML = `<div class="m-card">
+    <div class="sec-title">对话记录 · ${esc(title)}（会话 #${esc(consultId)}）</div>
     ${messages.map((m) => kv(m.sender === "patient" ? "我" : "医生",
       `${esc(m.content)}<br><small>${esc(m.created_at.slice(0, 16))}</small>`)).join("")
       || '<p class="empty">暂无消息</p>'}
@@ -2006,7 +2042,7 @@ async function showConsultThread(consultId, consult, send) {
     <button type="button" id="spd-thread-send">发送</button>
     <p id="spd-thread-msg" class="msg"></p>
   </div>`;
-  $("#spd-consult-thread").scrollIntoView({ behavior: "smooth", block: "start" });
+  holder.scrollIntoView({ behavior: "smooth", block: "start" });
   $("#spd-thread-send").addEventListener("click", async () => {
     const content = $("#spd-thread-input").value.trim();
     if (!content) return;
