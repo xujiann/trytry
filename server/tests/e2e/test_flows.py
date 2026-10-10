@@ -6426,6 +6426,7 @@ def test_居民端在慢专病页签退出或掉线_本人档案不留在屏幕�
     """P2-1219（第三十五批扫描 T1-5）：居民端退出原先重画了档案、服务、问卷、通知四个登录态页签，漏了慢专病——在「慢专病」
     页签点退出，已登录标记已清，#spd-body 照旧显示本人的姓名、卡号、电话、诊断，登录引导反而藏着；authApi 的 401 分支只重画
     档案页，后台红点轮询碰上会话过期同样留着。修后两条路走同一段：五个页签一起重画，慢专病结果区清空、登录引导露出来。
+    P2-1796（第五十三批扫描 AQ2-4）：「我的档案」页的账号栏、家人标签、档案区、附加区同样清空。
 
     两位居民各用一个手机号：验证码单号冷却 60 秒，同一个号紧挨着登两次收不到码。"""
     leaver = {"name": "退出E2E居民", "id_card": "320981196802183013", "phone": "13788990121"}
@@ -6435,6 +6436,9 @@ def test_居民端在慢专病页签退出或掉线_本人档案不留在屏幕�
 
     def open_spd_archive(person):
         _resident_login(page, base_url, person)
+        # 等「我的档案」页画完（附加区最后画）：下面断言退出后这几块清空，不跟还在途的档案回包抢时间
+        expect(page.locator("#account-bar")).to_contain_text(person["name"])
+        expect(page.locator("#archive-extra")).to_contain_text("谁看过我的档案")
         page.click('[data-tab="spd"]')
         page.click('[data-spd="archive"]')
         expect(page.locator("#spd-result")).to_contain_text(person["name"])
@@ -6443,6 +6447,10 @@ def test_居民端在慢专病页签退出或掉线_本人档案不留在屏幕�
         expect(page.locator("#spd-guard")).to_be_visible()   # 修前登录引导藏着
         expect(page.locator("#spd-body")).to_be_hidden()   # 修前照旧显示
         expect(page.locator("#spd-result")).to_have_text("")
+        # 「我的档案」页按登录人画的几块一并清空（P2-1796）：修前只切回登录框，账号栏、家人标签、档案区、「谁看过我的档案」
+        # 原样留在页面里，下一位在同一台手机上登录后第一个往返内与新姓名同屏
+        for block in ("#account-bar", "#family-switch", "#archive-result", "#archive-extra"):
+            expect(page.locator(block)).to_have_text("")
 
     open_spd_archive(leaver)
     page.click("#btn-logout")

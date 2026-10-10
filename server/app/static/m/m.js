@@ -299,7 +299,12 @@ $("#btn-logout").addEventListener("click", async () => {
 
 /* 退出与掉线（authApi 的 401）共用这一段：清本地登录态，五个登录态页签一起按未登录重画（P2-1219）。原先退出只重画了档案、
  * 服务、问卷、通知四个，漏了慢专病——在「慢专病」页签点退出，已登录标记清了、退出按钮藏了，#spd-body 照旧显示本人的姓名、
- * 卡号、电话、诊断，登录引导反而藏着。慢专病结果区一并清空：本人档案不只是藏起来，也不留在页面里。 */
+ * 卡号、电话、诊断，登录引导反而藏着。慢专病结果区一并清空：本人档案不只是藏起来，也不留在页面里。
+ * 「我的档案」页按登录人画的几块同样清空（P2-1796）：原先只把档案页切回登录框，账号栏、家人标签、档案区、「谁看过我的档案」
+ * 原样留在页面里——家人共用手机或自助机，下一位登录时 renderArchiveTab 先 showPane 写上新姓名、再等 /me/family 一个往返，
+ * 这期间屏幕上是新姓名配上一位的家人、诊断、危急值与调阅记录。补绑那一行（回执里有手机号）与成员标签下的消息行（写着家人
+ * 姓名）是同一类，一起清。选「退出即清」而不选「showPane 之前先置加载中」：后者上一位的档案照旧留在页面里（只是藏着），
+ * 每次点进档案页还要把家人标签闪一下。 */
 function signOutLocally() {
   clearAuth();
   viewingPatientId = null;
@@ -310,6 +315,9 @@ function signOutLocally() {
   renderSurveyTab();
   renderNotifyTab();
   $("#spd-result").innerHTML = "";
+  ["#account-bar", "#account-bind", "#family-switch", "#archive-result", "#archive-extra"]
+    .forEach((sel) => { $(sel).innerHTML = ""; });
+  setMsg("#family-switch-msg", "", true);
   renderSpdTab();
   refreshNotifyDot();
 }
