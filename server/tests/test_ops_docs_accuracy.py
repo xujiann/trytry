@@ -367,3 +367,22 @@ def test_README与系统功能清单的页签数与页面数照页面源码():
     assert f"{_cn(len(pages))}个导航分组：{expected}" in listed, f"导航分组页数应为：{expected}"
     spd_pages = re.findall(r"(\d+) 个管理端页面", _section(FEATURES, "# 第二部分"))
     assert spd_pages == [str(pages["全域慢专病"])], f"慢专病子系统一节的管理端页面数应为 {pages['全域慢专病']}：{spd_pages}"
+
+
+def test_运维手册查登录安全事件指向登录留痕():
+    """P2-1814（第五十三批扫描 AQ4-14）：运维手册第五节写「登录失败 / 锁定不落审计表，由访问日志（/api/auth/login 的
+    401/423）承担」，同一份手册第十三节与 FAQ 早已写登录事件落 `login_logs`、用 `GET /api/audit/logins` 查。访问日志只有
+    method / path / status / 耗时，没有用户名和 IP，照第五节去查撞库查不出是哪个账号、从哪来。这里钉住：第五节不再写这句，
+    登录安全事件那一条指向 `login_logs` 表与查询接口（表名从模型现取，查询接口先核对路由表里确实有）。"""
+    from fastapi.routing import APIRoute
+
+    from app.models import LoginLog
+    from app.routers import users
+
+    assert "由访问日志" not in RUNBOOK, "第五节又让人去访问日志里查登录失败 / 锁定"
+    login_query = "/api/audit/logins"
+    assert any(isinstance(route, APIRoute) and route.path == login_query and "GET" in route.methods
+               for route in users.router.routes), f"前提：登录留痕查询接口 GET {login_query} 在"
+    bullet = re.search(r"^- \*\*登录安全事件\*\*.*?(?=^- |^#|\Z)", _section(RUNBOOK, "## 五、"), re.M | re.S)
+    assert bullet, "第五节找不到「登录安全事件」那一条"
+    assert LoginLog.__tablename__ in bullet.group() and f"GET {login_query}" in bullet.group(), bullet.group()
