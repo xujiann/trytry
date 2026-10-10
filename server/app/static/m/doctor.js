@@ -200,8 +200,19 @@ let spdMe = null;
 /** 工作台的日历（出参的 calendar）：「今日随访 / 今日复诊」两段按它的 today 取（P2-1317） */
 let spdCalendar = null;
 
+/* 慢专病页签：工作台计数 + 下面的清单。取不到工作台时把原因写进本块（P2-1800，照 loadRound 的写法），清单照常取（loadSpdList
+ * 自己兜错）。原先第一句 await 没人接：switchTab 不 await 也不 catch，500、断网、428 口令到期时留下一个未处理的 rejection，首次
+ * 进页一片空白，同一次登录里再进则挂着上一次的待办、今日随访、待复核转诊几项数，看不出已经过期。
+ * 回 null，或取不到工作台时的那个错误：动作之后的重画据此另写「刷新失败」（spdActionDone） */
 async function loadSpdTab() {
-  const wb = await api("/api/spd/workbench/doctor-mobile");
+  let wb;
+  try {
+    wb = await api("/api/spd/workbench/doctor-mobile");
+  } catch (err) {
+    $("#spd-wb").innerHTML = `<p class="empty">${esc(err.message)}</p>`;
+    await loadSpdList();
+    return err;
+  }
   spdMe = wb.user;
   spdCalendar = wb.calendar;
   const roleText = (wb.user.member_roles || []).map((r) => ({
@@ -223,6 +234,7 @@ async function loadSpdTab() {
     ${kv("积分余额", wb.points.balance)}
   </div>`;
   await loadSpdList();
+  return null;
 }
 
 /* 渲染串行化：与 core.js route()、m.js loadSpd() 同一套（序号 + 互斥 +
@@ -301,15 +313,17 @@ async function loadSpdTodo(box) {
     input.onchange = async () => {
       if (!input.files[0]) return;
       const taskId = b.dataset.spdEvidence;
+      let t;
       try {
         const att = await uploadAttachment("spd_task", taskId, input.files[0]);
-        const t = await api(`/api/spd/tasks/${taskId}/evidence`, { method: "POST",
+        t = await api(`/api/spd/tasks/${taskId}/evidence`, { method: "POST",
           body: JSON.stringify({ attachment_id: att.id }) });
-        $("#spd-msg").textContent = `佐证已上传（共 ${(t.evidence || []).length} 份），办结时一并核验`;
-        await loadSpdTab();
       } catch (err) {
         $("#spd-msg").textContent = err.message;
+        return;
       }
+      // 传上了就算传上了（P2-1800）：重画失败另写一句，不当成上传失败——原先报错盖掉回执，再传一次就再挂一份同样的附件
+      await spdActionDone(`佐证已上传（共 ${(t.evidence || []).length} 份），办结时一并核验`);
     };
     input.click();
   }));
@@ -557,13 +571,14 @@ async function loadSpdPerf(box) {
       ${kv("积分", `${r.direction === "in" ? "+" : "-"}${r.points}（余额 ${r.balance_after}）`)}
       ${kv("来源", esc(r.note))}
       ${kv("时间", esc(r.created_at.replace("T", " ").slice(0, 16)))}</div>`).join("")}`;
-  // 签到 / 兑换的结果里有要给人看的数字（加了几分、核销码），不能走 spdPost 那句「操作成功」
+  // 签到 / 兑换的结果里有要给人看的数字（加了几分、核销码），不能走 spdPost 那句「操作成功」；成功之后的重画同样交给
+  // spdActionDone（P2-1800）：重画失败不盖掉核销码
   const act = async (path, body, okText) => {
+    let r;
     try {
-      const r = await api(path, { method: "POST", body: body ? JSON.stringify(body) : undefined });
-      $("#spd-msg").textContent = okText(r);
-      await loadSpdTab();
-    } catch (err) { $("#spd-msg").textContent = err.message; }
+      r = await api(path, { method: "POST", body: body ? JSON.stringify(body) : undefined });
+    } catch (err) { $("#spd-msg").textContent = err.message; return; }
+    await spdActionDone(okText(r));
   };
   box.querySelectorAll("[data-spd-signin]").forEach((b) => b.addEventListener("click", () =>
     act("/api/spd/point-accounts/signin", null, (r) => `签到成功：+${r.points} 分，余额 ${r.balance}`)));
@@ -572,16 +587,26 @@ async function loadSpdPerf(box) {
       (r) => `兑换成功，核销码 ${r.verify_code}（到点位出示），余额 ${r.balance}`)));
 }
 
-/* inline=true：卡片内表单提交用，失败时把错抛给 cardForm、写进那张卡的表单里（P2-1093），不写整页消息行 */
+/** 动作已成功之后（P2-1800）：回执先写上再重画；重画取不到工作台时回执照留、另写一句「已办理，刷新失败：…」——动作已经成了，
+ *  不能当成没成。原先重画的报错抛回动作：卡片表单写「请求失败」、填的理由还留着，整页消息行的回执也被盖掉，看着像没交上，医生
+ *  再交一次就重复开在途上转单、重复挂附件。spdPost、上传佐证、签到 / 兑换共用这一段 */
+async function spdActionDone(okText) {
+  $("#spd-msg").textContent = okText;
+  const failed = await loadSpdTab();
+  if (failed) $("#spd-msg").textContent = `${okText}；已办理，刷新失败：${failed.message}`;
+}
+
+/* inline=true：卡片内表单提交用，失败时把错抛给 cardForm、写进那张卡的表单里（P2-1093），不写整页消息行。
+ * 只有动作本身的失败算失败（P2-1800）：成功之后的重画交给 spdActionDone，不抛回卡片表单 */
 async function spdPost(path, body, inline = false) {
   try {
     await api(path, { method: "POST", body: body ? JSON.stringify(body) : undefined });
-    $("#spd-msg").textContent = "操作成功";
-    await loadSpdTab();
   } catch (err) {
     if (inline) throw err;
     $("#spd-msg").textContent = err.message;
+    return;
   }
+  await spdActionDone("操作成功");
 }
 
 /* ---------------- 标签页 ---------------- */
